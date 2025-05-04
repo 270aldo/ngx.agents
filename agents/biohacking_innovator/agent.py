@@ -23,13 +23,14 @@ class BiohackingInnovator(A2AAgent):
     y estrategias para mejorar la longevidad y el rendimiento biológico.
     """
     
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None):
+    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
         """
         Inicializa el agente BiohackingInnovator.
         
         Args:
             toolkit: Toolkit con herramientas disponibles para el agente
             a2a_server_url: URL del servidor A2A (opcional)
+            state_manager: Gestor de estado para mantener el contexto entre sesiones (opcional)
         """
         # Definir capacidades y habilidades
         capabilities = [
@@ -39,34 +40,59 @@ class BiohackingInnovator(A2AAgent):
             "hormonal_optimization"
         ]
         
+        # Definir skills siguiendo el formato A2A con mejores prácticas
         skills = [
             {
-                "name": "biohacking",
-                "description": "Técnicas avanzadas de biohacking y autoexperimentación"
+                "id": "biohacking-innovator-biohacking",
+                "name": "Técnicas de Biohacking",
+                "description": "Desarrolla protocolos personalizados de biohacking basados en la ciencia más reciente para optimizar el rendimiento biológico y la salud",
+                "tags": ["biohacking", "optimization", "personalized-protocols", "self-experimentation", "health"],
+                "examples": [
+                    "Diseña un protocolo de biohacking para optimizar mi rendimiento cognitivo",
+                    "Necesito un plan de biohacking para aumentar mi energía durante el día",
+                    "Técnicas de biohacking para mejorar mi sistema inmunológico"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
-                "name": "longevity",
-                "description": "Estrategias para mejorar la longevidad y retrasar el envejecimiento"
+                "id": "biohacking-innovator-longevity",
+                "name": "Estrategias de Longevidad",
+                "description": "Proporciona estrategias basadas en evidencia científica para extender la vida saludable y retrasar los procesos de envejecimiento",
+                "tags": ["longevity", "anti-aging", "lifespan", "healthspan", "rejuvenation"],
+                "examples": [
+                    "¿Qué intervenciones tienen mayor evidencia científica para extender la longevidad?",
+                    "Protocolo de suplementación para retrasar el envejecimiento celular",
+                    "Hábitos diarios para maximizar mi esperanza de vida saludable"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
-                "name": "cognitive_enhancement",
-                "description": "Métodos para mejorar el rendimiento cognitivo y la claridad mental"
+                "id": "biohacking-innovator-cognitive-enhancement",
+                "name": "Mejora Cognitiva",
+                "description": "Diseña estrategias personalizadas para optimizar la función cerebral, mejorar la memoria, concentración y claridad mental",
+                "tags": ["nootropics", "brain-optimization", "focus", "memory", "mental-clarity"],
+                "examples": [
+                    "Protocolo de nootrópicos para mejorar la concentración y memoria",
+                    "Técnicas para optimizar la neuroplasticidad y el aprendizaje",
+                    "Cómo mejorar la claridad mental y reducir la niebla cerebral"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
-                "name": "hormonal_optimization",
-                "description": "Técnicas de optimización hormonal natural"
-            }
-        ]
-        
-        # Ejemplos para la Agent Card
-        examples = [
-            {
-                "input": {"message": "Necesito un protocolo para mejorar mi rendimiento cognitivo"},
-                "output": {"response": "He creado un protocolo de biohacking personalizado para optimizar tu rendimiento cognitivo..."}
-            },
-            {
-                "input": {"message": "¿Qué suplementos puedo tomar para mejorar mi longevidad?"},
-                "output": {"response": "Basado en la evidencia científica actual, estos son los suplementos más prometedores para la longevidad..."}
+                "id": "biohacking-innovator-hormonal-optimization",
+                "name": "Optimización Hormonal",
+                "description": "Desarrolla estrategias para optimizar naturalmente el equilibrio hormonal y mejorar la salud metabólica",
+                "tags": ["hormones", "endocrine-system", "metabolism", "testosterone", "estrogen"],
+                "examples": [
+                    "Protocolo natural para optimizar los niveles de testosterona",
+                    "Estrategias para equilibrar las hormonas en mujeres",
+                    "Cómo mejorar la sensibilidad a la insulina a través del estilo de vida"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             }
         ]
         
@@ -74,12 +100,18 @@ class BiohackingInnovator(A2AAgent):
         super().__init__(
             agent_id="biohacking_innovator",
             name="NGX Biohacking Innovator",
-            description="Especialista en técnicas avanzadas de biohacking y optimización biológica",
+            description="Especialista en técnicas avanzadas de biohacking, optimización biológica, longevidad y mejora cognitiva. Proporciona protocolos personalizados basados en la ciencia más reciente para optimizar el rendimiento humano y la salud.",
             capabilities=capabilities,
             toolkit=toolkit,
-            version="1.0.0",
-            a2a_server_url=a2a_server_url,
-            skills=skills
+            a2a_server_url=a2a_server_url or "https://biohacking-innovator-api.ngx-agents.com/a2a",
+            state_manager=state_manager,
+            version="1.2.0",
+            skills=skills,
+            provider={
+                "organization": "NGX Health & Performance",
+                "url": "https://ngx-agents.com"
+            },
+            documentation_url="https://docs.ngx-agents.com/biohacking-innovator"
         )
         
         # Inicializar clientes y herramientas
@@ -333,14 +365,17 @@ class BiohackingInnovator(A2AAgent):
         Obtiene el Agent Card del agente según el protocolo A2A oficial.
         
         Returns:
-            Dict[str, Any]: Agent Card estandarizada
+            Dict[str, Any]: Agent Card estandarizada que cumple con las especificaciones
+            del protocolo A2A de Google, incluyendo metadatos enriquecidos, capacidades
+            y habilidades detalladas.
         """
-        return self.agent_card.to_dict()
+        return self._create_agent_card()
     
     async def execute_task(self, task: Dict[str, Any]) -> Any:
         """
         Ejecuta una tarea solicitada por el servidor A2A.
         
+{{ ... }}
         Args:
             task: Tarea a ejecutar
             
