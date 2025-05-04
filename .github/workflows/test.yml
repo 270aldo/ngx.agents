@@ -1,0 +1,57 @@
+name: Pruebas y Calidad de Código
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.9]
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configurar Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Instalar Poetry
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+    
+    - name: Instalar dependencias
+      run: |
+        poetry install --with dev,test
+    
+    - name: Verificar formato con Black
+      run: |
+        poetry run black --check core clients agents tools api
+    
+    - name: Ejecutar Flake8
+      run: |
+        poetry run flake8 core clients agents tools api
+    
+    - name: Ejecutar pruebas unitarias
+      run: |
+        poetry run pytest -m unit
+    
+    - name: Ejecutar pruebas de agentes
+      run: |
+        poetry run pytest -m agents
+    
+    - name: Generar informe de cobertura
+      run: |
+        poetry run pytest --cov=core --cov=clients --cov=agents --cov=tools --cov=api --cov-report=xml
+    
+    - name: Subir informe de cobertura a Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
