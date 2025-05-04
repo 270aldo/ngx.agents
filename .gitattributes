@@ -1,0 +1,23 @@
+# Establecer el comportamiento predeterminado para normalizar los finales de línea
+* text=auto eol=lf
+
+# Archivos de texto que siempre deben normalizarse y convertirse a LF nativo
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.sh text eol=lf
+
+# Archivos binarios que no deben modificarse
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary

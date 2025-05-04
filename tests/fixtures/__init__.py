@@ -1,0 +1,3 @@
+"""
+Fixtures compartidos para pruebas.
+"""

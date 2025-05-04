@@ -1,0 +1,31 @@
+[run]
+source = 
+    core
+    clients
+    agents
+    tools
+    api
+
+omit =
+    */tests/*
+    */__pycache__/*
+    */migrations/*
+    */venv/*
+    */.venv/*
+    */env/*
+    */.env/*
+    */docs/*
+    */examples/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    pass
+    raise ImportError
+    except ImportError:
+
+[html]
+directory = coverage_html_report
