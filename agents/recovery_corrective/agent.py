@@ -40,61 +40,85 @@ class RecoveryCorrective(ADKAgent):
             "chronic_pain_management"
         ]
         
-        # Definir skills siguiendo el formato A2A
+        # Definir skills siguiendo el formato A2A con mejores prácticas
         skills = [
             {
                 "id": "recovery-corrective-injury-prevention",
-                "name": "injury_prevention",
-                "description": "Prevención de lesiones mediante ejercicios y prácticas específicas",
-                "tags": ["prevention", "exercise", "safety"],
-                "examples": ["Cómo prevenir lesiones en la espalda baja durante el entrenamiento"],
-                "inputModes": ["text"],
-                "outputModes": ["text"]
+                "name": "Prevención de Lesiones",
+                "description": "Genera planes personalizados para prevenir lesiones específicas en diferentes actividades físicas y deportes",
+                "tags": ["prevention", "exercise", "safety", "injury", "training"],
+                "examples": [
+                    "Cómo prevenir lesiones en la espalda baja durante el entrenamiento de fuerza",
+                    "Plan de prevención para corredores con historial de lesiones en rodilla",
+                    "Ejercicios preventivos para tenistas con problemas de hombro"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
                 "id": "recovery-corrective-rehabilitation",
-                "name": "rehabilitation",
-                "description": "Rehabilitación de lesiones y recuperación funcional",
-                "tags": ["rehab", "recovery", "injury"],
-                "examples": ["Protocolo de rehabilitación para esguince de tobillo"],
-                "inputModes": ["text"],
-                "outputModes": ["text"]
+                "name": "Rehabilitación y Recuperación",
+                "description": "Desarrolla protocolos de rehabilitación personalizados para diferentes tipos de lesiones y condiciones físicas",
+                "tags": ["rehab", "recovery", "injury", "therapy", "healing"],
+                "examples": [
+                    "Protocolo de rehabilitación para esguince de tobillo grado 2",
+                    "Plan de recuperación post-quirúrgico para reconstrucción de LCA",
+                    "Programa de rehabilitación para tendinitis rotuliana crónica"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
                 "id": "recovery-corrective-mobility-assessment",
-                "name": "mobility_assessment",
-                "description": "Evaluación y mejora de la movilidad articular y muscular",
-                "tags": ["mobility", "flexibility", "assessment"],
-                "examples": ["Cómo mejorar la movilidad de cadera"],
-                "inputModes": ["text"],
-                "outputModes": ["text"]
+                "name": "Evaluación y Mejora de Movilidad",
+                "description": "Evalúa limitaciones de movilidad y proporciona estrategias específicas para mejorar el rango de movimiento y la función articular",
+                "tags": ["mobility", "flexibility", "assessment", "range-of-motion", "joints"],
+                "examples": [
+                    "Evaluación de movilidad de cadera para mejorar sentadillas profundas",
+                    "Ejercicios para aumentar la movilidad de hombros en nadadores",
+                    "Protocolo para mejorar la dorsiflexión de tobillo limitada"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
                 "id": "recovery-corrective-sleep-optimization",
-                "name": "sleep_optimization",
-                "description": "Optimización de patrones de sueño para mejorar la recuperación",
-                "tags": ["sleep", "recovery", "rest"],
-                "examples": ["Estrategias para mejorar la calidad del sueño"],
-                "inputModes": ["text"],
-                "outputModes": ["text"]
+                "name": "Optimización del Sueño",
+                "description": "Analiza patrones de sueño y proporciona estrategias personalizadas para mejorar la calidad y cantidad del descanso para optimizar la recuperación",
+                "tags": ["sleep", "recovery", "rest", "circadian-rhythm", "performance"],
+                "examples": [
+                    "Estrategias para mejorar el sueño durante periodos de alto estrés",
+                    "Rutina nocturna para atletas con problemas para conciliar el sueño",
+                    "Plan de optimización del sueño para viajes con cambios de zona horaria"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
                 "id": "recovery-corrective-hrv-protocols",
-                "name": "hrv_protocols",
-                "description": "Protocolos basados en la variabilidad de la frecuencia cardíaca",
-                "tags": ["hrv", "heart-rate", "recovery"],
-                "examples": ["Cómo interpretar mis datos de HRV para optimizar mi entrenamiento"],
-                "inputModes": ["text"],
-                "outputModes": ["text"]
+                "name": "Protocolos basados en HRV",
+                "description": "Interpreta datos de variabilidad de frecuencia cardíaca y desarrolla estrategias de entrenamiento y recuperación basadas en el estado del sistema nervioso autónomo",
+                "tags": ["hrv", "heart-rate-variability", "recovery", "training", "autonomic-nervous-system"],
+                "examples": [
+                    "Interpretación de tendencias de HRV para periodización del entrenamiento",
+                    "Estrategias de recuperación basadas en valores bajos persistentes de HRV",
+                    "Protocolo de entrenamiento adaptativo basado en lecturas diarias de HRV"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
                 "id": "recovery-corrective-pain-management",
-                "name": "chronic_pain_management",
-                "description": "Manejo del dolor crónico mediante estrategias integradas",
-                "tags": ["pain", "chronic", "management"],
-                "examples": ["Estrategias para manejar el dolor crónico de rodilla"],
-                "inputModes": ["text"],
-                "outputModes": ["text"]
+                "name": "Manejo del Dolor",
+                "description": "Desarrolla estrategias integrales para el manejo del dolor agudo y crónico utilizando enfoques multidisciplinarios y basados en evidencia",
+                "tags": ["pain", "chronic", "management", "therapy", "relief"],
+                "examples": [
+                    "Estrategias no farmacológicas para manejar el dolor crónico de rodilla",
+                    "Plan integral para reducir el dolor lumbar en trabajadores de oficina",
+                    "Técnicas de autogestión para migrañas recurrentes relacionadas con el estrés"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             }
         ]
         
@@ -102,13 +126,18 @@ class RecoveryCorrective(ADKAgent):
         super().__init__(
             agent_id="recovery_corrective_specialist",
             name="Recovery & Corrective Specialist",
-            description="Prevención / rehab, movilidad, sueño, protocolos de HRV & dolor crónico.",
+            description="Especialista en prevención de lesiones, rehabilitación, movilidad, optimización del sueño, protocolos de HRV y manejo del dolor crónico. Proporciona evaluaciones personalizadas y planes de acción basados en evidencia científica.",
             capabilities=capabilities,
             toolkit=toolkit,
-            a2a_server_url=a2a_server_url,
+            a2a_server_url=a2a_server_url or "https://recovery-corrective-api.ngx-agents.com/a2a",
             state_manager=state_manager,
-            version="1.0.0",
-            skills=skills
+            version="1.2.0",
+            skills=skills,
+            provider={
+                "organization": "NGX Health & Performance",
+                "url": "https://ngx-agents.com"
+            },
+            documentation_url="https://docs.ngx-agents.com/recovery-corrective"            
         )
         
         # Inicializar clientes y herramientas
@@ -384,7 +413,7 @@ class RecoveryCorrective(ADKAgent):
                 # Actualizar el contexto en el StateManager
                 await self._update_context(context, user_id, session_id)
             
-            # Crear artefactos para la respuesta
+            # Crear artefactos para la respuesta según el protocolo A2A
             artifacts = [
                 {
                     "type": response_type,
@@ -395,7 +424,7 @@ class RecoveryCorrective(ADKAgent):
                 }
             ]
             
-            # Devolver respuesta final
+            # Devolver respuesta final siguiendo el formato A2A
             return {
                 "status": "success",
                 "response": response_text,
@@ -420,7 +449,6 @@ class RecoveryCorrective(ADKAgent):
                 "error": str(e),
                 "agent_id": self.agent_id
             }
-    
     def _summarize_pain_assessment(self, pain_assessment: Dict[str, Any]) -> str:
         """Genera un resumen textual de la evaluación de dolor para la respuesta al usuario."""
         summary_parts = []
@@ -471,112 +499,107 @@ class RecoveryCorrective(ADKAgent):
     
     async def _register_skills(self):
         """
-        Registra las skills del agente en el toolkit siguiendo las especificaciones de ADK.
+        Registra las habilidades del agente según el protocolo A2A con metadatos mejorados.
         """
-        # Skill para prevención de lesiones
-        async def injury_prevention(input_text: str, user_profile: Dict[str, Any] = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
-            # Construir prompt para Gemini
-            prompt = f"""
-            Actúa como un especialista en prevención de lesiones deportivas.
-            Genera un plan de prevención de lesiones basado en la siguiente solicitud:
-            
-            "{input_text}"
-            
-            El plan debe incluir:
-            1. Evaluación de factores de riesgo
-            2. Ejercicios preventivos específicos
-            3. Recomendaciones de técnica y forma
-            4. Estrategias de calentamiento y enfriamiento
-            5. Consideraciones para la progresión de carga
-            6. Signos de alerta a vigilar
-            
-            Devuelve el plan en formato JSON estructurado.
-            """
-            
-            # Añadir información del perfil si está disponible
-            if user_profile:
-                prompt += f"""
-                
-                Considera la siguiente información del usuario:
-                - Edad: {user_profile.get('age', 'N/A')}
-                - Historial de lesiones: {user_profile.get('injury_history', 'N/A')}
-                - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
-                - Deportes practicados: {user_profile.get('sports', 'N/A')}
-                - Objetivos: {user_profile.get('goals', 'N/A')}
-                """
-            
-            # Incluir contexto si está disponible
-            if context and "history" in context and len(context["history"]) > 0:
-                prompt += "\n\nContexto adicional de conversaciones previas:\n"
-                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
-                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
-            
-            # Usar VertexGeminiGenerateSkill si está disponible
+        # Registrar skills en el toolkit si está disponible
+        if self.toolkit:
             try:
-                vertex_skill = VertexGeminiGenerateSkill()
-                result = await vertex_skill.execute({
-                    "prompt": prompt,
-                    "temperature": 0.7,
-                    "model": "gemini-2.0-flash"
-                })
-                response_text = result.get("text", "")
+                # Registrar skill de prevención de lesiones
+                await self.register_skill(
+                    "injury_prevention",
+                    "Genera planes personalizados para prevenir lesiones específicas en diferentes actividades físicas y deportes",
+                    self._generate_injury_prevention_plan,
+                    tags=["prevention", "exercise", "safety", "injury", "training"],
+                    examples=[
+                        "Cómo prevenir lesiones en la espalda baja durante el entrenamiento de fuerza",
+                        "Plan de prevención para corredores con historial de lesiones en rodilla",
+                        "Ejercicios preventivos para tenistas con problemas de hombro"
+                    ],
+                    input_modes=["text", "json"],
+                    output_modes=["text", "json", "markdown"]
+                )
                 
-                # Intentar extraer JSON de la respuesta
-                try:
-                    # Buscar patrón JSON en la respuesta
-                    import re
-                    json_match = re.search(r'({.*})', response_text, re.DOTALL)
-                    if json_match:
-                        return json.loads(json_match.group(1))
-                    else:
-                        # Si no se encuentra JSON, devolver respuesta como texto
-                        return {"response": response_text}
-                except Exception as e:
-                    logger.warning(f"Error al extraer JSON de la respuesta: {e}")
-                    return {"response": response_text}
+                # Registrar skill de rehabilitación
+                await self.register_skill(
+                    "rehabilitation",
+                    "Desarrolla protocolos de rehabilitación personalizados para diferentes tipos de lesiones y condiciones físicas",
+                    self._generate_rehabilitation_protocol,
+                    tags=["rehab", "recovery", "injury", "therapy", "healing"],
+                    examples=[
+                        "Protocolo de rehabilitación para esguince de tobillo grado 2",
+                        "Plan de recuperación post-quirúrgico para reconstrucción de LCA",
+                        "Programa de rehabilitación para tendinitis rotuliana crónica"
+                    ],
+                    input_modes=["text", "json"],
+                    output_modes=["text", "json", "markdown"]
+                )
+                
+                # Registrar skill de evaluación de movilidad
+                await self.register_skill(
+                    "mobility_assessment",
+                    "Evalúa limitaciones de movilidad y proporciona estrategias específicas para mejorar el rango de movimiento y la función articular",
+                    self._generate_mobility_assessment,
+                    tags=["mobility", "flexibility", "assessment", "range-of-motion", "joints"],
+                    examples=[
+                        "Evaluación de movilidad de cadera para mejorar sentadillas profundas",
+                        "Ejercicios para aumentar la movilidad de hombros en nadadores",
+                        "Protocolo para mejorar la dorsiflexión de tobillo limitada"
+                    ],
+                    input_modes=["text", "json"],
+                    output_modes=["text", "json", "markdown"]
+                )
+                
+                # Registrar skill de optimización del sueño
+                await self.register_skill(
+                    "sleep_optimization",
+                    "Analiza patrones de sueño y proporciona estrategias personalizadas para mejorar la calidad y cantidad del descanso para optimizar la recuperación",
+                    self._generate_sleep_optimization_plan,
+                    tags=["sleep", "recovery", "rest", "circadian-rhythm", "performance"],
+                    examples=[
+                        "Estrategias para mejorar el sueño durante periodos de alto estrés",
+                        "Rutina nocturna para atletas con problemas para conciliar el sueño",
+                        "Plan de optimización del sueño para viajes con cambios de zona horaria"
+                    ],
+                    input_modes=["text", "json"],
+                    output_modes=["text", "json", "markdown"]
+                )
+                
+                # Registrar skill de protocolos HRV
+                await self.register_skill(
+                    "hrv_protocols",
+                    "Interpreta datos de variabilidad de frecuencia cardíaca y desarrolla estrategias de entrenamiento y recuperación basadas en el estado del sistema nervioso autónomo",
+                    self._generate_hrv_protocol,
+                    tags=["hrv", "heart-rate-variability", "recovery", "training", "autonomic-nervous-system"],
+                    examples=[
+                        "Interpretación de tendencias de HRV para periodización del entrenamiento",
+                        "Estrategias de recuperación basadas en valores bajos persistentes de HRV",
+                        "Protocolo de entrenamiento adaptativo basado en lecturas diarias de HRV"
+                    ],
+                    input_modes=["text", "json"],
+                    output_modes=["text", "json", "markdown"]
+                )
+                
+                # Registrar skill de manejo del dolor crónico
+                await self.register_skill(
+                    "chronic_pain_management",
+                    "Desarrolla estrategias integrales para el manejo del dolor agudo y crónico utilizando enfoques multidisciplinarios y basados en evidencia",
+                    self._generate_pain_management_protocol,
+                    tags=["pain", "chronic", "management", "therapy", "relief"],
+                    examples=[
+                        "Estrategias no farmacológicas para manejar el dolor crónico de rodilla",
+                        "Plan integral para reducir el dolor lumbar en trabajadores de oficina",
+                        "Técnicas de autogestión para migrañas recurrentes relacionadas con el estrés"
+                    ],
+                    input_modes=["text", "json"],
+                    output_modes=["text", "json", "markdown"]
+                )
+                
+                logger.info(f"Skills registradas correctamente: {len(self.skills)}")
             except Exception as e:
-                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
-                # Fallback a cliente Gemini directo
-                response = await self.gemini_client.generate_structured_output(prompt)
-                return response if isinstance(response, dict) else {"response": str(response)}
-        
-        # Skill para rehabilitación
-        async def rehabilitation(input_text: str, user_profile: Dict[str, Any] = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
-            # Construir prompt para Gemini
-            prompt = f"""
-            Actúa como un especialista en rehabilitación física y deportiva.
-            Genera un protocolo de rehabilitación basado en la siguiente solicitud:
-            
-            "{input_text}"
-            
-            El protocolo debe incluir:
-            1. Evaluación inicial de la lesión
-            2. Fases de rehabilitación con duración estimada
-            3. Ejercicios específicos para cada fase
-            4. Criterios para progresar entre fases
-            5. Estrategias complementarias (crioterapia, termoterapia, etc.)
-            6. Indicadores para buscar ayuda profesional
-            
-            Devuelve el protocolo en formato JSON estructurado.
-            """
-            
-            # Añadir información del perfil si está disponible
-            if user_profile:
-                prompt += f"""
-                
-                Considera la siguiente información del usuario:
-                - Edad: {user_profile.get('age', 'N/A')}
-                - Historial de lesiones: {user_profile.get('injury_history', 'N/A')}
-                - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
-                - Lesión actual: {user_profile.get('current_injury', 'N/A')}
-                - Tiempo desde la lesión: {user_profile.get('injury_time', 'N/A')}
-                """
-            
-            # Incluir contexto si está disponible
-            if context and "history" in context and len(context["history"]) > 0:
-                prompt += "\n\nContexto adicional de conversaciones previas:\n"
-                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
-                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+                logger.error(f"Error al registrar skills: {e}")
+        else:
+            logger.warning("No se ha proporcionado un toolkit para registrar skills")
+
             
             # Usar VertexGeminiGenerateSkill si está disponible
             try:
