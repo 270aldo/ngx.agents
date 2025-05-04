@@ -13,19 +13,61 @@ import asyncio
 import time
 
 from adk.toolkit import Toolkit
-from agents.base.a2a_agent import A2AAgent
+from agents.base.adk_agent import ADKAgent
 from clients.gemini_client import GeminiClient
 from core.agent_card import AgentCard, Example
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
 from tools.mcp_client import MCPClient
+from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
 from core.state_manager import StateManager
 from core.logging_config import get_logger
+from core.contracts import create_task, create_result, validate_task, validate_result
+
+# Configurar OpenTelemetry para observabilidad
+try:
+    from opentelemetry import trace, metrics
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.exporter.prometheus import PrometheusMetricReader
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    
+    # Configurar TracerProvider para trazas
+    tracer_provider = TracerProvider()
+    trace.set_tracer_provider(tracer_provider)
+    tracer = trace.get_tracer("elite_training_strategist")
+    
+    # Configurar MeterProvider para métricas
+    prometheus_reader = PrometheusMetricReader()
+    meter_provider = MeterProvider(metric_readers=[prometheus_reader])
+    metrics.set_meter_provider(meter_provider)
+    meter = metrics.get_meter("elite_training_strategist")
+    
+    # Crear contadores y medidores
+    request_counter = meter.create_counter(
+        name="agent_requests",
+        description="Número de solicitudes recibidas por el agente",
+        unit="1"
+    )
+    
+    response_time = meter.create_histogram(
+        name="agent_response_time",
+        description="Tiempo de respuesta del agente en segundos",
+        unit="s"
+    )
+    
+    has_telemetry = True
+except ImportError:
+    # Fallback si OpenTelemetry no está disponible
+    has_telemetry = False
+    tracer = None
+    request_counter = None
+    response_time = None
 
 # Configurar logger
 logger = get_logger(__name__)
 
-class EliteTrainingStrategist(A2AAgent):
+class EliteTrainingStrategist(ADKAgent):
     """
     Agente especializado en diseñar y periodizar programas de entrenamiento 
     para atletas de alto rendimiento.
@@ -42,6 +84,7 @@ class EliteTrainingStrategist(A2AAgent):
         Args:
             toolkit: Toolkit con herramientas disponibles para el agente
             a2a_server_url: URL del servidor A2A (opcional)
+            state_manager: Gestor de estados para persistencia (opcional)
         """
         # Definir capacidades y habilidades
         capabilities = [
@@ -91,6 +134,7 @@ class EliteTrainingStrategist(A2AAgent):
             toolkit=toolkit,
             version="1.0.0",
             a2a_server_url=a2a_server_url,
+            state_manager=state_manager,
             skills=skills
         )
         
@@ -111,6 +155,33 @@ class EliteTrainingStrategist(A2AAgent):
         logger.info(f"EliteTrainingStrategist inicializado con {len(capabilities)} capacidades")
     
     async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, 
+                           session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        # Registrar métrica de solicitud si telemetría está disponible
+        if has_telemetry and request_counter:
+            request_counter.add(1, {"agent_id": self.agent_id, "user_id": user_id or "anonymous"})
+            
+        # Crear span para trazar la ejecución si telemetría está disponible
+        if has_telemetry and tracer:
+            with tracer.start_as_current_span("elite_training_strategist_process_request") as span:
+                span.set_attribute("user_id", user_id or "anonymous")
+                span.set_attribute("session_id", session_id or "none")
+                span.set_attribute("input_length", len(input_text))
+                
+                # Medir tiempo de respuesta
+                start_time = time.time()
+                result = await self._process_request(input_text, user_id, session_id, **kwargs)
+                end_time = time.time()
+                
+                # Registrar métrica de tiempo de respuesta
+                if response_time:
+                    response_time.record(end_time - start_time, {"agent_id": self.agent_id})
+                    
+                return result
+        else:
+            # Ejecución sin telemetría
+            return await self._process_request(input_text, user_id, session_id, **kwargs)
+    
+    async def _process_request(self, input_text: str, user_id: Optional[str] = None, 
                            session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Implementación asíncrona del procesamiento del agente EliteTrainingStrategist.
@@ -239,44 +310,53 @@ class EliteTrainingStrategist(A2AAgent):
         Returns:
             str: Plan de entrenamiento generado y formateado
         """
-        # Extraer información relevante del contexto
-        user_name = context.get("user_name", "Atleta")
-        experience_level = context.get("experience_level", "intermedio")
-        age = context.get("age", "adulto")
-        goals = context.get("goals", [])
-        
-        # Construir un prompt detallado para Gemini
-        prompt = f"""
-        Eres un entrenador personal especializado en alto rendimiento deportivo. 
-        Genera un plan de entrenamiento detallado y personalizado para {user_name}, 
-        quien tiene un nivel {experience_level} y edad aproximada de {age}.
-        
-        La solicitud del atleta es: "{input_text}"
-        
-        {f"Sus objetivos específicos son: {', '.join(goals)}" if goals else ""}
-        
-        Tu respuesta debe incluir:
-        1. Evaluación inicial de la solicitud
-        2. Objetivos claros y medibles
-        3. Periodización del entrenamiento
-        4. Desglose semanal de sesiones
-        5. Ejercicios específicos con series, repeticiones y descansos
-        6. Recomendaciones de nutrición y recuperación
-        7. Métricas para evaluar el progreso
-        
-        Formato tu respuesta de manera clara y profesional, utilizando encabezados y listas para mejorar la legibilidad.
-        """
-        
-        # Registrar la generación del plan
-        self.logger.info(f"Generando plan de entrenamiento para: {input_text[:50]}...")
-        
-        # Generar plan con Gemini
-        plan = await self.gemini_client.generate_content(prompt)
-        
-        # Registrar éxito
-        self.logger.info(f"Plan de entrenamiento generado exitosamente: {len(plan)} caracteres")
-        
-        return plan
+        try:
+            # Intentar usar la skill registrada
+            result = await self.execute_skill("generate_training_plan", 
+                                             input_text=input_text, 
+                                             context=context)
+            return result
+        except (ValueError, AttributeError) as e:
+            # Fallback a implementación directa si la skill no está disponible
+            self.logger.warning(f"Skill 'generate_training_plan' no disponible, usando fallback: {e}")
+            
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un entrenador de élite especializado en diseñar programas de entrenamiento personalizados.
+            Genera un plan de entrenamiento detallado basado en la siguiente solicitud:
+            
+            {input_text}
+            
+            {f"Sus objetivos específicos son: {', '.join(context.get('goals', []))}" if 'goals' in context else ""}
+            
+            Tu respuesta debe incluir:
+            1. Evaluación inicial de la solicitud
+            2. Objetivos claros y medibles
+            3. Periodización del entrenamiento
+            4. Desglose semanal de sesiones
+            5. Ejercicios específicos con series, repeticiones y descansos
+            6. Recomendaciones de nutrición y recuperación
+            7. Métricas para evaluar el progreso
+            
+            Formato tu respuesta de manera clara y profesional, utilizando encabezados y listas para mejorar la legibilidad.
+            """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional de conversaciones previas:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Registrar la generación
+            self.logger.info(f"Generando plan de entrenamiento para: {input_text[:50]}...")
+            
+            # Generar plan con Gemini
+            plan = await self.gemini_client.generate_content(prompt)
+            
+            # Registrar éxito
+            self.logger.info(f"Plan de entrenamiento generado exitosamente: {len(plan)} caracteres")
+            
+            return plan
     
     async def _analyze_performance(self, input_text: str, context: Dict[str, Any]) -> str:
         """
@@ -289,43 +369,52 @@ class EliteTrainingStrategist(A2AAgent):
         Returns:
             str: Análisis de rendimiento detallado y formateado
         """
-        # Extraer información relevante del contexto
-        user_name = context.get("user_name", "Atleta")
-        sport = context.get("sport", "deporte")
-        previous_metrics = context.get("previous_metrics", {})
-        training_history = context.get("training_history", [])
-        
-        # Construir un prompt detallado para Gemini
-        prompt = f"""
-        Eres un entrenador personal especializado en análisis de rendimiento deportivo.
-        Analiza detalladamente el rendimiento de {user_name} en {sport} basado en la siguiente información:
-        
-        Datos actuales: "{input_text}"
-        
-        {f"Métricas previas: {json.dumps(previous_metrics, ensure_ascii=False)}" if previous_metrics else ""}
-        {f"Historial de entrenamiento: {', '.join(training_history)}" if training_history else ""}
-        
-        Tu respuesta debe incluir:
-        1. Evaluación de los datos proporcionados
-        2. Comparación con estándares para el nivel del atleta
-        3. Identificación de fortalezas y áreas de mejora
-        4. Recomendaciones específicas para mejorar
-        5. Objetivos realistas a corto y medio plazo
-        
-        Formato tu respuesta de manera clara y profesional, utilizando encabezados y listas para mejorar la legibilidad.
-        Incluye datos cuantitativos cuando sea posible.
-        """
-        
-        # Registrar el análisis
-        self.logger.info(f"Analizando rendimiento para: {input_text[:50]}...")
-        
-        # Generar análisis con Gemini
-        analysis = await self.gemini_client.generate_content(prompt)
-        
-        # Registrar éxito
-        self.logger.info(f"Análisis de rendimiento generado exitosamente: {len(analysis)} caracteres")
-        
-        return analysis
+        try:
+            # Intentar usar la skill registrada
+            result = await self.execute_skill("analyze_performance", 
+                                             input_text=input_text, 
+                                             context=context)
+            return result
+        except (ValueError, AttributeError) as e:
+            # Fallback a implementación directa si la skill no está disponible
+            self.logger.warning(f"Skill 'analyze_performance' no disponible, usando fallback: {e}")
+            
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un analista de rendimiento deportivo especializado en evaluar datos de entrenamiento.
+            Analiza los siguientes datos de rendimiento y proporciona insights detallados:
+            
+            {input_text}
+            
+            {f"Sus objetivos específicos son: {', '.join(context.get('goals', []))}" if 'goals' in context else ""}
+            
+            Tu respuesta debe incluir:
+            1. Evaluación de los datos proporcionados
+            2. Comparación con estándares para el nivel del atleta
+            3. Identificación de fortalezas y áreas de mejora
+            4. Recomendaciones específicas para mejorar
+            5. Objetivos realistas a corto y medio plazo
+            
+            Formato tu respuesta de manera clara y profesional, utilizando encabezados y listas para mejorar la legibilidad.
+            Incluye datos cuantitativos cuando sea posible.
+            """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional de análisis previos:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Registrar el análisis
+            self.logger.info(f"Analizando rendimiento para: {input_text[:50]}...")
+            
+            # Generar análisis con Gemini
+            analysis = await self.gemini_client.generate_content(prompt)
+            
+            # Registrar éxito
+            self.logger.info(f"Análisis de rendimiento generado exitosamente: {len(analysis)} caracteres")
+            
+            return analysis
     
     async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
         """
@@ -411,3 +500,186 @@ class EliteTrainingStrategist(A2AAgent):
             Dict[str, Any]: Agent Card estandarizada
         """
         return self.agent_card.to_dict()
+        
+    async def start(self):
+        """
+        Inicia el agente, conectándolo al servidor ADK y registrando sus skills.
+        """
+        # Registrar skills en el toolkit
+        await self._register_skills()
+        
+        # Iniciar agente ADK (conectar al servidor ADK y registrar skills)
+        await super().start()
+        
+    async def _register_skills(self):
+        """
+        Registra las skills del agente en el toolkit.
+        """
+        # Skill para generar planes de entrenamiento
+        async def generate_training_plan(input_text: str, context: Dict[str, Any] = None) -> str:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un entrenador de élite especializado en diseñar programas de entrenamiento personalizados.
+            Genera un plan de entrenamiento detallado basado en la siguiente solicitud:
+            
+            {input_text}
+            
+            {f"Sus objetivos específicos son: {', '.join(context.get('goals', []))}" if 'goals' in context else ""}
+            
+            Tu respuesta debe incluir:
+            1. Evaluación inicial de la solicitud
+            2. Objetivos claros y medibles
+            3. Periodización del entrenamiento
+            4. Desglose semanal de sesiones
+            5. Ejercicios específicos con series, repeticiones y descansos
+            6. Recomendaciones de nutrición y recuperación
+            7. Métricas para evaluar el progreso
+            
+            Formato tu respuesta de manera clara y profesional, utilizando encabezados y listas para mejorar la legibilidad.
+            """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional de conversaciones previas:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Usar VertexGeminiGenerateSkill si está disponible
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute({
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "model": "gemini-2.0-flash"
+                })
+                return result.get("text", "")
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                return await self.gemini_client.generate_content(prompt)
+        
+        # Skill para analizar rendimiento
+        async def analyze_performance(input_text: str, context: Dict[str, Any] = None) -> str:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un analista de rendimiento deportivo especializado en evaluar datos de entrenamiento.
+            Analiza los siguientes datos de rendimiento y proporciona insights detallados:
+            
+            {input_text}
+            
+            {f"Sus objetivos específicos son: {', '.join(context.get('goals', []))}" if 'goals' in context else ""}
+            
+            Tu respuesta debe incluir:
+            1. Evaluación de los datos proporcionados
+            2. Comparación con estándares para el nivel del atleta
+            3. Identificación de fortalezas y áreas de mejora
+            4. Recomendaciones específicas para mejorar
+            5. Objetivos realistas a corto y medio plazo
+            
+            Formato tu respuesta de manera clara y profesional, utilizando encabezados y listas para mejorar la legibilidad.
+            Incluye datos cuantitativos cuando sea posible.
+            """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional de análisis previos:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Usar VertexGeminiGenerateSkill si está disponible
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute({
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "model": "gemini-2.0-flash"
+                })
+                return result.get("text", "")
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                return await self.gemini_client.generate_content(prompt)
+        
+        # Skill para diseñar periodización
+        async def design_periodization(input_text: str, weeks: int = 12, context: Dict[str, Any] = None) -> str:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un especialista en periodización del entrenamiento deportivo.
+            Diseña un plan de periodización de {weeks} semanas basado en la siguiente solicitud:
+            
+            {input_text}
+            
+            Incluye:
+            1. División en macrociclos, mesociclos y microciclos
+            2. Distribución de volumen e intensidad a lo largo del tiempo
+            3. Fases de acumulación, transformación y realización
+            4. Picos de rendimiento planificados
+            5. Estrategias de tapering y supercompensación
+            
+            Presenta el plan de periodización en formato de tabla con semanas, fases y objetivos principales.
+            """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Usar VertexGeminiGenerateSkill si está disponible
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute({
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "model": "gemini-2.0-flash"
+                })
+                return result.get("text", "")
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                return await self.gemini_client.generate_content(prompt)
+        
+        # Skill para prescribir ejercicios
+        async def prescribe_exercises(input_text: str, context: Dict[str, Any] = None) -> str:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un especialista en prescripción de ejercicios y biomecánica.
+            Prescribe ejercicios específicos basados en la siguiente solicitud:
+            
+            {input_text}
+            
+            Para cada ejercicio incluye:
+            1. Nombre y variante específica
+            2. Músculos principales y secundarios trabajados
+            3. Técnica correcta de ejecución
+            4. Progresiones y regresiones
+            5. Consideraciones de seguridad
+            
+            Presenta los ejercicios en formato de lista con instrucciones claras y precisas.
+            """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Usar VertexGeminiGenerateSkill si está disponible
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute({
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "model": "gemini-2.0-flash"
+                })
+                return result.get("text", "")
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                return await self.gemini_client.generate_content(prompt)
+        
+        # Registrar skills
+        await self.register_skill("generate_training_plan", generate_training_plan)
+        await self.register_skill("analyze_performance", analyze_performance)
+        await self.register_skill("design_periodization", design_periodization)
+        await self.register_skill("prescribe_exercises", prescribe_exercises)
