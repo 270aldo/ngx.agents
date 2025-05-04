@@ -1,23 +1,66 @@
 import logging
 import uuid
 import time
-from typing import Dict, Any, Optional, List
+import json
+from typing import Dict, Any, Optional, List, Union
 
 from adk.toolkit import Toolkit
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
-from tools.mcp_client import MCPClient  # Importar MCPClient
-from agents.base.a2a_agent import A2AAgent
+from tools.mcp_client import MCPClient
+from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
+from agents.base.adk_agent import ADKAgent
 from core.agent_card import AgentCard, Example
 from core.state_manager import StateManager
 from core.logging_config import get_logger
+from core.contracts import create_task, create_result, validate_task, validate_result
+
+# Configurar OpenTelemetry para observabilidad
+try:
+    from opentelemetry import trace, metrics
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.exporter.prometheus import PrometheusMetricReader
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    
+    # Configurar TracerProvider para trazas
+    tracer_provider = TracerProvider()
+    trace.set_tracer_provider(tracer_provider)
+    tracer = trace.get_tracer("precision_nutrition_architect")
+    
+    # Configurar MeterProvider para métricas
+    prometheus_reader = PrometheusMetricReader()
+    meter_provider = MeterProvider(metric_readers=[prometheus_reader])
+    metrics.set_meter_provider(meter_provider)
+    meter = metrics.get_meter("precision_nutrition_architect")
+    
+    # Crear contadores y medidores
+    request_counter = meter.create_counter(
+        name="agent_requests",
+        description="Número de solicitudes recibidas por el agente",
+        unit="1"
+    )
+    
+    response_time = meter.create_histogram(
+        name="agent_response_time",
+        description="Tiempo de respuesta del agente en segundos",
+        unit="s"
+    )
+    
+    has_telemetry = True
+except ImportError:
+    # Fallback si OpenTelemetry no está disponible
+    has_telemetry = False
+    tracer = None
+    request_counter = None
+    response_time = None
 
 # Configurar logger
 logger = get_logger(__name__)
 
 
-class PrecisionNutritionArchitect(A2AAgent):
+class PrecisionNutritionArchitect(ADKAgent):
     """
     Agente Precision Nutrition Architect compatible con A2A
     
@@ -78,6 +121,7 @@ class PrecisionNutritionArchitect(A2AAgent):
             toolkit=toolkit,
             version="1.0.0",
             a2a_server_url=a2a_server_url,
+            state_manager=state_manager,
             skills=skills
         )
         
@@ -98,6 +142,33 @@ class PrecisionNutritionArchitect(A2AAgent):
         logger.info(f"PrecisionNutritionArchitect inicializado con {len(capabilities)} capacidades")
         
     async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, 
+                           session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        # Registrar métrica de solicitud si telemetría está disponible
+        if has_telemetry and request_counter:
+            request_counter.add(1, {"agent_id": self.agent_id, "user_id": user_id or "anonymous"})
+            
+        # Crear span para trazar la ejecución si telemetría está disponible
+        if has_telemetry and tracer:
+            with tracer.start_as_current_span("precision_nutrition_architect_process_request") as span:
+                span.set_attribute("user_id", user_id or "anonymous")
+                span.set_attribute("session_id", session_id or "none")
+                span.set_attribute("input_length", len(input_text))
+                
+                # Medir tiempo de respuesta
+                start_time = time.time()
+                result = await self._process_request(input_text, user_id, session_id, **kwargs)
+                end_time = time.time()
+                
+                # Registrar métrica de tiempo de respuesta
+                if response_time:
+                    response_time.record(end_time - start_time, {"agent_id": self.agent_id})
+                    
+                return result
+        else:
+            # Ejecución sin telemetría
+            return await self._process_request(input_text, user_id, session_id, **kwargs)
+    
+    async def _process_request(self, input_text: str, user_id: Optional[str] = None, 
                            session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Implementación asíncrona del procesamiento del agente PrecisionNutritionArchitect.
@@ -359,6 +430,296 @@ class PrecisionNutritionArchitect(A2AAgent):
             Dict[str, Any]: Agent Card estandarizada
         """
         return self.agent_card.to_dict()
+        
+    async def start(self):
+        """
+        Inicia el agente, conectándolo al servidor ADK y registrando sus skills.
+        """
+        # Registrar skills en el toolkit
+        await self._register_skills()
+        
+        # Iniciar agente ADK (conectar al servidor ADK y registrar skills)
+        await super().start()
+        
+    async def _register_skills(self):
+        """
+        Registra las skills del agente en el toolkit.
+        """
+        # Skill para crear planes nutricionales
+        async def create_meal_plan(input_text: str, user_profile: Dict[str, Any] = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un nutricionista especializado en planes alimenticios personalizados.
+            Genera un plan nutricional detallado basado en la siguiente solicitud:
+            
+            "{input_text}"
+            
+            El plan debe incluir:
+            1. Objetivo principal del plan
+            2. Distribución de macronutrientes recomendada
+            3. Estimación calórica diaria
+            4. Estructura de comidas (4-6 comidas diarias)
+            5. Ejemplos de alimentos para cada comida
+            6. Alimentos recomendados y alimentos a evitar
+            7. Estrategias de crononutrición (timing de comidas)
+            8. Recomendaciones para hidratación
+            
+            Devuelve el plan en formato JSON estructurado.
+            """
+            
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += f"""
+                
+                Considera la siguiente información del usuario:
+                - Nombre: {user_profile.get('name', 'N/A')}
+                - Edad: {user_profile.get('age', 'N/A')}
+                - Peso: {user_profile.get('weight', 'N/A')}
+                - Altura: {user_profile.get('height', 'N/A')}
+                - Objetivos: {user_profile.get('goals', 'N/A')}
+                - Restricciones alimenticias: {user_profile.get('dietary_restrictions', 'N/A')}
+                - Alergias: {user_profile.get('allergies', 'N/A')}
+                """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional de conversaciones previas:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Usar VertexGeminiGenerateSkill si está disponible
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute({
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "model": "gemini-2.0-flash"
+                })
+                response_text = result.get("text", "")
+                
+                # Intentar extraer JSON de la respuesta
+                try:
+                    # Buscar patrón JSON en la respuesta
+                    import re
+                    json_match = re.search(r'({.*})', response_text, re.DOTALL)
+                    if json_match:
+                        return json.loads(json_match.group(1))
+                    else:
+                        # Si no se encuentra JSON, devolver respuesta como texto
+                        return {"response": response_text}
+                except Exception as e:
+                    logger.warning(f"Error al extraer JSON de la respuesta: {e}")
+                    return {"response": response_text}
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                response = await self.gemini_client.generate_structured_output(prompt)
+                return response if isinstance(response, dict) else {"response": str(response)}
+        
+        # Skill para recomendar suplementos
+        async def recommend_supplements(input_text: str, user_profile: Dict[str, Any] = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un especialista en nutrición deportiva y suplementación.
+            Genera recomendaciones de suplementación personalizadas basadas en la siguiente solicitud:
+            
+            "{input_text}"
+            
+            Las recomendaciones deben incluir:
+            1. Suplementos principales recomendados
+            2. Dosis sugerida para cada suplemento
+            3. Timing óptimo de consumo
+            4. Beneficios esperados
+            5. Posibles interacciones o precauciones
+            6. Alternativas naturales cuando sea posible
+            
+            Devuelve las recomendaciones en formato JSON estructurado.
+            """
+            
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += f"""
+                
+                Considera la siguiente información del usuario:
+                - Nombre: {user_profile.get('name', 'N/A')}
+                - Edad: {user_profile.get('age', 'N/A')}
+                - Peso: {user_profile.get('weight', 'N/A')}
+                - Altura: {user_profile.get('height', 'N/A')}
+                - Objetivos: {user_profile.get('goals', 'N/A')}
+                - Restricciones alimenticias: {user_profile.get('dietary_restrictions', 'N/A')}
+                - Alergias: {user_profile.get('allergies', 'N/A')}
+                """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional de conversaciones previas:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Usar VertexGeminiGenerateSkill si está disponible
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute({
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "model": "gemini-2.0-flash"
+                })
+                response_text = result.get("text", "")
+                
+                # Intentar extraer JSON de la respuesta
+                try:
+                    # Buscar patrón JSON en la respuesta
+                    import re
+                    json_match = re.search(r'({.*})', response_text, re.DOTALL)
+                    if json_match:
+                        return json.loads(json_match.group(1))
+                    else:
+                        # Si no se encuentra JSON, devolver respuesta como texto
+                        return {"response": response_text}
+                except Exception as e:
+                    logger.warning(f"Error al extraer JSON de la respuesta: {e}")
+                    return {"response": response_text}
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                response = await self.gemini_client.generate_structured_output(prompt)
+                return response if isinstance(response, dict) else {"response": str(response)}
+        
+        # Skill para analizar biomarcadores
+        async def analyze_biomarkers(input_text: str, biomarkers: Dict[str, Any] = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un especialista en análisis de biomarcadores y nutrición personalizada.
+            Analiza los siguientes biomarcadores y proporciona recomendaciones nutricionales basadas en ellos:
+            
+            "{input_text}"
+            
+            El análisis debe incluir:
+            1. Interpretación de cada biomarcador
+            2. Implicaciones para la salud y rendimiento
+            3. Recomendaciones nutricionales específicas
+            4. Alimentos a aumentar o reducir
+            5. Suplementos potencialmente beneficiosos
+            6. Próximos pasos recomendados
+            
+            Devuelve el análisis en formato JSON estructurado.
+            """
+            
+            # Añadir biomarcadores si están disponibles
+            if biomarkers:
+                prompt += "\n\nBiomarcadores disponibles:\n"
+                for marker, value in biomarkers.items():
+                    prompt += f"- {marker}: {value}\n"
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Usar VertexGeminiGenerateSkill si está disponible
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute({
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "model": "gemini-2.0-flash"
+                })
+                response_text = result.get("text", "")
+                
+                # Intentar extraer JSON de la respuesta
+                try:
+                    # Buscar patrón JSON en la respuesta
+                    import re
+                    json_match = re.search(r'({.*})', response_text, re.DOTALL)
+                    if json_match:
+                        return json.loads(json_match.group(1))
+                    else:
+                        # Si no se encuentra JSON, devolver respuesta como texto
+                        return {"response": response_text}
+                except Exception as e:
+                    logger.warning(f"Error al extraer JSON de la respuesta: {e}")
+                    return {"response": response_text}
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                response = await self.gemini_client.generate_structured_output(prompt)
+                return response if isinstance(response, dict) else {"response": str(response)}
+        
+        # Skill para planificación de crononutrición
+        async def plan_chrononutrition(input_text: str, user_profile: Dict[str, Any] = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un especialista en crononutrición y ritmos circadianos.
+            Genera un plan de crononutrición personalizado basado en la siguiente solicitud:
+            
+            "{input_text}"
+            
+            El plan debe incluir:
+            1. Distribución temporal óptima de comidas
+            2. Ventana de alimentación recomendada
+            3. Timing específico para macronutrientes
+            4. Recomendaciones para pre/post entrenamiento
+            5. Estrategias para optimizar el metabolismo
+            6. Consideraciones para la calidad del sueño
+            
+            Devuelve el plan en formato JSON estructurado.
+            """
+            
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += f"""
+                
+                Considera la siguiente información del usuario:
+                - Nombre: {user_profile.get('name', 'N/A')}
+                - Edad: {user_profile.get('age', 'N/A')}
+                - Peso: {user_profile.get('weight', 'N/A')}
+                - Altura: {user_profile.get('height', 'N/A')}
+                - Objetivos: {user_profile.get('goals', 'N/A')}
+                - Horario de entrenamiento: {user_profile.get('training_schedule', 'N/A')}
+                - Horario de sueño: {user_profile.get('sleep_schedule', 'N/A')}
+                """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            # Usar VertexGeminiGenerateSkill si está disponible
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute({
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "model": "gemini-2.0-flash"
+                })
+                response_text = result.get("text", "")
+                
+                # Intentar extraer JSON de la respuesta
+                try:
+                    # Buscar patrón JSON en la respuesta
+                    import re
+                    json_match = re.search(r'({.*})', response_text, re.DOTALL)
+                    if json_match:
+                        return json.loads(json_match.group(1))
+                    else:
+                        # Si no se encuentra JSON, devolver respuesta como texto
+                        return {"response": response_text}
+                except Exception as e:
+                    logger.warning(f"Error al extraer JSON de la respuesta: {e}")
+                    return {"response": response_text}
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                response = await self.gemini_client.generate_structured_output(prompt)
+                return response if isinstance(response, dict) else {"response": str(response)}
+        
+        # Registrar skills
+        await self.register_skill("create_meal_plan", create_meal_plan)
+        await self.register_skill("recommend_supplements", recommend_supplements)
+        await self.register_skill("analyze_biomarkers", analyze_biomarkers)
+        await self.register_skill("plan_chrononutrition", plan_chrononutrition)
         
     async def execute_task(self, task: Dict[str, Any]) -> Any:
         """
