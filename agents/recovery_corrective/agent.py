@@ -3,6 +3,8 @@ import uuid
 import time
 import json
 from typing import Dict, Any, Optional, List, Union
+import os
+from google.cloud import aiplatform
 
 try:
     from google.adk.toolkit import Toolkit
@@ -140,8 +142,18 @@ class RecoveryCorrective(ADKAgent):
             documentation_url="https://docs.ngx-agents.com/recovery-corrective"            
         )
         
+        # Inicialización de AI Platform
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+        
         # Inicializar clientes y herramientas
-        self.gemini_client = GeminiClient(model_name="gemini-2.0-flash")
+        self.gemini_client = GeminiClient(model_name="gemini-1.5-flash")
         self.supabase_client = SupabaseClient()
         self.mcp_toolkit = MCPToolkit()
         
@@ -839,6 +851,8 @@ class RecoveryCorrective(ADKAgent):
         Returns:
             Dict[str, Any]: Protocolo de recuperación estructurado
         """
+        # TODO: Integrar RAG para buscar protocolos estándar de rehabilitación NGX o de la literatura.
+        # TODO: Usar mcp7_query para obtener datos específicos del usuario (ej. tipo de lesión, historial) desde Supabase.
         prompt = f"""
         Genera un protocolo de recuperación estructurado basado en la siguiente solicitud:
         
@@ -927,6 +941,8 @@ class RecoveryCorrective(ADKAgent):
         Returns:
             Dict[str, Any]: Evaluación de dolor estructurada
         """
+        # TODO: Integrar RAG para buscar información sobre posibles causas del dolor según literatura/NGX.
+        # TODO: Usar mcp7_query para obtener datos del usuario (ej. actividades recientes, otros síntomas) desde Supabase.
         prompt = f"""
         Genera una evaluación de dolor estructurada basada en la siguiente solicitud:
         
