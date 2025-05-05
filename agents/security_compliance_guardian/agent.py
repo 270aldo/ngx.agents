@@ -4,6 +4,7 @@ import time
 from typing import Dict, Any, Optional, List
 import json
 import os
+from google.cloud import aiplatform
 import datetime
 import asyncio
 
@@ -47,8 +48,18 @@ class SecurityComplianceGuardian(A2AAgent):
             a2a_server_url=a2a_server_url
         )
         
+        # Inicialización de AI Platform
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+        
         # Inicializar clientes y herramientas
-        self.gemini_client = GeminiClient(model_name="gemini-2.0-flash")
+        self.gemini_client = GeminiClient(model_name="gemini-1.5-flash")
         self.supabase_client = SupabaseClient()
         self.mcp_toolkit = MCPToolkit()
         
@@ -581,6 +592,10 @@ class SecurityComplianceGuardian(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para consultar benchmarks de seguridad o checklists estándar (OWASP, CIS).
+        # TODO: Usar mcp7_query para obtener configuración actual de la aplicación/sistema desde Supabase.
+        logger.info(f"Manejando evaluación de seguridad: {query}")
+        
         # Obtener información del sistema si está disponible
         system_info = context.get("system_info", {})
         
@@ -647,6 +662,10 @@ class SecurityComplianceGuardian(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para consultar normativas específicas (GDPR, HIPAA, SOC2) actualizadas.
+        # TODO: Usar mcp7_query para obtener logs de auditoría o configuraciones relevantes desde Supabase.
+        logger.info(f"Manejando verificación de cumplimiento: {query}")
+        
         # Determinar qué normativa se está consultando
         regulations = []
         query_lower = query.lower()
@@ -729,6 +748,11 @@ class SecurityComplianceGuardian(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar en bases de datos de vulnerabilidades (CVE).
+        # TODO: Considerar integrar herramientas externas de escaneo a través de MCP si es posible en el futuro.
+        # TODO: Usar mcp7_query para obtener lista de dependencias o versiones de software desde Supabase.
+        logger.info(f"Manejando escaneo de vulnerabilidades: {query}")
+        
         # Obtener información del sistema si está disponible
         system_info = context.get("system_info", {})
         
@@ -797,6 +821,10 @@ class SecurityComplianceGuardian(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para consultar mejores prácticas de protección de datos o políticas NGX.
+        # TODO: Usar mcp7_query para verificar configuraciones de cifrado o políticas de acceso en Supabase.
+        logger.info(f"Manejando protección de datos: {query}")
+        
         # Construir el prompt para el modelo
         prompt = f"""
         {self.system_instructions}
@@ -860,6 +888,10 @@ class SecurityComplianceGuardian(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para búsqueda general en documentación de seguridad y cumplimiento NGX.
+        # TODO: Usar mcp8_think para análisis de riesgos o consultas complejas.
+        logger.info(f"Manejando solicitud general de seguridad: {query}")
+        
         # Construir el prompt para el modelo
         prompt = f"""
         {self.system_instructions}
@@ -899,6 +931,7 @@ class SecurityComplianceGuardian(A2AAgent):
         Returns:
             Dict[str, Any]: Lista de verificación de seguridad
         """
+        # TODO: Integrar RAG para obtener plantillas de checklists específicas de NGX o de la industria.
         # Determinar el tipo de aplicación
         app_type = context.get("app_type", "general")
         
@@ -947,6 +980,7 @@ class SecurityComplianceGuardian(A2AAgent):
         Returns:
             Dict[str, Any]: Plan de respuesta a incidentes
         """
+        # TODO: Integrar RAG para obtener plantillas de planes de respuesta a incidentes (NIST, SANS) o ejemplos NGX.
         # Determinar el tipo de organización
         org_type = context.get("org_type", "general")
         
