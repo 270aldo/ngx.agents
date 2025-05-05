@@ -11,9 +11,12 @@ from typing import Dict, Any, List, Optional, Union
 import json
 import asyncio
 import time
+from datetime import datetime, timezone
+import re
+import os
 
 from adk.toolkit import Toolkit
-from agents.base.adk_agent import ADKAgent
+from agents.base.a2a_agent import A2AAgent
 from clients.gemini_client import GeminiClient
 from core.agent_card import AgentCard, Example
 from clients.supabase_client import SupabaseClient
@@ -23,6 +26,7 @@ from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
 from core.state_manager import StateManager
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result
+from google.cloud import aiplatform
 
 # Configurar OpenTelemetry para observabilidad
 try:
@@ -67,7 +71,7 @@ except ImportError:
 # Configurar logger
 logger = get_logger(__name__)
 
-class EliteTrainingStrategist(ADKAgent):
+class EliteTrainingStrategist(A2AAgent):
     """
     Agente especializado en diseñar y periodizar programas de entrenamiento 
     para atletas de alto rendimiento.
@@ -186,6 +190,17 @@ class EliteTrainingStrategist(ADKAgent):
         self.update_state("performance_analyses", {})  # Almacenar análisis de rendimiento
         self.update_state("conversation_contexts", {})  # Almacenar contextos de conversación
         
+        # Inicializar AI Platform
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id") # Reemplazar con método de carga real
+        gcp_region = os.getenv("GCP_REGION", "us-central1") # Reemplazar con método de carga real
+        try:
+            self.logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            self.logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            self.logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+            # Considerar si el agente debe fallar o continuar sin Vertex AI
+        
         logger.info(f"EliteTrainingStrategist inicializado con {len(capabilities)} capacidades")
     
     async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, 
@@ -250,10 +265,7 @@ class EliteTrainingStrategist(ADKAgent):
             if any(keyword in input_text.lower() for keyword in ["plan", "programa", "entrenamiento", "rutina"]):
                 # Usar skill de generación de planes de entrenamiento
                 try:
-                    result = await self.execute_skill("generate_training_plan", 
-                                                   input_text=input_text, 
-                                                   user_profile=user_profile, 
-                                                   context=context)
+                    result = await self._generate_training_plan(input_text, context)
                     
                     # Generar respuesta
                     if isinstance(result, dict) and "response" in result:
@@ -284,10 +296,7 @@ class EliteTrainingStrategist(ADKAgent):
             elif any(keyword in input_text.lower() for keyword in ["analiza", "análisis", "rendimiento", "métricas", "evalúa"]):
                 # Usar skill de análisis de rendimiento
                 try:
-                    result = await self.execute_skill("analyze_performance", 
-                                                   input_text=input_text, 
-                                                   user_profile=user_profile, 
-                                                   context=context)
+                    result = await self._analyze_performance(input_text, context)
                     
                     # Generar respuesta
                     if isinstance(result, dict) and "response" in result:
@@ -319,15 +328,10 @@ class EliteTrainingStrategist(ADKAgent):
                 # Usar skill de diseño de periodización
                 try:
                     # Extraer número de semanas si se especifica
-                    import re
                     weeks_match = re.search(r'(\d+)\s*semanas', input_text)
                     weeks = int(weeks_match.group(1)) if weeks_match else 12
                     
-                    result = await self.execute_skill("design_periodization", 
-                                                   input_text=input_text,
-                                                   weeks=weeks,
-                                                   user_profile=user_profile, 
-                                                   context=context)
+                    result = await self._design_periodization(input_text, weeks, context)
                     
                     # Generar respuesta
                     if isinstance(result, dict) and "response" in result:
@@ -358,10 +362,7 @@ class EliteTrainingStrategist(ADKAgent):
             elif any(keyword in input_text.lower() for keyword in ["ejercicio", "ejercicios", "técnica", "biomecánica", "prescribe"]):
                 # Usar skill de prescripción de ejercicios
                 try:
-                    result = await self.execute_skill("prescribe_exercises", 
-                                                   input_text=input_text, 
-                                                   user_profile=user_profile, 
-                                                   context=context)
+                    result = await self._prescribe_exercises(input_text, context)
                     
                     # Generar respuesta
                     if isinstance(result, dict) and "response" in result:
@@ -442,18 +443,9 @@ class EliteTrainingStrategist(ADKAgent):
             context: Contexto adicional como historial, preferencias, etc.
             
         Returns:
-            str: Plan de entrenamiento generado y formateado
+            str: Plan de entrenamiento generado y formateado, o cadena vacía en caso de error.
         """
         try:
-            # Intentar usar la skill registrada
-            result = await self.execute_skill("generate_training_plan", 
-                                             input_text=input_text, 
-                                             context=context)
-            return result
-        except (ValueError, AttributeError) as e:
-            # Fallback a implementación directa si la skill no está disponible
-            self.logger.warning(f"Skill 'generate_training_plan' no disponible, usando fallback: {e}")
-            
             # Construir prompt para Gemini
             prompt = f"""
             Actúa como un entrenador de élite especializado en diseñar programas de entrenamiento personalizados.
@@ -491,6 +483,10 @@ class EliteTrainingStrategist(ADKAgent):
             self.logger.info(f"Plan de entrenamiento generado exitosamente: {len(plan)} caracteres")
             
             return plan
+        
+        except Exception as e:
+            self.logger.error(f"Error en _generate_training_plan al llamar a Gemini: {e}", exc_info=True)
+            return "" # Devolver cadena vacía en caso de error
     
     async def _analyze_performance(self, input_text: str, context: Dict[str, Any]) -> str:
         """
@@ -776,7 +772,7 @@ class EliteTrainingStrategist(ADKAgent):
                     output_modes=["text", "json", "markdown"]
                 )
                 
-                # Registrar skill de periodización
+                # Registrar skill de diseño de periodización
                 await self.register_skill(
                     "design_periodization",
                     "Diseña estructuras de periodización a corto y largo plazo para optimizar las adaptaciones al entrenamiento y maximizar el rendimiento en momentos clave",
@@ -794,7 +790,7 @@ class EliteTrainingStrategist(ADKAgent):
                 # Registrar skill de prescripción de ejercicios
                 await self.register_skill(
                     "prescribe_exercises",
-                    "Selecciona y prescribe ejercicios específicos basados en objetivos, biomecánica individual, historial de lesiones y necesidades de rendimiento del atleta",
+                    "Prescribe ejercicios específicos basados en objetivos y capacidades",
                     self._prescribe_exercises,
                     tags=["exercises", "biomechanics", "technique", "progression", "specificity"],
                     examples=[
@@ -840,19 +836,10 @@ class EliteTrainingStrategist(ADKAgent):
                 for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
                     prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
             
-            # Usar VertexGeminiGenerateSkill si está disponible
-            try:
-                vertex_skill = VertexGeminiGenerateSkill()
-                result = await vertex_skill.execute({
-                    "prompt": prompt,
-                    "temperature": 0.7,
-                    "model": "gemini-2.0-flash"
-                })
-                return result.get("text", "")
-            except Exception as e:
-                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
-                # Fallback a cliente Gemini directo
-                return await self.gemini_client.generate_content(prompt)
+            # TODO: Integrar RAG aquí para buscar ejemplos/principios de entrenamiento relevantes
+            # O usar mcp7_query para obtener datos específicos del atleta si están en Supabase.
+            result = await self.gemini_client.generate_content(prompt)
+            return result
         
         # Skill para diseñar periodización
         async def design_periodization(input_text: str, weeks: int = 12, context: Dict[str, Any] = None) -> str:
@@ -879,19 +866,10 @@ class EliteTrainingStrategist(ADKAgent):
                 for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
                     prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
             
-            # Usar VertexGeminiGenerateSkill si está disponible
-            try:
-                vertex_skill = VertexGeminiGenerateSkill()
-                result = await vertex_skill.execute({
-                    "prompt": prompt,
-                    "temperature": 0.7,
-                    "model": "gemini-2.0-flash"
-                })
-                return result.get("text", "")
-            except Exception as e:
-                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
-                # Fallback a cliente Gemini directo
-                return await self.gemini_client.generate_content(prompt)
+            # TODO: Usar mcp8_think para estructurar el diseño de la periodización si es complejo.
+            # TODO: Integrar RAG para buscar filosofías/modelos de periodización específicos.
+            result = await self.gemini_client.generate_content(prompt)
+            return result
         
         # Skill para prescribir ejercicios
         async def prescribe_exercises(input_text: str, context: Dict[str, Any] = None) -> str:
@@ -918,22 +896,239 @@ class EliteTrainingStrategist(ADKAgent):
                 for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
                     prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
             
-            # Usar VertexGeminiGenerateSkill si está disponible
-            try:
-                vertex_skill = VertexGeminiGenerateSkill()
-                result = await vertex_skill.execute({
-                    "prompt": prompt,
-                    "temperature": 0.7,
-                    "model": "gemini-2.0-flash"
-                })
-                return result.get("text", "")
-            except Exception as e:
-                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
-                # Fallback a cliente Gemini directo
-                return await self.gemini_client.generate_content(prompt)
+            # TODO: Usar mcp7_query para obtener historial/capacidades del atleta desde Supabase.
+            # TODO: Integrar RAG para buscar descripciones/ejemplos de ejercicios específicos.
+            result = await self.gemini_client.generate_content(prompt)
+            return result
         
         # Registrar skills
-        await self.register_skill("generate_training_plan", generate_training_plan)
-        await self.register_skill("analyze_performance", analyze_performance)
-        await self.register_skill("design_periodization", design_periodization)
-        await self.register_skill("prescribe_exercises", prescribe_exercises)
+        await self.register_skill("generate_training_plan", self._generate_training_plan)
+        await self.register_skill("analyze_performance", self._analyze_performance)
+        await self.register_skill("design_periodization", self._design_periodization)
+        await self.register_skill("prescribe_exercises", self._prescribe_exercises)
+
+    async def execute_task(self, task: Dict[str, Any]) -> Any:
+        """Ejecuta una tarea solicitada por el servidor A2A."""
+        logger.info(f"EliteTrainingStrategist received task: {task.get('id', 'N/A')}")
+        start_time = time.time()
+        metadata = {
+            "status": "error", # Default a error
+            "agent_id": self.agent_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        payload = {
+            "error": "UnknownError",
+            "response": "No se pudo procesar la solicitud."
+        }
+        artifacts = []
+        
+        try:
+            input_text = task.get("input", "")
+            context = task.get("context", {})
+            user_id = context.get("user_id")
+            session_id = context.get("session_id")
+            user_profile = context.get("user_profile", {}) # Asumir que viene en contexto A2A
+            
+            if not input_text:
+                raise ValueError("Input text is missing in the task.")
+            
+            response_text = ""
+            skill_result = None
+            artifact_type = "generic_result"
+            artifact_content = {}
+            
+            # Analizar la entrada del usuario para determinar la skill a utilizar
+            if any(keyword in input_text.lower() for keyword in ["plan", "programa", "entrenamiento", "rutina"]):
+                logger.info("Executing skill: generate_training_plan")
+                artifact_type = "training_plan"
+                skill_result = await self._generate_training_plan(input_text, context) # Llamada directa
+                response_text = f"Aquí tienes tu plan de entrenamiento personalizado: \n\n{skill_result}" # Simplificado por ahora
+                artifact_content = skill_result if isinstance(skill_result, dict) else {"plan_text": skill_result}
+            
+            elif any(keyword in input_text.lower() for keyword in ["analiza", "análisis", "rendimiento", "métricas", "evalúa"]):
+                logger.info("Executing skill: analyze_performance")
+                artifact_type = "performance_analysis"
+                skill_result = await self._analyze_performance(input_text, context) # Llamada directa
+                response_text = f"Aquí tienes el análisis de rendimiento: \n\n{skill_result}" # Simplificado por ahora
+                artifact_content = skill_result if isinstance(skill_result, dict) else {"analysis_text": skill_result}
+            
+            elif any(keyword in input_text.lower() for keyword in ["periodización", "periodizar", "macrociclo", "mesociclo"]):
+                logger.info("Executing skill: design_periodization")
+                artifact_type = "periodization_plan"
+                # Extraer 'weeks' si se proporciona en el input o contexto, default a 12
+                weeks = context.get("weeks", 12) # Simplificado, idealmente extraer del input
+                skill_result = await self._design_periodization(input_text, weeks, context) # Llamada directa
+                response_text = f"Aquí tienes el plan de periodización: \n\n{skill_result}" # Simplificado por ahora
+                artifact_content = skill_result if isinstance(skill_result, dict) else {"periodization_text": skill_result}
+            
+            elif any(keyword in input_text.lower() for keyword in ["ejercicio", "prescribe", "técnica"]):
+                logger.info("Executing skill: prescribe_exercises")
+                artifact_type = "exercise_prescription"
+                skill_result = await self._prescribe_exercises(input_text, context) # Llamada directa
+                response_text = f"Aquí tienes la prescripción de ejercicios: \n\n{skill_result}" # Simplificado por ahora
+                artifact_content = skill_result if isinstance(skill_result, dict) else {"prescription_text": skill_result}
+            
+            else:
+                # No se reconoce la intención
+                logger.warning(f"Intent not recognized for input: {input_text}")
+                response_text = "Lo siento, no he entendido tu solicitud. ¿Podrías reformularla? Puedo ayudarte a generar planes de entrenamiento, analizar rendimiento, diseñar periodización o prescribir ejercicios."
+                metadata["status"] = "no_match"
+                payload = {"response": response_text}
+                # No crear artefacto si no hay match
+            
+            # Si se ejecutó una skill con éxito
+            if skill_result is not None:
+                metadata["status"] = "success"
+                execution_time = time.time() - start_time
+                metadata["execution_time"] = execution_time
+                
+                # Crear mensaje de respuesta A2A
+                response_message = self.create_message(
+                    role="agent",
+                    parts=[
+                        self.create_text_part(response_text)
+                    ]
+                )
+                
+                # Crear artefacto A2A
+                if artifact_content:
+                    artifact_id = f"{artifact_type}_{uuid.uuid4().hex[:8]}"
+                    artifact = self.create_artifact(
+                        artifact_id=artifact_id,
+                        artifact_type=artifact_type,
+                        parts=[
+                            self.create_data_part(artifact_content) # Asume que el contenido es serializable a JSON
+                        ]
+                    )
+                    artifacts.append(artifact)
+                
+                payload = {
+                    "response": response_text, 
+                    "message": response_message,
+                    "artifacts": artifacts
+                }
+        
+        except ValueError as ve:
+            logger.error(f"ValueError in EliteTrainingStrategist execute_task: {ve}")
+            metadata["status"] = "error"
+            payload = {"error": str(ve), "response": "Error en la solicitud: falta información necesaria."}
+        except Exception as e:
+            logger.error(f"Error in EliteTrainingStrategist execute_task: {e}", exc_info=True)
+            metadata["status"] = "error"
+            # Actualizar payload de error si no se estableció antes
+            if payload.get("error") == "UnknownError":
+                payload["error"] = f"{type(e).__name__}: {e}"
+                payload["response"] = "Lo siento, ha ocurrido un error inesperado al procesar tu solicitud."
+        
+        # Siempre devolver la estructura metadata/payload
+        return {"metadata": metadata, "payload": payload}
+    
+    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
+        """Procesa un mensaje recibido de otro agente."""
+        logger.info(f"EliteTrainingStrategist received message from {from_agent}")
+        metadata = {
+            "status": "error",
+            "agent_id": self.agent_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": "process_message not fully implemented yet for EliteTrainingStrategist."
+        }
+        payload = {
+            "error": "NotImplementedError",
+            "response": "La funcionalidad para procesar mensajes de otros agentes aún no está implementada."
+        }
+        return {"metadata": metadata, "payload": payload}
+
+    async def _design_periodization(self, input_text: str, weeks: int, context: Dict[str, Any]) -> str:
+        """
+        Diseña un plan de periodización utilizando el modelo Gemini.
+        
+        Args:
+            input_text: Texto de entrada del usuario con la solicitud
+            weeks: Número de semanas para la periodización
+            context: Contexto adicional
+            
+        Returns:
+            str: Plan de periodización generado o cadena vacía en caso de error.
+        """
+        try:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un especialista en periodización del entrenamiento deportivo.
+            Diseña un plan de periodización de {weeks} semanas basado en la siguiente solicitud:
+            
+            {input_text}
+            
+            Incluye:
+            1. División en macrociclos, mesociclos y microciclos
+            2. Distribución de volumen e intensidad a lo largo del tiempo
+            3. Fases de acumulación, transformación y realización
+            4. Picos de rendimiento planificados
+            5. Estrategias de tapering y supercompensación
+            
+            Presenta el plan de periodización en formato de tabla con semanas, fases y objetivos principales.
+            """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            self.logger.info(f"Generando plan de periodización para: {input_text[:50]}...")
+            
+            # Usar el cliente Gemini configurado en el agente
+            periodization_plan = await self.gemini_client.generate_content(prompt)
+            
+            self.logger.info(f"Plan de periodización generado exitosamente: {len(periodization_plan)} caracteres")
+            return periodization_plan
+        
+        except Exception as e:
+            self.logger.error(f"Error general en _design_periodization: {e}", exc_info=True)
+            return "" # Devolver cadena vacía en caso de error general
+
+    async def _prescribe_exercises(self, input_text: str, context: Dict[str, Any]) -> str:
+        """
+        Prescribe ejercicios específicos utilizando el modelo Gemini.
+        
+        Args:
+            input_text: Texto de entrada del usuario con la solicitud
+            context: Contexto adicional
+            
+        Returns:
+            str: Prescripción de ejercicios generada o cadena vacía en caso de error.
+        """
+        try:
+            # Construir prompt para Gemini
+            prompt = f"""
+            Actúa como un especialista en prescripción de ejercicios y biomecánica.
+            Prescribe ejercicios específicos basados en la siguiente solicitud:
+            
+            {input_text}
+            
+            Para cada ejercicio incluye:
+            1. Nombre y variante específica
+            2. Músculos principales y secundarios trabajados
+            3. Técnica correcta de ejecución
+            4. Progresiones y regresiones
+            5. Consideraciones de seguridad
+            
+            Presenta los ejercicios en formato de lista con instrucciones claras y precisas.
+            """
+            
+            # Incluir contexto si está disponible
+            if context and "history" in context and len(context["history"]) > 0:
+                prompt += "\n\nContexto adicional:\n"
+                for entry in context["history"][-3:]:  # Usar las últimas 3 interacciones
+                    prompt += f"Usuario: {entry['user']}\nAsistente: {entry['bot']}\n"
+            
+            self.logger.info(f"Generando prescripción de ejercicios para: {input_text[:50]}...")
+            
+            # Usar el cliente Gemini configurado en el agente
+            prescription = await self.gemini_client.generate_content(prompt)
+            
+            self.logger.info(f"Prescripción de ejercicios generada exitosamente: {len(prescription)} caracteres")
+            return prescription
+        
+        except Exception as e:
+            self.logger.error(f"Error general en _prescribe_exercises: {e}", exc_info=True)
+            return "" # Devolver cadena vacía en caso de error general
