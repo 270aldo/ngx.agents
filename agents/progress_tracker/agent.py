@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import datetime
+from google.cloud import aiplatform
 
 from adk.toolkit import Toolkit
 from clients.gemini_client import GeminiClient
@@ -43,15 +44,25 @@ class ProgressTracker(A2AAgent):
             description="Especialista en seguimiento, análisis y visualización de progreso",
             capabilities=capabilities,
             toolkit=toolkit,
-            version="1.0.0",
+            version="1.1.0",
             a2a_server_url=a2a_server_url
         )
         
-        # Inicializar clientes y herramientas
-        self.gemini_client = GeminiClient(model_name="gemini-2.0-flash")
-        self.supabase_client = SupabaseClient()
-        self.mcp_toolkit = MCPToolkit()
-        self.mcp_client = MCPClient()
+        # Inicialización de Clientes y Herramientas
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+            # Considerar comportamiento si Vertex AI no está disponible
+        
+        self.gemini_client = GeminiClient(model_name="gemini-1.5-flash") # Asegurarse que el modelo es el correcto
+        # self.supabase_client = SupabaseClient() # Descomentar si se usa activamente
+        # self.mcp_toolkit = MCPToolkit() # Descomentar si se usa activamente
+        # self.mcp_client = MCPClient() # Descomentar si se usa activamente
         
         # Inicializar el StateManager para persistencia
         self.state_manager = state_manager or StateManager()
@@ -178,7 +189,7 @@ class ProgressTracker(A2AAgent):
                     "query_type": query_type,
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "protocol": "a2a",
-                    "agent_version": "1.0.0"
+                    "agent_version": "1.1.0"
                 }
             }
             
@@ -203,77 +214,51 @@ class ProgressTracker(A2AAgent):
                 }
             }
 
-    def _create_agent_card(self) -> AgentCard:
-        """
-        Crea una tarjeta de agente estandarizada según el protocolo A2A.
+    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
+        msg = content.get("text", "")
+        logger.info("ProgressTracker procesando mensaje de %s: %s", from_agent, msg)
         
-        Returns:
-            AgentCard: Tarjeta del agente estandarizada
-        """
-        # Crear ejemplos para la tarjeta del agente
-        examples = [
-            Example(
-                input={"message": "Muéstrame un gráfico de mi progreso de peso"},
-                output={"response": "Aquí tienes la visualización de tu progreso de peso a lo largo del tiempo. Puedes observar una tendencia descendente constante de 0.5kg por semana, lo que se alinea con tus objetivos de pérdida de peso saludable."}
-            ),
-            Example(
-                input={"message": "¿Qué tendencias ves en mis datos de entrenamiento?"},
-                output={"response": "Analizando tus datos de entrenamiento de los últimos 3 meses, he identificado las siguientes tendencias: 1) Aumento del 15% en tu capacidad de levantamiento de peso en ejercicios compuestos, 2) Mejora del 8% en resistencia cardiovascular, 3) Mayor consistencia en los entrenamientos de la mañana vs. los de la tarde. Recomiendo mantener la frecuencia actual y considerar aumentar la intensidad en tus sesiones de fuerza."}
-            ),
-            Example(
-                input={"message": "¿Cómo va mi progreso hacia mi meta de reducción de grasa corporal?"},
-                output={"response": "Tu progreso hacia la reducción de grasa corporal está en camino. Has reducido tu porcentaje de grasa corporal del 22% al 18% en 8 semanas, lo que representa un ritmo saludable de pérdida. Estás al 67% del camino hacia tu meta del 15%. Si mantienes este ritmo, alcanzarás tu objetivo en aproximadamente 4 semanas más."}
-            ),
-            Example(
-                input={"message": "Compara mi rendimiento actual con el del mes pasado"},
-                output={"response": "Comparando tu rendimiento actual con el del mes pasado: Fuerza: +7% en ejercicios principales. Resistencia: +12% en tiempo hasta el agotamiento. Recuperación: -15% en tiempo necesario entre series. Consistencia: +3 sesiones más que el mes anterior. En general, muestras una mejora significativa, especialmente en aspectos de resistencia y recuperación."}
+        try:
+            start_time = time.time()
+            response_text = await self.gemini_client.generate_response(
+                f"Mensaje de {from_agent}: {msg}\nResponde de forma concisa y relevante con información de progreso si es posible."
             )
-        ]
-        
-        # Crear la tarjeta del agente
-        return AgentCard(
-            title="NGX Progress Tracker",
-            description="Especialista en seguimiento, análisis y visualización de progreso para optimizar resultados y ajustar estrategias.",
-            instructions="Proporciona detalles sobre qué métricas quieres analizar, el período de tiempo que te interesa o solicita visualizaciones específicas de tu progreso.",
-            examples=examples,
-            capabilities=[
-                "Monitoreo continuo de métricas clave de progreso",
-                "Análisis cuantitativo de datos para extraer insights accionables",
-                "Identificación de tendencias y patrones en tu rendimiento",
-                "Generación de visualizaciones comprensibles de tu progreso",
-                "Seguimiento de metas SMART y evaluación de hitos"
-            ],
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string"},
-                    "user_data": {"type": "object"},
-                    "time_period": {"type": "string"}
-                },
-                "required": ["message"]
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "response": {"type": "string"},
-                    "visualization": {"type": "object"},
-                    "analysis": {"type": "object"},
-                    "recommendations": {"type": "array"}
-                },
-                "required": ["response"]
+            message = self.create_message(role="agent", parts=[self.create_text_part(response_text)])
+            execution_time = time.time() - start_time
+            
+            return {
+                "status": "success", 
+                "response": response_text, 
+                "message": message,
+                "agent_id": self.agent_id,
+                "execution_time": execution_time,
+                "metadata": {
+                    "from_agent": from_agent,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "protocol": "a2a",
+                    "agent_version": "1.1.0"
+                }
             }
-        )
-        
-    def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
-        
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada
-        """
-        return self._create_agent_card().to_dict()
-    
-    # ------------- A2A overrides -------------
+            
+        except Exception as e:
+            logger.error(f"Error en process_message desde {from_agent}: {e}", exc_info=True)
+            error_message = self.create_message(
+                role="agent",
+                parts=[self.create_text_part(f"Error procesando mensaje de {from_agent}.")]
+            )
+            return {
+                "status": "error",
+                "response": f"Error procesando mensaje de {from_agent}: {str(e)}",
+                "message": error_message,
+                "error": str(e),
+                "agent_id": self.agent_id,
+                "metadata": {
+                    "from_agent": from_agent,
+                    "error_type": type(e).__name__,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            }
+
     async def execute_task(self, task: Dict[str, Any]) -> Any:
         """
         Ejecuta una tarea solicitada por el servidor A2A.
@@ -291,7 +276,7 @@ class ProgressTracker(A2AAgent):
             user_id = context.get("user_id")
             session_id = context.get("session_id") or str(uuid.uuid4())
             
-            # Cargar contexto de la conversación
+            # Cargar el contexto de la conversación
             conversation_context = await self._get_context(user_id, session_id)
 
             logger.info("ProgressTracker recibió consulta: %s", user_input)
@@ -353,7 +338,7 @@ class ProgressTracker(A2AAgent):
                 "query_type": query_type,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "protocol": "a2a",
-                "agent_version": "1.0.0"
+                "agent_version": "1.1.0"
             }
             
             return result
@@ -378,13 +363,6 @@ class ProgressTracker(A2AAgent):
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
                 }
             }
-
-    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
-        msg = content.get("text", "")
-        logger.info("ProgressTracker procesando mensaje de %s: %s", from_agent, msg)
-        response = await self.gemini_client.generate_response(f"Mensaje de {from_agent}: {msg}\nResponde con información de progreso relevante.")
-        message = self.create_message(role="agent", parts=[self.create_text_part(response)])
-        return {"status": "success", "response": response, "message": message}
 
     # ------------- Internal helpers -------------
     async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
@@ -471,35 +449,132 @@ class ProgressTracker(A2AAgent):
             return "analysis_request"
         return "general_request"
 
-    async def _handle_visual_request(self, query: str, data: Optional[Dict[str, Any]]):
-        if not data:
-            return {"response": "Lo siento, no tengo datos suficientes para generar una visualización.", "artifacts": []}
-        # Por simplicidad, graficar peso si existe body_composition
-        if "body_composition" not in data:
-            return {"response": "No se encontraron datos de composición corporal para graficar.", "artifacts": []}
-        dates = [datetime.datetime.strptime(d["date"], "%Y-%m-%d") for d in data["body_composition"]]
-        weights = [d["weight"] for d in data["body_composition"]]
-        fig_path = os.path.join(self.tmp_dir, f"weight_{uuid.uuid4().hex[:6]}.png")
-        plt.figure()
-        plt.plot(dates, weights, marker="o")
-        plt.title("Evolución del peso")
-        plt.xlabel("Fecha")
-        plt.ylabel("Peso (kg)")
-        plt.tight_layout()
-        plt.savefig(fig_path)
-        plt.close()
-        artifact = self.create_artifact(artifact_id=f"plot_{uuid.uuid4().hex[:8]}", artifact_type="image/png", parts=[self.create_file_part(fig_path)])
-        message = self.create_message(role="agent", parts=[self.create_text_part("Aquí tienes la visualización solicitada."), artifact])
-        return {"response": "Visualización generada.", "artifacts": [artifact], "message": message}
+    async def _handle_visual_request(self, query: str, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Maneja solicitudes de visualización."""
+        logger.info(f"Manejando solicitud de visualización: {query[:50]}...")
+        # TODO: Usar mcp7_query para obtener datos específicos de Supabase para visualizar.
+        # TODO: Integrar RAG para obtener guías sobre mejores prácticas de visualización según la filosofía NGX.
+        try:
+            # Lógica para generar visualización (simplificada)
+            if not data:
+                return {"response": "Lo siento, no tengo datos suficientes para generar una visualización.", "artifacts": []}
+            # Por simplicidad, graficar peso si existe body_composition
+            if "body_composition" not in data:
+                return {"response": "No se encontraron datos de composición corporal para graficar.", "artifacts": []}
+            dates = [datetime.datetime.strptime(d["date"], "%Y-%m-%d") for d in data["body_composition"]]
+            weights = [d["weight"] for d in data["body_composition"]]
+            fig_path = os.path.join(self.tmp_dir, f"weight_{uuid.uuid4().hex[:6]}.png")
+            plt.figure()
+            plt.plot(dates, weights, marker="o")
+            plt.title("Evolución del peso")
+            plt.xlabel("Fecha")
+            plt.ylabel("Peso (kg)")
+            plt.tight_layout()
+            plt.savefig(fig_path)
+            plt.close()
+            artifact = self.create_artifact(artifact_id=f"plot_{uuid.uuid4().hex[:8]}", artifact_type="image/png", parts=[self.create_file_part(fig_path)])
+            message = self.create_message(role="agent", parts=[self.create_text_part("Aquí tienes la visualización solicitada."), artifact])
+            return {"response": "Visualización generada.", "artifacts": [artifact], "message": message}
+        except Exception as e:
+            logger.error(f"Error en _handle_visual_request: {e}", exc_info=True)
+            return {"response": "Lo siento, ocurrió un error al generar la visualización.", "artifacts": [], "message": self.create_message(role="agent", parts=[self.create_text_part("Lo siento, ocurrió un error al generar la visualización.")])}
 
-    async def _handle_analysis_request(self, query: str, data: Optional[Dict[str, Any]]):
-        prompt = self.system_instructions + "\n\nDatos:" + json.dumps(data or {}, indent=2) + f"\n\nPregunta: {query}\nProporciona un análisis detallado basado en los datos."
-        response = await self.gemini_client.generate_response(prompt, temperature=0.4)
-        msg = self.create_message(role="agent", parts=[self.create_text_part(response)])
-        return {"response": response, "artifacts": [], "message": msg}
+    async def _handle_analysis_request(self, query: str, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Maneja solicitudes de análisis."""
+        logger.info(f"Manejando solicitud de análisis: {query[:50]}...")
+        # TODO: Usar mcp7_query para obtener datos históricos/métricas desde Supabase.
+        # TODO: Integrar RAG para obtener principios de análisis de NGX o benchmarks relevantes.
+        # TODO: Usar mcp8_think para análisis complejos o multi-paso.
+        try:
+            # Lógica para realizar análisis con Gemini (simplificada)
+            prompt = self.system_instructions + "\n\nDatos:" + json.dumps(data or {}, indent=2) + f"\n\nPregunta: {query}\nProporciona un análisis detallado basado en los datos."
+            response = await self.gemini_client.generate_response(prompt, temperature=0.4)
+            msg = self.create_message(role="agent", parts=[self.create_text_part(response)])
+            return {"response": response, "artifacts": [], "message": msg}
+        except Exception as e:
+            logger.error(f"Error en _handle_analysis_request: {e}", exc_info=True)
+            return {"response": "Lo siento, ocurrió un error al realizar el análisis.", "artifacts": [], "message": self.create_message(role="agent", parts=[self.create_text_part("Lo siento, ocurrió un error al realizar el análisis.")])}
 
-    async def _handle_general_request(self, query: str, data: Optional[Dict[str, Any]]):
-        prompt = self.system_instructions + f"\n\nConsulta: {query}\nResponde de forma motivadora y basada en datos si están disponibles." + ("\n\nResumen de datos:\n" + json.dumps(data, indent=2) if data else "")
-        response = await self.gemini_client.generate_response(prompt)
-        msg = self.create_message(role="agent", parts=[self.create_text_part(response)])
-        return {"response": response, "artifacts": [], "message": msg}
+    async def _handle_general_request(self, query: str, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Maneja solicitudes generales o no clasificadas."""
+        logger.info(f"Manejando solicitud general: {query[:50]}...")
+        # TODO: Integrar RAG para proporcionar contexto general relevante a la consulta.
+        try:
+            # Lógica para respuesta general con Gemini (simplificada)
+            prompt = self.system_instructions + f"\n\nConsulta: {query}\nResponde de forma motivadora y basada en datos si están disponibles." + ("\n\nResumen de datos:\n" + json.dumps(data, indent=2) if data else "")
+            response = await self.gemini_client.generate_response(prompt)
+            msg = self.create_message(role="agent", parts=[self.create_text_part(response)])
+            return {"response": response, "artifacts": [], "message": msg}
+        except Exception as e:
+            logger.error(f"Error en _handle_general_request: {e}", exc_info=True)
+            return {"response": "Lo siento, ocurrió un error al procesar tu solicitud.", "artifacts": [], "message": self.create_message(role="agent", parts=[self.create_text_part("Lo siento, ocurrió un error al procesar tu solicitud.")])}
+
+    def _create_agent_card(self) -> AgentCard:
+        """
+        Crea una tarjeta de agente estandarizada según el protocolo A2A.
+        
+        Returns:
+            AgentCard: Tarjeta del agente estandarizada
+        """
+        # Crear ejemplos para la tarjeta del agente
+        examples = [
+            Example(
+                input={"message": "Muéstrame un gráfico de mi progreso de peso"},
+                output={"response": "Aquí tienes la visualización de tu progreso de peso a lo largo del tiempo. Puedes observar una tendencia descendente constante de 0.5kg por semana, lo que se alinea con tus objetivos de pérdida de peso saludable."}
+            ),
+            Example(
+                input={"message": "¿Qué tendencias ves en mis datos de entrenamiento?"},
+                output={"response": "Analizando tus datos de entrenamiento de los últimos 3 meses, he identificado las siguientes tendencias: 1) Aumento del 15% en tu capacidad de levantamiento de peso en ejercicios compuestos, 2) Mejora del 8% en resistencia cardiovascular, 3) Mayor consistencia en los entrenamientos de la mañana vs. los de la tarde. Recomiendo mantener la frecuencia actual y considerar aumentar la intensidad en tus sesiones de fuerza."}
+            ),
+            Example(
+                input={"message": "¿Cómo va mi progreso hacia mi meta de reducción de grasa corporal?"},
+                output={"response": "Tu progreso hacia la reducción de grasa corporal está en camino. Has reducido tu porcentaje de grasa corporal del 22% al 18% en 8 semanas, lo que representa un ritmo saludable de pérdida. Estás al 67% del camino hacia tu objetivo del 15%. Si mantienes este ritmo, alcanzarás tu objetivo en aproximadamente 4 semanas más."}
+            ),
+            Example(
+                input={"message": "Compara mi rendimiento actual con el del mes pasado"},
+                output={"response": "Comparando tu rendimiento actual con el del mes pasado: Fuerza: +7% en ejercicios principales. Resistencia: +12% en tiempo hasta el agotamiento. Recuperación: -15% en tiempo necesario entre series. Consistencia: +3 sesiones más que el mes anterior. En general, muestras una mejora significativa, especialmente en aspectos de resistencia y recuperación."}
+            )
+        ]
+        
+        # Crear la tarjeta del agente
+        return AgentCard(
+            title="NGX Progress Tracker",
+            description="Especialista en seguimiento, análisis y visualización de progreso para optimizar resultados y ajustar estrategias.",
+            instructions="Proporciona detalles sobre qué métricas quieres analizar, el período de tiempo que te interesa o solicita visualizaciones específicas de tu progreso.",
+            examples=examples,
+            capabilities=[
+                "Monitoreo continuo de métricas clave de progreso",
+                "Análisis cuantitativo de datos para extraer insights accionables",
+                "Identificación de tendencias y patrones en tu rendimiento",
+                "Generación de visualizaciones comprensibles de tu progreso",
+                "Seguimiento de metas SMART y evaluación de hitos"
+            ],
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"},
+                    "user_data": {"type": "object"},
+                    "time_period": {"type": "string"}
+                },
+                "required": ["message"]
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "response": {"type": "string"},
+                    "visualization": {"type": "object"},
+                    "analysis": {"type": "object"},
+                    "recommendations": {"type": "array"}
+                },
+                "required": ["response"]
+            }
+        )
+        
+    def get_agent_card(self) -> Dict[str, Any]:
+        """
+        Obtiene el Agent Card del agente según el protocolo A2A oficial.
+        
+        Returns:
+            Dict[str, Any]: Agent Card estandarizada
+        """
+        return self._create_agent_card().to_dict()
