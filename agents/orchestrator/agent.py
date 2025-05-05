@@ -5,6 +5,8 @@ import uuid
 import time
 import asyncio
 from typing import Dict, Any, Optional, List, Tuple, Callable
+import os
+from google.cloud import aiplatform
 
 from adk.toolkit import Toolkit
 from clients.gemini_client import GeminiClient
@@ -168,6 +170,16 @@ class NGXNexusOrchestrator(ADKAgent):
             8: {"id": "systems_integration_ops", "name": "Systems Integration & Ops"},
             9: {"id": "security_compliance_guardian", "name": "Security & Compliance Guardian"}
         }
+        
+        # Inicialización de AI Platform
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
         
         logger.info(f"Orquestador NGX inicializado con {len(capabilities)} capacidades y {len(self.agent_map)} agentes disponibles")
 
@@ -375,295 +387,9 @@ class NGXNexusOrchestrator(ADKAgent):
                 }
             }
 
-    def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
-        
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada
-        """
-        return self.agent_card.to_dict()
-        
-    async def _register_skills(self):
-        """
-        Registra las skills del orquestador en el toolkit.
-        """
-        # Registrar skill para analizar intenciones
-        async def analyze_intent(prompt: str, temperature: float = 0.1) -> str:
-            response = await self.gemini_client.generate_response(prompt, temperature=temperature)
-            return response
-        await self.register_skill("analyze_intent", analyze_intent)
-        
-        # Registrar skill para enrutar tareas a agentes especializados
-        async def route_task(task: Dict[str, Any]) -> Dict[str, Any]:
-            # Validar tarea
-            if not validate_task(task):
-                return create_result(
-                    task_id=task.get("task_id", str(uuid.uuid4())),
-                    agent_id=self.agent_id,
-                    status="error",
-                    data={"response": "Tarea inválida"},
-                    error={"code": "invalid_task", "message": "La tarea no cumple con el esquema requerido"}
-                )
-                
-            # Analizar intención para determinar agente destino
-            input_text = task.get("data", {}).get("input_text", "")
-            intent_analysis_prompt = f"""
-            Analiza la siguiente consulta y determina qué agente especializado debería responderla.
-            Consulta: "{input_text}"
-            
-            Responde con un JSON que contenga:
-            1. "agent_id": ID del agente que debería responder
-            2. "confidence": Nivel de confianza en la asignación (0.0-1.0)
-            
-            Agentes disponibles:
-            - elite_training_strategist: Entrenamiento y periodización
-            - precision_nutrition_architect: Nutrición y dieta
-            - recovery_corrective: Recuperación y corrección
-            - biohacking_innovator: Biohacking y optimización
-            - motivation_behavior_coach: Motivación y comportamiento
-            - progress_tracker: Seguimiento de progreso
-            - biometrics_insight_engine: Análisis de biométricas
-            - gemini_training_assistant: Asistente general de entrenamiento
-            """
-            
-            # Usar la skill de análisis de intención
-            intent_analysis = await self.execute_skill("analyze_intent", prompt=intent_analysis_prompt)
-            
-            # Extraer agente destino
-            try:
-                import re
-                json_match = re.search(r'{.*}', intent_analysis, re.DOTALL)
-                if json_match:
-                    intent_data = json.loads(json_match.group(0))
-                    target_agent_id = intent_data.get("agent_id", "gemini_training_assistant")
-                else:
-                    target_agent_id = "gemini_training_assistant"
-            except Exception:
-                target_agent_id = "gemini_training_assistant"
-                
-            # Crear nueva tarea para el agente destino
-            routed_task = create_task(
-                agent_id=self.agent_id,
-                action=task.get("action", "process_input"),
-                data=task.get("data", {}),
-                task_id=task.get("task_id", str(uuid.uuid4())),
-                target_agent_id=target_agent_id,
-                metadata={"original_task": task, "router": self.agent_id}
-            )
-            
-            # Enviar tarea al agente destino
-            try:
-                result = await self.send_task_to_agent(target_agent_id, routed_task)
-                return result
-            except Exception as e:
-                logger.error(f"Error al enviar tarea a {target_agent_id}: {e}")
-                return create_result(
-                    task_id=task.get("task_id", str(uuid.uuid4())),
-                    agent_id=self.agent_id,
-                    status="error",
-                    data={"response": f"Error al enrutar tarea: {str(e)}"},
-                    error={"code": "routing_error", "message": str(e)}
-                )
-        await self.register_skill("route_task", route_task)
-        
-        # Registrar skill para sintetizar respuestas
-        async def synthesize_responses(responses: List[Dict[str, Any]], query: str) -> str:
-            synthesized, _ = await self._synthesize(query, {i: resp for i, resp in enumerate(responses)}, {})
-            return synthesized
-        await self.register_skill("synthesize_responses", synthesize_responses)
-    
-    async def execute_task(self, task: Dict[str, Any]) -> Any:
-        """
-        Ejecuta una tarea solicitada por el servidor A2A.
-        
-        Args:
-            task: Tarea a ejecutar
-            
-        Returns:
-            Any: Resultado de la tarea
-        """
-        try:
-            user_input = task.get("input", "")
-            context = task.get("context", {})
-            user_id = context.get("user_id")
-            session_id = context.get("session_id")
-            
-            logger.info(f"Orchestrator processing input: {user_input}")
-            conversation_context = self._get_context(user_id, session_id)
+    # TODO: Mejorar análisis de intención con RAG consultando descripciones detalladas de agentes o ejemplos de interacciones previas.
+    # TODO: Usar mcp8_think para razonar sobre qué combinación de agentes es óptima para consultas complejas.
 
-            # Determinar agentes basado en el análisis de intención
-            intent = await self.gemini_client.analyze_intent(user_input)
-            agent_ids = intent.get("agents", [1]) if isinstance(intent, dict) else [1]
-
-            # Obtener respuestas de agentes especializados
-            responses = await self._get_agent_responses(user_input, agent_ids, user_id, context)
-
-            # Sintetizar respuesta final
-            final_response, artifacts = await self._synthesize(user_input, responses, conversation_context)
-
-            # Registrar interacción
-            if user_id:
-                self.supabase_client.log_interaction(user_id, self.agent_id, user_input, final_response)
-
-            # Actualizar contexto
-            self._update_context(user_id, session_id, user_input, final_response)
-            
-            # Interactuar con MCPClient si hay ID de usuario
-            if user_id:
-                await self.mcp_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=user_input,
-                    response=final_response
-                )
-                logger.info("Interacción con MCPClient registrada")
-            
-            # Crear mensaje de respuesta
-            response_message = self.create_message(
-                role="agent",
-                parts=[
-                    self.create_text_part(final_response)
-                ]
-            )
-            
-            # Devolver respuesta estructurada según el protocolo A2A
-            return {
-                "response": final_response,
-                "message": response_message,
-                "artifacts": artifacts,
-                "agents_used": agent_ids
-            }
-            
-        except Exception as e:
-            logger.error(f"Error en Orchestrator: {e}")
-            return {
-                "error": str(e), 
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud."
-            }
-
-    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
-        """
-        Procesa un mensaje recibido de otro agente.
-        
-        Args:
-            from_agent: ID del agente que envió el mensaje
-            content: Contenido del mensaje
-            
-        Returns:
-            Any: Respuesta al mensaje
-        """
-        try:
-            # Extraer información del mensaje
-            message_text = content.get("text", "")
-            context = content.get("context", {})
-            
-            # Generar respuesta basada en el contenido del mensaje
-            prompt = f"""
-            Has recibido un mensaje del agente {from_agent}:
-            
-            "{message_text}"
-            
-            Como orquestador, responde con instrucciones o información relevante para coordinar
-            el trabajo de este agente con otros agentes del sistema.
-            """
-            
-            response = await self.gemini_client.generate_response(prompt, temperature=0.7)
-            
-            # Crear mensaje de respuesta
-            response_message = self.create_message(
-                role="agent",
-                parts=[
-                    self.create_text_part(response)
-                ]
-            )
-            
-            return {
-                "status": "success",
-                "response": response,
-                "message": response_message
-            }
-        except Exception as e:
-            logger.error(f"Error al procesar mensaje de agente: {e}")
-            return {"error": str(e)}
-
-    # ---------------- Helpers -----------------
-    async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
-        """
-        Obtiene el contexto de la conversación para un usuario y sesión específicos.
-        
-        Este método intenta primero obtener el contexto del StateManager para persistencia.
-        Si no está disponible, usa el almacenamiento en memoria como fallback.
-        
-        Args:
-            user_id: ID del usuario
-            session_id: ID de la sesión
-            
-        Returns:
-            Dict[str, Any]: Contexto de la conversación
-        """
-        # Intentar cargar desde StateManager si hay user_id y session_id
-        if user_id and session_id:
-            try:
-                state_data = await self.state_manager.load_state(user_id, session_id)
-                if state_data and "context" in state_data:
-                    logger.debug(f"Contexto cargado desde StateManager para session_id={session_id}")
-                    return state_data["context"]
-            except Exception as e:
-                logger.warning(f"Error al cargar contexto desde StateManager: {e}")
-        
-        # Fallback: Obtener contextos almacenados en memoria
-        contexts = self.get_state("conversation_contexts") or {}
-        
-        # Generar clave de contexto
-        context_key = f"{user_id}_{session_id}" if user_id and session_id else "default"
-        
-        # Obtener o inicializar contexto
-        if context_key not in contexts:
-            contexts[context_key] = {"history": []}
-            self.update_state("conversation_contexts", contexts)
-        
-        return contexts[context_key]
-        
-    async def _update_context(self, user_id: Optional[str], session_id: Optional[str], msg: str, resp: str) -> None:
-        """
-        Actualiza el contexto de la conversación con un nuevo mensaje y respuesta.
-        
-        Args:
-            user_id: ID del usuario
-            session_id: ID de la sesión
-            msg: Mensaje del usuario
-            resp: Respuesta del bot
-        """
-        # Obtener contexto actual
-        context = await self._get_context(user_id, session_id)
-        
-        # Añadir nueva interacción al historial
-        if "history" not in context:
-            context["history"] = []
-            
-        context["history"].append({"user": msg, "bot": resp, "timestamp": time.time()})
-        
-        # Limitar el tamaño del historial (mantener últimas 10 interacciones)
-        if len(context["history"]) > 10:
-            context["history"] = context["history"][-10:]
-            
-        # Actualizar contexto en memoria
-        contexts = self.get_state("conversation_contexts") or {}
-        key = f"{user_id}_{session_id}" if user_id and session_id else "default"
-        contexts[key] = context
-        self.update_state("conversation_contexts", contexts)
-        
-        # Persistir en StateManager si hay user_id y session_id
-        if user_id and session_id:
-            try:
-                # Guardar contexto en StateManager
-                state_data = {"context": context}
-                await self.state_manager.save_state(state_data, user_id, session_id)
-                logger.debug(f"Contexto actualizado en StateManager para session_id={session_id}")
-            except Exception as e:
-                logger.warning(f"Error al guardar contexto en StateManager: {e}")
-                
     async def _get_agent_responses(self, user_input: str, agent_ids: List[int], user_id: Optional[str] = None, context: Dict[str, Any] = None) -> Dict[int, Dict[str, Any]]:
         """
         Obtiene respuestas de agentes especializados a través de A2A.
@@ -677,6 +403,9 @@ class NGXNexusOrchestrator(ADKAgent):
         Returns:
             Dict[int, Dict[str, Any]]: Respuestas de los agentes
         """
+        # TODO: Enriquecer el contexto enviado a los agentes usando RAG sobre el perfil del usuario o historial NGX.
+        # TODO: Usar mcp7_query para obtener datos relevantes adicionales del usuario desde Supabase antes de llamar a los agentes.
+        tasks = {}
         responses = {}
         a2a_base_url = self.a2a_server_url.replace("ws://", "http://")
         
@@ -744,27 +473,6 @@ class NGXNexusOrchestrator(ADKAgent):
                 
         return responses
         
-    async def _simulate_agent_response(self, user_input: str, agent_name: str) -> str:
-        """
-        Simula la respuesta de un agente especializado cuando A2A no está disponible.
-        
-        Args:
-            user_input: Texto de entrada del usuario
-            agent_name: Nombre del agente a simular
-            
-        Returns:
-            str: Respuesta simulada del agente
-        """
-        prompt = f"""
-        Actúa como el agente {agent_name} y responde a la siguiente consulta:
-        
-        "{user_input}"
-        
-        Responde con información relevante a tu especialidad.
-        """
-        
-        return await self.gemini_client.generate_response(prompt, temperature=0.7)
-
     async def _synthesize(self, user_input: str, agent_responses: Dict[int, Dict[str, Any]], context: Dict[str, Any]) -> tuple[str, list]:
         """
         Sintetiza las respuestas de múltiples agentes en una única respuesta coherente.
@@ -777,6 +485,8 @@ class NGXNexusOrchestrator(ADKAgent):
         Returns:
             tuple[str, list]: Respuesta sintetizada y lista de artefactos
         """
+        # TODO: Mejorar la síntesis con RAG, consultando guías de estilo NGX o conocimiento general para enriquecer la respuesta final.
+        # TODO: Usar mcp8_think para decidir cómo priorizar o combinar información conflictiva de diferentes agentes.
         # Preparar el prompt para la síntesis
         agent_responses_text = ""
         for agent_id, data in agent_responses.items():
