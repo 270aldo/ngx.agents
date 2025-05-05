@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, List
 import json
 import os
 import datetime
+from google.cloud import aiplatform
 
 from adk.toolkit import Toolkit
 from clients.gemini_client import GeminiClient
@@ -25,7 +26,7 @@ class ClientSuccessLiaison(A2AAgent):
     para maximizar la satisfacción y retención de los clientes.
     """
     
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None):
+    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
         # Definir capacidades y habilidades
         capabilities = [
             "community_building", 
@@ -35,23 +36,72 @@ class ClientSuccessLiaison(A2AAgent):
             "communication_management"
         ]
         
+        # Definir skills siguiendo el formato A2A con mejores prácticas
         skills = [
-            {"name": "community_building", "description": "Construcción y gestión de comunidades de usuarios"},
-            {"name": "user_experience", "description": "Optimización de la experiencia del usuario"},
-            {"name": "customer_support", "description": "Soporte y resolución de problemas del cliente"},
-            {"name": "retention_strategies", "description": "Estrategias para fidelización y retención"},
-            {"name": "communication_management", "description": "Gestión de comunicaciones con usuarios"}
-        ]
-        
-        # Ejemplos para la Agent Card
-        examples = [
             {
-                "input": {"message": "Necesito ideas para mejorar la retención de usuarios en mi aplicación"},
-                "output": {"response": "He analizado estrategias efectivas de retención para aplicaciones similares..."}
+                "id": "client-success-community-building",
+                "name": "Construcción de Comunidad",
+                "description": "Diseña estrategias y programas para crear, desarrollar y mantener comunidades activas y comprometidas alrededor de productos y servicios",
+                "tags": ["community", "engagement", "events", "forums", "user-groups"],
+                "examples": [
+                    "¿Cómo puedo construir una comunidad más activa alrededor de mi producto?",
+                    "Estrategias para aumentar la participación en foros de usuarios",
+                    "Ideas para eventos comunitarios que generen engagement"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
-                "input": {"message": "¿Cómo puedo construir una comunidad más activa alrededor de mi producto?"},
-                "output": {"response": "Para construir una comunidad más activa, te recomiendo implementar estas estrategias..."}
+                "id": "client-success-user-experience",
+                "name": "Experiencia de Usuario",
+                "description": "Analiza y optimiza la experiencia del usuario en diferentes puntos de contacto para maximizar la satisfacción y minimizar la fricción",
+                "tags": ["ux", "customer-journey", "touchpoints", "onboarding", "user-flow"],
+                "examples": [
+                    "Cómo mejorar el proceso de onboarding para nuevos usuarios",
+                    "Identificar y resolver puntos de fricción en el customer journey",
+                    "Estrategias para optimizar la experiencia de usuario en una aplicación móvil"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
+            },
+            {
+                "id": "client-success-customer-support",
+                "name": "Soporte al Cliente",
+                "description": "Desarrolla sistemas y procesos para proporcionar soporte efectivo, resolver problemas y maximizar la satisfacción del cliente",
+                "tags": ["support", "troubleshooting", "tickets", "resolution", "satisfaction"],
+                "examples": [
+                    "Cómo estructurar un sistema de tickets para soporte al cliente",
+                    "Mejores prácticas para reducir el tiempo de respuesta en soporte",
+                    "Estrategias para convertir interacciones de soporte en oportunidades de fidelización"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
+            },
+            {
+                "id": "client-success-retention-strategies",
+                "name": "Estrategias de Retención",
+                "description": "Diseña e implementa programas y tácticas para maximizar la retención de clientes, reducir el churn y aumentar el lifetime value",
+                "tags": ["retention", "churn", "loyalty", "ltv", "win-back"],
+                "examples": [
+                    "Necesito ideas para mejorar la retención de usuarios en mi aplicación",
+                    "Estrategias para reducir el churn en una suscripción mensual",
+                    "Cómo diseñar un programa de fidelización efectivo"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
+            },
+            {
+                "id": "client-success-communication-management",
+                "name": "Gestión de Comunicaciones",
+                "description": "Planifica y optimiza estrategias de comunicación con usuarios y clientes para maximizar el engagement y fortalecer relaciones",
+                "tags": ["communication", "emails", "messaging", "notifications", "campaigns"],
+                "examples": [
+                    "Cómo estructurar una campaña de email para reactivar usuarios inactivos",
+                    "Mejores prácticas para comunicaciones in-app",
+                    "Estrategias para personalizar comunicaciones masivas"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
             }
         ]
         
@@ -59,13 +109,29 @@ class ClientSuccessLiaison(A2AAgent):
         super().__init__(
             agent_id="client_success_liaison",
             name="NGX Community & Client-Success Liaison",
-            description="Especialista en comunidad, experiencia del usuario y éxito del cliente",
+            description="Especialista en construcción de comunidad, optimización de experiencia de usuario, soporte al cliente, estrategias de retención y gestión de comunicaciones. Diseña e implementa programas para maximizar la satisfacción, engagement y retención de clientes.",
             capabilities=capabilities,
             toolkit=toolkit,
-            version="1.0.0",
-            a2a_server_url=a2a_server_url,
-            skills=skills
+            a2a_server_url=a2a_server_url or "https://client-success-api.ngx-agents.com/a2a",
+            state_manager=state_manager,
+            version="1.2.0",
+            skills=skills,
+            provider={
+                "organization": "NGX Health & Performance",
+                "url": "https://ngx-agents.com"
+            },
+            documentation_url="https://docs.ngx-agents.com/client-success-liaison"
         )
+        
+        # Inicialización de AI Platform
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
         
         # Inicializar clientes y herramientas
         self.gemini_client = GeminiClient(model_name="gemini-2.0-flash")
@@ -366,9 +432,11 @@ class ClientSuccessLiaison(A2AAgent):
         Obtiene el Agent Card del agente según el protocolo A2A oficial.
         
         Returns:
-            Dict[str, Any]: Agent Card estandarizada
+            Dict[str, Any]: Agent Card estandarizada que cumple con las especificaciones
+            del protocolo A2A de Google, incluyendo metadatos enriquecidos, capacidades
+            y habilidades detalladas.
         """
-        return self.agent_card.to_dict()
+        return self._create_agent_card()
     
     async def execute_task(self, task: Dict[str, Any]) -> Any:
         """
@@ -489,6 +557,10 @@ class ClientSuccessLiaison(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar estudios de caso o mejores prácticas de construcción de comunidades NGX.
+        # TODO: Usar mcp7_query para obtener datos sobre la comunidad actual (miembros, actividad) desde Supabase.
+        logger.info(f"Manejando solicitud de comunidad: {query}")
+        
         # Obtener información del usuario si está disponible
         user_data = context.get("user_data", {})
         user_type = user_data.get("type", "regular")
@@ -560,6 +632,10 @@ class ClientSuccessLiaison(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para obtener heurísticas de UX o guías de diseño NGX.
+        # TODO: Usar mcp7_query para obtener feedback de usuarios o datos de uso desde Supabase.
+        logger.info(f"Manejando solicitud de experiencia: {query}")
+        
         # Construir el prompt para el modelo
         prompt = f"""
         {self.system_instructions}
@@ -624,6 +700,11 @@ class ClientSuccessLiaison(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar en la base de conocimientos de soporte NGX.
+        # TODO: Usar mcp7_query para obtener historial de soporte del usuario desde Supabase.
+        # TODO: Usar mcp4_create_issue (GitHub) si se necesita escalar a un ticket de desarrollo.
+        logger.info(f"Manejando solicitud de soporte: {query}")
+        
         # Obtener información del problema si está disponible
         problem_info = None
         if "problem_details" in context:
@@ -695,6 +776,10 @@ class ClientSuccessLiaison(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar estrategias de retención efectivas documentadas por NGX.
+        # TODO: Usar mcp7_query para obtener datos de cohortes de usuarios o métricas de retención desde Supabase.
+        logger.info(f"Manejando solicitud de retención: {query}")
+        
         # Obtener datos de retención si están disponibles
         retention_data = context.get("retention_data", {})
         
@@ -764,6 +849,10 @@ class ClientSuccessLiaison(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para obtener plantillas de comunicación o guías de tono de voz NGX.
+        # TODO: Usar mcp7_query para obtener preferencias de comunicación del usuario desde Supabase.
+        logger.info(f"Manejando solicitud de comunicación: {query}")
+        
         # Obtener preferencias de comunicación si están disponibles
         communication_prefs = context.get("communication_preferences", {})
         
@@ -833,6 +922,10 @@ class ClientSuccessLiaison(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para búsqueda general en documentación de NGX sobre éxito del cliente.
+        # TODO: Usar mcp8_think para razonar sobre la mejor manera de abordar una consulta general.
+        logger.info(f"Manejando solicitud general de éxito del cliente: {query}")
+        
         # Construir el prompt para el modelo
         prompt = f"""
         {self.system_instructions}
@@ -872,6 +965,8 @@ class ClientSuccessLiaison(A2AAgent):
         Returns:
             Dict[str, Any]: Calendario de eventos
         """
+        # TODO: Integrar RAG para buscar ideas de eventos populares o ejemplos de calendarios NGX.
+        # TODO: Usar mcp7_query para obtener información sobre eventos pasados o preferencias de la comunidad desde Supabase.
         # Determinar el tipo de comunidad
         community_type = context.get("community_type", "fitness")
         time_frame = context.get("time_frame", "mensual")
@@ -924,6 +1019,8 @@ class ClientSuccessLiaison(A2AAgent):
         Returns:
             Dict[str, Any]: Mapa de customer journey
         """
+        # TODO: Integrar RAG para buscar plantillas de journey maps o puntos de referencia de la industria/NGX.
+        # TODO: Usar mcp7_query para obtener datos reales del journey de usuarios específicos desde Supabase.
         # Determinar el tipo de usuario
         user_type = context.get("user_type", "principiante")
         journey_focus = context.get("journey_focus", "onboarding")
