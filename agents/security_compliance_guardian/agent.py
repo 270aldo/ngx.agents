@@ -26,34 +26,14 @@ class SecurityComplianceGuardian(A2AAgent):
     detectar posibles vulnerabilidades y proporcionar recomendaciones de seguridad.
     """
     
-    def __init__(self, toolkit: Optional[Toolkit] = None):
-        # Definir capacidades y habilidades
+    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
+        # Definir capacidades según el protocolo A2A
         capabilities = [
             "security_assessment", 
             "compliance_verification", 
             "vulnerability_detection", 
             "data_protection", 
             "security_recommendations"
-        ]
-        
-        skills = [
-            {"name": "security_assessment", "description": "Evaluación de la seguridad de sistemas y aplicaciones"},
-            {"name": "compliance_verification", "description": "Verificación del cumplimiento de normativas y estándares"},
-            {"name": "vulnerability_detection", "description": "Detección de vulnerabilidades y riesgos de seguridad"},
-            {"name": "data_protection", "description": "Protección de datos sensibles y personales"},
-            {"name": "security_recommendations", "description": "Recomendaciones para mejorar la seguridad"}
-        ]
-        
-        # Ejemplos para la Agent Card
-        examples = [
-            {
-                "input": {"message": "¿Puedes realizar una evaluación de seguridad de mi aplicación web?"},
-                "output": {"response": "He realizado una evaluación de seguridad de tu aplicación web y he encontrado las siguientes vulnerabilidades..."}
-            },
-            {
-                "input": {"message": "¿Cómo puedo asegurarme de que mi aplicación cumple con GDPR?"},
-                "output": {"response": "Para cumplir con GDPR, debes implementar las siguientes medidas..."}
-            }
         ]
         
         # Inicializar agente base con los parámetros definidos
@@ -64,7 +44,7 @@ class SecurityComplianceGuardian(A2AAgent):
             capabilities=capabilities,
             toolkit=toolkit,
             version="1.0.0",
-            skills=skills
+            a2a_server_url=a2a_server_url
         )
         
         # Inicializar clientes y herramientas
@@ -73,21 +53,70 @@ class SecurityComplianceGuardian(A2AAgent):
         self.mcp_toolkit = MCPToolkit()
         
         # Inicializar gestor de estado
-        self.state_manager = StateManager(self.supabase_client)
+        self.state_manager = state_manager or StateManager()
         
-        # Crear Agent Card estandarizada
-        self.agent_card = AgentCard.create_standard_card(
-            agent_id=self.agent_id,
-            name=self.name,
-            description=self.description,
-            capabilities=self.capabilities,
-            skills=self.skills,
-            version="1.0.0",
+        # Crear y configurar la tarjeta del agente
+        self.agent_card = self._create_agent_card()
+        
+    def _create_agent_card(self) -> AgentCard:
+        """
+        Crea una tarjeta de agente estandarizada según el protocolo A2A.
+        
+        Returns:
+            AgentCard: Tarjeta del agente estandarizada
+        """
+        # Crear ejemplos para la tarjeta del agente
+        examples = [
+            Example(
+                input={"message": "¿Puedes realizar una evaluación de seguridad de mi aplicación web?"},
+                output={"response": "He realizado una evaluación de seguridad de tu aplicación web y he encontrado las siguientes vulnerabilidades potenciales: 1) Falta de protección CSRF en formularios, 2) Cabeceras de seguridad HTTP incompletas, 3) Validación insuficiente de entradas de usuario. Recomiendo implementar tokens anti-CSRF, configurar cabeceras como Content-Security-Policy y X-XSS-Protection, y mejorar la validación de entradas tanto en cliente como servidor."}
+            ),
+            Example(
+                input={"message": "¿Cómo puedo asegurarme de que mi aplicación cumple con GDPR?"},
+                output={"response": "Para cumplir con GDPR, debes implementar las siguientes medidas: 1) Obtener consentimiento explícito para la recolección de datos personales, 2) Implementar mecanismos para el derecho al olvido y portabilidad de datos, 3) Documentar todas las actividades de procesamiento de datos, 4) Realizar evaluaciones de impacto de protección de datos (DPIA), 5) Designar un Delegado de Protección de Datos si es necesario, 6) Establecer procedimientos para notificar violaciones de datos en 72 horas. Además, asegúrate de tener una política de privacidad clara y accesible."}
+            ),
+            Example(
+                input={"message": "¿Qué vulnerabilidades debo buscar en mi API REST?"},
+                output={"response": "En tu API REST, debes buscar estas vulnerabilidades críticas: 1) Autenticación débil o ausente, 2) Control de acceso inadecuado a endpoints, 3) Exposición de datos sensibles, 4) Inyección de datos (SQL, NoSQL, etc.), 5) Limitación de tasa ausente (para prevenir DDoS), 6) Validación insuficiente de parámetros, 7) Gestión incorrecta de errores que revela información, 8) Configuración CORS insegura. Recomiendo usar herramientas como OWASP ZAP o Burp Suite para escanear tu API y seguir las directrices de OWASP API Security Top 10."}
+            ),
+            Example(
+                input={"message": "¿Cómo debo manejar un incidente de violación de datos?"},
+                output={"response": "Para manejar un incidente de violación de datos, sigue estos pasos: 1) Contención: identifica y aislala la brecha para evitar más pérdida de datos, 2) Evaluación: determina qué datos fueron comprometidos y el alcance del impacto, 3) Notificación: informa a las autoridades reguladoras dentro de 72 horas (GDPR) y a los usuarios afectados, 4) Investigación: documenta cómo ocurrió la violación y qué sistemas fueron comprometidos, 5) Remediación: corrige las vulnerabilidades identificadas, 6) Recuperación: restaura sistemas y datos desde copias de seguridad verificadas, 7) Revisión: analiza el incidente para mejorar tus protocolos de seguridad. Mantén un registro detallado de todas las acciones tomadas."}
+            )
+        ]
+        
+        # Crear la tarjeta del agente
+        return AgentCard(
+            title="NGX Security & Compliance Guardian",
+            description="Especialista en seguridad, protección de datos y cumplimiento normativo para aplicaciones y sistemas.",
+            instructions="Describe tu aplicación, sistema o preocupación de seguridad específica para recibir evaluaciones, recomendaciones y orientación personalizada sobre seguridad y cumplimiento normativo.",
             examples=examples,
-            metadata={
-                "model": "gemini-pro",
-                "creator": "NGX Team",
-                "last_updated": time.strftime("%Y-%m-%d")
+            capabilities=[
+                "Evaluación de seguridad de sistemas y aplicaciones",
+                "Verificación del cumplimiento de normativas (GDPR, HIPAA, CCPA, etc.)",
+                "Detección de vulnerabilidades y riesgos de seguridad",
+                "Protección de datos sensibles y personales",
+                "Recomendaciones para mejorar la seguridad y respuesta a incidentes"
+            ],
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"},
+                    "app_type": {"type": "string"},
+                    "security_context": {"type": "object"}
+                },
+                "required": ["message"]
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "response": {"type": "string"},
+                    "security_assessment": {"type": "object"},
+                    "compliance_check": {"type": "object"},
+                    "vulnerability_report": {"type": "object"},
+                    "recommendations": {"type": "array"}
+                },
+                "required": ["response"]
             }
         )
         

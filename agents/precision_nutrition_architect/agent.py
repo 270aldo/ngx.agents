@@ -68,48 +68,13 @@ class PrecisionNutritionArchitect(ADKAgent):
     """
     
     def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
-        # Definir capacidades y habilidades
+        # Definir capacidades y habilidades según el protocolo A2A
         capabilities = [
             "meal_plan_creation",
             "nutrition_assessment",
             "supplement_recommendation",
             "chrononutrition_planning",
             "biomarker_analysis"
-        ]
-        
-        skills = [
-            {
-                "name": "meal_plan_creation",
-                "description": "Creación de planes alimenticios personalizados"
-            },
-            {
-                "name": "nutrition_assessment",
-                "description": "Evaluación nutricional basada en perfil y objetivos"
-            },
-            {
-                "name": "supplement_recommendation",
-                "description": "Recomendación de suplementos según necesidades"
-            },
-            {
-                "name": "chrononutrition_planning",
-                "description": "Planificación de la distribución temporal de alimentos"
-            },
-            {
-                "name": "biomarker_analysis",
-                "description": "Análisis de biomarcadores para optimizar nutrición"
-            }
-        ]
-        
-        # Ejemplos para la Agent Card
-        examples = [
-            {
-                "input": {"message": "Necesito un plan de alimentación para mejorar mi rendimiento deportivo"},
-                "output": {"response": "He creado un plan nutricional enfocado en optimizar tu rendimiento deportivo..."}
-            },
-            {
-                "input": {"message": "¿Qué suplementos me recomiendas para mejorar mi recuperación muscular?"},
-                "output": {"response": "Basado en tus necesidades, te recomiendo los siguientes suplementos para optimizar tu recuperación..."}
-            }
         ]
         
         # Inicializar agente base con los parámetros definidos
@@ -121,8 +86,7 @@ class PrecisionNutritionArchitect(ADKAgent):
             toolkit=toolkit,
             version="1.0.0",
             a2a_server_url=a2a_server_url,
-            state_manager=state_manager,
-            skills=skills
+            state_manager=state_manager
         )
         
         # Inicializar clientes y herramientas
@@ -138,6 +102,9 @@ class PrecisionNutritionArchitect(ADKAgent):
         self.update_state("nutrition_plans", {})  # Almacenar planes nutricionales generados
         self.update_state("supplement_recommendations", {})  # Almacenar recomendaciones de suplementos
         self.update_state("conversation_contexts", {})  # Almacenar contextos de conversación
+        
+        # Crear y configurar la tarjeta del agente
+        self.agent_card = self._create_agent_card()
         
         logger.info(f"PrecisionNutritionArchitect inicializado con {len(capabilities)} capacidades")
         
@@ -174,7 +141,8 @@ class PrecisionNutritionArchitect(ADKAgent):
         Implementación asíncrona del procesamiento del agente PrecisionNutritionArchitect.
         
         Sobrescribe el método de la clase base para proporcionar la implementación
-        específica del agente especializado en nutrición de precisión.
+        específica del agente especializado en nutrición de precisión, siguiendo
+        el protocolo A2A y los estándares de Google ADK.
         
         Args:
             input_text: Texto de entrada del usuario
@@ -183,7 +151,7 @@ class PrecisionNutritionArchitect(ADKAgent):
             **kwargs: Argumentos adicionales como context, parameters, etc.
             
         Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente
+            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo A2A
         """
         try:
             start_time = time.time()
@@ -256,37 +224,70 @@ class PrecisionNutritionArchitect(ADKAgent):
             # Actualizar contexto y persistir en StateManager
             await self._update_context(user_id, session_id, input_text, response)
             
-            # Crear artefactos para la respuesta
+            # Crear artefactos para la respuesta siguiendo el formato A2A
             artifacts = [
                 {
                     "type": response_type,
                     "content": response,
                     "metadata": {
-                        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "agent_version": "1.0.0",
+                        "protocol": "a2a"
                     }
                 }
             ]
             
-            # Devolver respuesta final
+            # Crear mensaje de respuesta según el protocolo A2A
+            response_message = self.create_message(
+                role="agent",
+                parts=[self.create_text_part(response)]
+            )
+            
+            # Convertir artefactos al formato A2A
+            a2a_artifacts = []
+            for artifact in artifacts:
+                artifact_id = f"{artifact['type']}_{uuid.uuid4().hex[:8]}"
+                a2a_artifact = self.create_artifact(
+                    artifact_id=artifact_id,
+                    artifact_type=artifact['type'],
+                    parts=[self.create_data_part(artifact['content'])]
+                )
+                a2a_artifacts.append(a2a_artifact)
+            
+            # Devolver respuesta final según el protocolo A2A
             return {
                 "status": "success",
                 "response": response,
-                "artifacts": artifacts,
+                "message": response_message,
+                "artifacts": a2a_artifacts,
                 "agent_id": self.agent_id,
                 "metadata": {
                     "response_type": response_type,
                     "user_id": user_id,
-                    "session_id": session_id
+                    "session_id": session_id,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
                 }
             }
             
         except Exception as e:
             logger.error(f"Error en PrecisionNutritionArchitect: {e}", exc_info=True)
+            
+            # Crear mensaje de error según el protocolo A2A
+            error_message = self.create_message(
+                role="agent",
+                parts=[self.create_text_part("Lo siento, ha ocurrido un error al procesar tu solicitud nutricional.")]
+            )
+            
             return {
                 "status": "error",
                 "response": "Lo siento, ha ocurrido un error al procesar tu solicitud nutricional.",
+                "message": error_message,
                 "error": str(e),
-                "agent_id": self.agent_id
+                "agent_id": self.agent_id,
+                "metadata": {
+                    "error_type": type(e).__name__,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
             }
     
     def _summarize_plan(self, nutrition_plan: Dict[str, Any]) -> str:
@@ -422,6 +423,67 @@ class PrecisionNutritionArchitect(ADKAgent):
             except Exception as e:
                 logger.warning(f"Error al guardar contexto en StateManager: {e}")
     
+    def _create_agent_card(self) -> AgentCard:
+        """
+        Crea una tarjeta de agente estandarizada según el protocolo A2A.
+        
+        Returns:
+            AgentCard: Tarjeta del agente estandarizada
+        """
+        # Crear ejemplos para la tarjeta del agente
+        examples = [
+            Example(
+                input={"message": "Necesito un plan de alimentación para mejorar mi rendimiento deportivo"},
+                output={"response": "He creado un plan nutricional enfocado en optimizar tu rendimiento deportivo. Se centra en una distribución de macronutrientes de 30% proteínas, 45% carbohidratos y 25% grasas, con énfasis en alimentos de alto valor nutricional y timing estratégico de nutrientes alrededor de tus entrenamientos."}
+            ),
+            Example(
+                input={"message": "¿Qué suplementos me recomiendas para mejorar mi recuperación muscular?"},
+                output={"response": "Basado en tus necesidades, te recomiendo los siguientes suplementos para optimizar tu recuperación muscular: proteína de suero (20-25g post-entrenamiento), creatina monohidrato (5g diarios), y aminoácidos de cadena ramificada (BCAAs) antes del entrenamiento. También considera magnesio (300-400mg) para reducir calambres y mejorar la calidad del sueño."}
+            ),
+            Example(
+                input={"message": "¿Cómo debería distribuir mis comidas durante el día para optimizar mi metabolismo?"},
+                output={"response": "Para optimizar tu metabolismo, te recomiendo un enfoque de crononutrición con 4-5 comidas distribuidas cada 3-4 horas. Concentra los carbohidratos en el desayuno y alrededor del entrenamiento, proteínas en cada comida (20-30g), y grasas saludables principalmente en la tarde/noche. Mantén una ventana de alimentación de 10-12 horas para alinearte con tu ritmo circadiano."}
+            ),
+            Example(
+                input={"message": "Mis análisis de sangre muestran niveles bajos de vitamina D y hierro. ¿Qué ajustes nutricionales debería hacer?"},
+                output={"response": "Para abordar tus niveles bajos de vitamina D y hierro, te recomiendo: 1) Aumentar el consumo de pescados grasos (salmón, caballa), huevos y hongos expuestos al sol para vitamina D; 2) Incorporar carnes rojas magras, legumbres y vegetales de hoja verde para el hierro; 3) Combinar fuentes de hierro con alimentos ricos en vitamina C para mejorar la absorción; 4) Considerar suplementación de vitamina D3 (1000-2000 UI) y hierro (consulta con tu médico para la dosis exacta)."}
+            )
+        ]
+        
+        # Crear la tarjeta del agente
+        return AgentCard(
+            title="Precision Nutrition Architect",
+            description="Especialista en nutrición personalizada que genera planes alimenticios, crononutrición y suplementación basada en biomarcadores.",
+            instructions="Proporciona detalles sobre tus objetivos, restricciones alimentarias, horarios de entrenamiento y cualquier información relevante sobre tu salud para recibir un plan nutricional personalizado.",
+            examples=examples,
+            capabilities=[
+                "Creación de planes alimenticios personalizados",
+                "Análisis nutricional basado en perfil y objetivos",
+                "Recomendación de suplementos según necesidades individuales",
+                "Planificación de crononutrición optimizada",
+                "Análisis de biomarcadores para nutrición de precisión"
+            ],
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"},
+                    "user_profile": {"type": "object"},
+                    "biomarkers": {"type": "object"}
+                },
+                "required": ["message"]
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "response": {"type": "string"},
+                    "nutrition_plan": {"type": "object"},
+                    "supplement_recommendation": {"type": "object"},
+                    "biomarker_analysis": {"type": "object"}
+                },
+                "required": ["response"]
+            }
+        )
+        
     def get_agent_card(self) -> Dict[str, Any]:
         """
         Obtiene el Agent Card del agente según el protocolo A2A oficial.
@@ -429,17 +491,24 @@ class PrecisionNutritionArchitect(ADKAgent):
         Returns:
             Dict[str, Any]: Agent Card estandarizada
         """
-        return self.agent_card.to_dict()
+        return self._create_agent_card().to_dict()
         
     async def start(self):
         """
         Inicia el agente, conectándolo al servidor ADK y registrando sus skills.
+        Implementa el protocolo A2A para la comunicación estandarizada.
         """
-        # Registrar skills en el toolkit
-        await self._register_skills()
-        
-        # Iniciar agente ADK (conectar al servidor ADK y registrar skills)
-        await super().start()
+        try:
+            # Registrar skills en el toolkit
+            await self._register_skills()
+            
+            # Iniciar agente ADK (conectar al servidor ADK y registrar skills)
+            await super().start()
+            
+            logger.info(f"Agente {self.agent_id} iniciado exitosamente con protocolo A2A")
+        except Exception as e:
+            logger.error(f"Error al iniciar el agente {self.agent_id}: {e}", exc_info=True)
+            raise
         
     async def _register_skills(self):
         """

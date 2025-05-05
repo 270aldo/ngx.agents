@@ -27,33 +27,13 @@ class ProgressTracker(A2AAgent):
     """
 
     def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
-        # Definir capacidades y habilidades
+        # Definir capacidades según el protocolo A2A
         capabilities = [
             "progress_monitoring",
             "data_analysis",
             "trend_identification",
             "visualization",
             "goal_tracking"
-        ]
-        
-        skills = [
-            {"name": "progress_monitoring", "description": "Monitoreo continuo de métricas clave"},
-            {"name": "data_analysis", "description": "Análisis cuantitativo de datos para extraer insights"},
-            {"name": "trend_identification", "description": "Identificación de tendencias y patrones"},
-            {"name": "visualization", "description": "Generación de visualizaciones comprensibles"},
-            {"name": "goal_tracking", "description": "Seguimiento de metas SMART y evaluación de hitos"}
-        ]
-        
-        # Ejemplos para la Agent Card
-        examples = [
-            {
-                "input": {"message": "Muéstrame un gráfico de mi progreso de peso"},
-                "output": {"response": "Aquí tienes la visualización de tu progreso de peso a lo largo del tiempo..."}
-            },
-            {
-                "input": {"message": "¿Qué tendencias ves en mis datos de entrenamiento?"},
-                "output": {"response": "Analizando tus datos de entrenamiento, he identificado las siguientes tendencias..."}
-            }
         ]
         
         # Inicializar agente base con los parámetros definidos
@@ -64,8 +44,7 @@ class ProgressTracker(A2AAgent):
             capabilities=capabilities,
             toolkit=toolkit,
             version="1.0.0",
-            a2a_server_url=a2a_server_url,
-            skills=skills
+            a2a_server_url=a2a_server_url
         )
         
         # Inicializar clientes y herramientas
@@ -80,21 +59,28 @@ class ProgressTracker(A2AAgent):
         # Inicializar estado del agente
         self.update_state("visualizations", {})  # Almacenar visualizaciones generadas
         self.update_state("analyses", {})  # Almacenar análisis realizados
+        self.update_state("conversation_contexts", {})  # Almacenar contextos de conversación
         
         # Directorio para guardar gráficos temporales
         self.tmp_dir = os.path.join(os.getcwd(), "tmp_progress")
         os.makedirs(self.tmp_dir, exist_ok=True)
 
+        # Instrucciones del sistema para el agente
         self.system_instructions = """
         Eres NGX Progress Tracker, experto en seguimiento, análisis y visualización de progreso.
         Tu objetivo es ayudar a los usuarios a entender sus datos, identificar tendencias y ajustar estrategias.
+        Proporciona análisis basados en datos y visualizaciones claras para facilitar la comprensión.
+        Identifica patrones y sugiere ajustes para optimizar resultados.
         """
         
-        logger.info(f"ProgressTracker inicializado con {len(capabilities)} capacidades")
+        # Crear y configurar la tarjeta del agente
+        self.agent_card = self._create_agent_card()
+        
+        logger.info(f"ProgressTracker inicializado con {len(capabilities)} capacidades según protocolo A2A")
 
     async def run(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
-        Ejecuta el agente con un texto de entrada siguiendo el protocolo ADK oficial.
+        Ejecuta el agente con un texto de entrada siguiendo el protocolo A2A oficial.
         
         Args:
             input_text: Texto de entrada del usuario
@@ -102,7 +88,7 @@ class ProgressTracker(A2AAgent):
             **kwargs: Argumentos adicionales como context, parameters, etc.
             
         Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo ADK
+            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo A2A
         """
         try:
             start_time = time.time()
@@ -139,6 +125,18 @@ class ProgressTracker(A2AAgent):
             
             response = result.get("response", "")
             artifacts = result.get("artifacts", [])
+            message = result.get("message")
+            
+            # Si no hay mensaje en el resultado, crear uno según el protocolo A2A
+            if not message:
+                message = self.create_message(
+                    role="agent",
+                    parts=[self.create_text_part(response)]
+                )
+                
+                # Si hay artefactos, añadirlos al mensaje
+                for artifact in artifacts:
+                    message.parts.append(artifact)
             
             # Registrar la interacción si hay un usuario identificado
             if user_id:
@@ -164,10 +162,11 @@ class ProgressTracker(A2AAgent):
             # Calcular tiempo de ejecución
             execution_time = time.time() - start_time
             
-            # Formatear respuesta según el protocolo ADK
+            # Formatear respuesta según el protocolo A2A
             return {
                 "status": "success",
                 "response": response,
+                "message": message,
                 "confidence": 0.9,
                 "execution_time": execution_time,
                 "agent_id": self.agent_id,
@@ -175,19 +174,96 @@ class ProgressTracker(A2AAgent):
                 "metadata": {
                     "capabilities_used": capabilities_used,
                     "user_id": user_id,
-                    "query_type": query_type
+                    "session_id": session_id,
+                    "query_type": query_type,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "protocol": "a2a",
+                    "agent_version": "1.0.0"
                 }
             }
             
         except Exception as e:
             logger.error(f"Error en ProgressTracker: {e}", exc_info=True)
+            
+            # Crear mensaje de error según el protocolo A2A
+            error_message = self.create_message(
+                role="agent",
+                parts=[self.create_text_part("Lo siento, ha ocurrido un error al procesar tu solicitud de seguimiento de progreso.")]
+            )
+            
             return {
                 "status": "error",
                 "response": "Lo siento, ha ocurrido un error al procesar tu solicitud de seguimiento de progreso.",
+                "message": error_message,
                 "error": str(e),
-                "agent_id": self.agent_id
+                "agent_id": self.agent_id,
+                "metadata": {
+                    "error_type": type(e).__name__,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
             }
 
+    def _create_agent_card(self) -> AgentCard:
+        """
+        Crea una tarjeta de agente estandarizada según el protocolo A2A.
+        
+        Returns:
+            AgentCard: Tarjeta del agente estandarizada
+        """
+        # Crear ejemplos para la tarjeta del agente
+        examples = [
+            Example(
+                input={"message": "Muéstrame un gráfico de mi progreso de peso"},
+                output={"response": "Aquí tienes la visualización de tu progreso de peso a lo largo del tiempo. Puedes observar una tendencia descendente constante de 0.5kg por semana, lo que se alinea con tus objetivos de pérdida de peso saludable."}
+            ),
+            Example(
+                input={"message": "¿Qué tendencias ves en mis datos de entrenamiento?"},
+                output={"response": "Analizando tus datos de entrenamiento de los últimos 3 meses, he identificado las siguientes tendencias: 1) Aumento del 15% en tu capacidad de levantamiento de peso en ejercicios compuestos, 2) Mejora del 8% en resistencia cardiovascular, 3) Mayor consistencia en los entrenamientos de la mañana vs. los de la tarde. Recomiendo mantener la frecuencia actual y considerar aumentar la intensidad en tus sesiones de fuerza."}
+            ),
+            Example(
+                input={"message": "¿Cómo va mi progreso hacia mi meta de reducción de grasa corporal?"},
+                output={"response": "Tu progreso hacia la reducción de grasa corporal está en camino. Has reducido tu porcentaje de grasa corporal del 22% al 18% en 8 semanas, lo que representa un ritmo saludable de pérdida. Estás al 67% del camino hacia tu meta del 15%. Si mantienes este ritmo, alcanzarás tu objetivo en aproximadamente 4 semanas más."}
+            ),
+            Example(
+                input={"message": "Compara mi rendimiento actual con el del mes pasado"},
+                output={"response": "Comparando tu rendimiento actual con el del mes pasado: Fuerza: +7% en ejercicios principales. Resistencia: +12% en tiempo hasta el agotamiento. Recuperación: -15% en tiempo necesario entre series. Consistencia: +3 sesiones más que el mes anterior. En general, muestras una mejora significativa, especialmente en aspectos de resistencia y recuperación."}
+            )
+        ]
+        
+        # Crear la tarjeta del agente
+        return AgentCard(
+            title="NGX Progress Tracker",
+            description="Especialista en seguimiento, análisis y visualización de progreso para optimizar resultados y ajustar estrategias.",
+            instructions="Proporciona detalles sobre qué métricas quieres analizar, el período de tiempo que te interesa o solicita visualizaciones específicas de tu progreso.",
+            examples=examples,
+            capabilities=[
+                "Monitoreo continuo de métricas clave de progreso",
+                "Análisis cuantitativo de datos para extraer insights accionables",
+                "Identificación de tendencias y patrones en tu rendimiento",
+                "Generación de visualizaciones comprensibles de tu progreso",
+                "Seguimiento de metas SMART y evaluación de hitos"
+            ],
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"},
+                    "user_data": {"type": "object"},
+                    "time_period": {"type": "string"}
+                },
+                "required": ["message"]
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "response": {"type": "string"},
+                    "visualization": {"type": "object"},
+                    "analysis": {"type": "object"},
+                    "recommendations": {"type": "array"}
+                },
+                "required": ["response"]
+            }
+        )
+        
     def get_agent_card(self) -> Dict[str, Any]:
         """
         Obtiene el Agent Card del agente según el protocolo A2A oficial.
@@ -195,51 +271,113 @@ class ProgressTracker(A2AAgent):
         Returns:
             Dict[str, Any]: Agent Card estandarizada
         """
-        return self.agent_card.to_dict()
+        return self._create_agent_card().to_dict()
     
     # ------------- A2A overrides -------------
     async def execute_task(self, task: Dict[str, Any]) -> Any:
-        user_input = task.get("input", "")
-        context = task.get("context", {})
-        user_id = context.get("user_id")
-        session_id = context.get("session_id") or str(uuid.uuid4())
+        """
+        Ejecuta una tarea solicitada por el servidor A2A.
         
-        # Cargar contexto de la conversación
-        conversation_context = await self._get_context(user_id, session_id)
-
-        logger.info("ProgressTracker recibió consulta: %s", user_input)
-
-        # Obtener datos de progreso
-        progress_data = context.get("progress_data")
-        if not progress_data and user_id:
-            progress_data = self.supabase_client.get_user_progress_data(user_id)
-        
-        # Determinar tipo de consulta
-        query_type = self._classify_query(user_input)
-        if query_type == "visualization_request":
-            result = await self._handle_visual_request(user_input, progress_data)
-        elif query_type == "analysis_request":
-            result = await self._handle_analysis_request(user_input, progress_data)
-        else:
-            result = await self._handle_general_request(user_input, progress_data)
-
-        # Registrar interacción
-        if user_id:
-            self.supabase_client.log_interaction(user_id, self.agent_id, user_input, result["response"])
+        Args:
+            task: Tarea a ejecutar
             
-            # Interactuar con MCPClient
-            await self.mcp_client.log_interaction(
-                user_id=user_id,
-                agent_id=self.agent_id,
-                message=user_input,
-                response=result["response"]
+        Returns:
+            Any: Resultado de la tarea según el protocolo A2A
+        """
+        try:
+            # Extraer información de la tarea
+            user_input = task.get("input", "")
+            context = task.get("context", {})
+            user_id = context.get("user_id")
+            session_id = context.get("session_id") or str(uuid.uuid4())
+            
+            # Cargar contexto de la conversación
+            conversation_context = await self._get_context(user_id, session_id)
+
+            logger.info("ProgressTracker recibió consulta: %s", user_input)
+
+            # Obtener datos de progreso
+            progress_data = context.get("progress_data")
+            if not progress_data and user_id:
+                progress_data = self.supabase_client.get_user_progress_data(user_id)
+            
+            # Determinar tipo de consulta
+            query_type = self._classify_query(user_input)
+            capabilities_used = []
+            
+            # Procesar la consulta según su tipo
+            if query_type == "visualization_request":
+                result = await self._handle_visual_request(user_input, progress_data)
+                capabilities_used.extend(["visualization", "progress_monitoring"])
+            elif query_type == "analysis_request":
+                result = await self._handle_analysis_request(user_input, progress_data)
+                capabilities_used.extend(["data_analysis", "trend_identification"])
+            else:
+                result = await self._handle_general_request(user_input, progress_data)
+                capabilities_used.append("goal_tracking")
+
+            # Asegurar que el resultado tenga un mensaje A2A
+            if "message" not in result:
+                result["message"] = self.create_message(
+                    role="agent",
+                    parts=[self.create_text_part(result.get("response", ""))]
+                )
+                
+                # Si hay artefactos, añadirlos al mensaje
+                for artifact in result.get("artifacts", []):
+                    if isinstance(artifact, dict) and "parts" in artifact:
+                        result["message"].parts.extend(artifact["parts"])
+                    else:
+                        result["message"].parts.append(artifact)
+
+            # Registrar interacción
+            if user_id:
+                self.supabase_client.log_interaction(user_id, self.agent_id, user_input, result["response"])
+                
+                # Interactuar con MCPClient
+                await self.mcp_client.log_interaction(
+                    user_id=user_id,
+                    agent_id=self.agent_id,
+                    message=user_input,
+                    response=result["response"]
+                )
+                logger.info("Interacción con MCPClient registrada")
+                
+                # Actualizar contexto y persistir en StateManager
+                await self._update_context(user_id, session_id, user_input, result["response"])
+
+            # Añadir metadatos A2A al resultado
+            result["agent_id"] = self.agent_id
+            result["metadata"] = {
+                "capabilities_used": capabilities_used,
+                "query_type": query_type,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "protocol": "a2a",
+                "agent_version": "1.0.0"
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error en execute_task: {e}", exc_info=True)
+            
+            # Crear mensaje de error según el protocolo A2A
+            error_message = self.create_message(
+                role="agent",
+                parts=[self.create_text_part("Lo siento, ha ocurrido un error al procesar tu solicitud de seguimiento de progreso.")]
             )
-            logger.info("Interacción con MCPClient registrada")
             
-            # Actualizar contexto y persistir en StateManager
-            await self._update_context(user_id, session_id, user_input, result["response"])
-
-        return result
+            return {
+                "status": "error",
+                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud de seguimiento de progreso.",
+                "message": error_message,
+                "error": str(e),
+                "agent_id": self.agent_id,
+                "metadata": {
+                    "error_type": type(e).__name__,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            }
 
     async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
         msg = content.get("text", "")
