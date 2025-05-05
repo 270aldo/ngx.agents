@@ -1,19 +1,35 @@
+"""Agente especializado en motivación y cambio de comportamiento.
+
+Este agente proporciona estrategias para mantener la motivación, 
+establece hábitos saludables, supera obstáculos psicológicos,
+y logra cambios de comportamiento duraderos.
+
+Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
+"""
 import logging
 import uuid
 import time
-from typing import Dict, Any, Optional, List
-
-from adk.toolkit import Toolkit
+import json
+import os
+import aiplatform
+from typing import Dict, Any, Optional, List, Union
+import asyncio
+import uuid
+from datetime import datetime, timezone
+from adk.agent import Agent
+from adk.config import ApplicationConfig
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
-from tools.mcp_client import MCPClient  # Importar MCPClient
+from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
 from agents.base.a2a_agent import A2AAgent
 from core.agent_card import AgentCard, Example
 from core.state_manager import StateManager
+from core.logging_config import get_logger
+from core.contracts import create_task, create_result, validate_task, validate_result
 
-# Configurar logging
-logger = logging.getLogger(__name__)
+# Configurar logger
+logger = get_logger(__name__)
 
 class MotivationBehaviorCoach(A2AAgent):
     """
@@ -22,9 +38,19 @@ class MotivationBehaviorCoach(A2AAgent):
     Este agente proporciona estrategias para mantener la motivación, 
     establecer hábitos saludables, superar obstáculos psicológicos,
     y lograr cambios de comportamiento duraderos.
+    
+    Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
     """
     
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None):
+    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
+        """
+        Inicializa el agente MotivationBehaviorCoach.
+        
+        Args:
+            toolkit: Toolkit de ADK para registro de habilidades
+            a2a_server_url: URL del servidor A2A
+            state_manager: Gestor de estado para persistencia
+        """
         # Definir capacidades y habilidades
         capabilities = [
             "habit_formation", 
@@ -36,67 +62,106 @@ class MotivationBehaviorCoach(A2AAgent):
         
         skills = [
             {
-                "name": "habit_formation",
-                "description": "Técnicas para establecer y mantener hábitos saludables"
+                "id": "motivation-behavior-habit-formation",
+                "name": "Formación de Hábitos",
+                "description": "Técnicas para establecer y mantener hábitos saludables basadas en ciencia del comportamiento",
+                "tags": ["habits", "behavior-change", "consistency", "routine", "implementation-intentions"],
+                "examples": [
+                    "Quiero establecer el hábito de hacer ejercicio regularmente",
+                    "Cómo puedo mantener el hábito de meditar diariamente",
+                    "Necesito crear una rutina matutina efectiva"
+                ],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
-                "name": "motivation_strategies",
-                "description": "Estrategias para mantener la motivación a largo plazo"
+                "id": "motivation-behavior-motivation-strategies",
+                "name": "Estrategias de Motivación",
+                "description": "Estrategias basadas en evidencia para mantener la motivación a largo plazo y superar barreras psicológicas",
+                "tags": ["motivation", "psychology", "adherence", "commitment", "willpower"],
+                "examples": [
+                    "Me cuesta mantenerme motivado para seguir mi dieta",
+                    "Cómo mantener la motivación cuando no veo resultados rápidos",
+                    "Estrategias para no abandonar mis metas"
+                ],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
-                "name": "behavior_change",
-                "description": "Métodos para lograr cambios de comportamiento duraderos"
+                "id": "motivation-behavior-behavior-change",
+                "name": "Cambio de Comportamiento",
+                "description": "Métodos para lograr cambios de comportamiento duraderos basados en modelos psicológicos validados",
+                "tags": ["behavior-change", "habit-replacement", "identity-based-habits", "triggers"],
+                "examples": [
+                    "Quiero dejar de procrastinar en mis proyectos",
+                    "Cómo puedo cambiar mi relación con la comida",
+                    "Necesito reemplazar hábitos negativos con positivos"
+                ],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
-                "name": "goal_setting",
-                "description": "Técnicas para establecer metas efectivas y alcanzables"
+                "id": "motivation-behavior-goal-setting",
+                "name": "Establecimiento de Metas",
+                "description": "Técnicas para establecer metas efectivas, alcanzables y motivadoras siguiendo el modelo SMART",
+                "tags": ["goals", "smart-goals", "planning", "milestones", "achievement"],
+                "examples": [
+                    "Quiero establecer metas efectivas para mi entrenamiento",
+                    "Cómo puedo dividir mi meta principal en objetivos más pequeños",
+                    "Necesito un plan para alcanzar mi meta en 6 meses"
+                ],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json", "markdown"]
             },
             {
-                "name": "obstacle_management",
-                "description": "Estrategias para superar obstáculos psicológicos y barreras"
-            }
-        ]
-        
-        # Ejemplos para la Agent Card
-        examples = [
-            {
-                "input": {"message": "Quiero establecer el hábito de hacer ejercicio regularmente"},
-                "output": {"response": "He creado un plan personalizado para ayudarte a establecer el hábito de ejercicio regular..."}
-            },
-            {
-                "input": {"message": "Me cuesta mantenerme motivado para seguir mi dieta"},
-                "output": {"response": "Entiendo tu dificultad. Aquí tienes estrategias específicas para mantener la motivación con tu dieta..."}
+                "id": "motivation-behavior-obstacle-management",
+                "name": "Gestión de Obstáculos",
+                "description": "Estrategias para identificar, anticipar y superar obstáculos psicológicos y barreras que impiden el progreso",
+                "tags": ["obstacles", "barriers", "problem-solving", "resilience", "mindset"],
+                "examples": [
+                    "Cómo manejar las recaidas en mis hábitos",
+                    "Estrategias para superar la resistencia interna al cambio",
+                    "Qué hacer cuando pierdo la motivación"
+                ],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json", "markdown"]
             }
         ]
         
         # Inicializar agente base con los parámetros definidos
         super().__init__(
-            agent_id="motivation_behavior_coach",
-            name="NGX Motivation & Behavior Coach",
-            description="Especialista en estrategias de motivación y cambio de comportamiento",
-            capabilities=capabilities,
             toolkit=toolkit,
-            version="1.0.0",
-            a2a_server_url=a2a_server_url,
-            skills=skills
+            a2a_server_url=a2a_server_url
         )
         
-        # Inicializar clientes y herramientas
+        # Inicialización de Clientes y Herramientas
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+        
         self.gemini_client = GeminiClient(model_name="gemini-2.0-flash")
         self.supabase_client = SupabaseClient()
         self.mcp_toolkit = MCPToolkit()
-        self.mcp_client = MCPClient()
-        self.state_manager = StateManager(self.supabase_client)
+        self.state_manager = state_manager or StateManager(self.supabase_client)
         
-        # Inicializar estado del agente
+        # Inicializar diccionarios para almacenar contexto de conversaciones
+        self.context = {}
+        
+        # Inicializar estado interno
+        self._state = {}
         self.update_state("habit_plans", {})  # Almacenar planes de hábitos generados
         self.update_state("goal_plans", {})  # Almacenar planes de metas
         
-        # Definir el sistema de instrucciones para el agente
-        self.system_instructions = """
-        Eres NGX Motivation & Behavior Coach, un experto en psicología del comportamiento y estrategias de motivación.
+        # Registrar habilidades
+        self.skills = skills
         
         logger.info(f"MotivationBehaviorCoach inicializado con {len(capabilities)} capacidades")
+        """ 
         Tu objetivo es proporcionar recomendaciones personalizadas sobre:
         1. Técnicas para establecer y mantener hábitos saludables
         2. Estrategias para mantener la motivación a largo plazo
@@ -335,98 +400,32 @@ class MotivationBehaviorCoach(A2AAgent):
             execution_time = time.time() - start_time
             
             # Formatear respuesta según el protocolo ADK
-            return {
+            metadata = {
                 "status": "success",
-                "response": response,
-                "confidence": 0.9,
-                "execution_time": execution_time,
                 "agent_id": self.agent_id,
-                "artifacts": artifacts,
-                "metadata": {
-                    "task_type": task_type,
-                    "user_id": user_id,
-                    "session_id": session_id
-                }
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
+            payload = {
+                "response": response,
+                "message": response,
+                "artifacts": artifacts
+            }
+            return {"metadata": metadata, "payload": payload}
             
         except Exception as e:
             logger.error(f"Error en MotivationBehaviorCoach: {e}", exc_info=True)
             execution_time = time.time() - start_time if 'start_time' in locals() else 0.0
             
-            return {
+            metadata = {
                 "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre motivación y cambio de comportamiento.",
-                "error": str(e),
-                "execution_time": execution_time,
-                "confidence": 0.0,
                 "agent_id": self.agent_id,
-                "metadata": {
-                    "error_type": type(e).__name__,
-                    "user_id": user_id
-                }
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
-    
-    def _summarize_habit_plan(self, habit_plan: Dict[str, Any]) -> str:
-        """Genera un resumen textual del plan de hábitos para la respuesta al usuario."""
-        summary_parts = []
-        
-        if "habit" in habit_plan:
-            summary_parts.append(f"El hábito a desarrollar es: {habit_plan['habit']}.")
-        
-        if "implementation_intention" in habit_plan:
-            summary_parts.append(f"La intención de implementación es: {habit_plan['implementation_intention']}.")
-        
-        if "small_steps" in habit_plan and habit_plan["small_steps"]:
-            steps = habit_plan["small_steps"]
-            if isinstance(steps, list) and len(steps) > 0:
-                summary_parts.append(f"Primer paso: {steps[0]}.")
-        
-        if "reminders" in habit_plan and habit_plan["reminders"]:
-            reminders = habit_plan["reminders"]
-            if isinstance(reminders, list) and len(reminders) > 0:
-                summary_parts.append(f"Recordatorio clave: {reminders[0]}.")
-        
-        if not summary_parts:
-            return "Revisa el plan detallado para más información."
-            
-        return " ".join(summary_parts)
-    
-    def _summarize_goal_plan(self, goal_plan: Dict[str, Any]) -> str:
-        """Genera un resumen textual del plan de metas para la respuesta al usuario."""
-        summary_parts = []
-        
-        if "main_goal" in goal_plan:
-            main_goal = goal_plan["main_goal"]
-            if isinstance(main_goal, dict) and "specific" in main_goal:
-                summary_parts.append(f"Tu meta principal es: {main_goal['specific']}.")
-            elif isinstance(main_goal, str):
-                summary_parts.append(f"Tu meta principal es: {main_goal}.")
-        
-        if "purpose" in goal_plan:
-            summary_parts.append(f"Tu propósito es: {goal_plan['purpose']}.")
-        
-        if "milestones" in goal_plan and goal_plan["milestones"]:
-            milestones = goal_plan["milestones"]
-            if isinstance(milestones, list) and len(milestones) > 0:
-                milestone = milestones[0]
-                if isinstance(milestone, dict) and "description" in milestone:
-                    summary_parts.append(f"Primer hito: {milestone['description']}.")
-                elif isinstance(milestone, str):
-                    summary_parts.append(f"Primer hito: {milestone}.")
-        
-        if not summary_parts:
-            return "Revisa el plan detallado para más información."
-            
-        return " ".join(summary_parts)
-    
-    def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
-        
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada
-        """
-        return self.agent_card.to_dict()
+            payload = {
+                "error": str(e),
+                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre motivación y comportamiento."
+            }
+            return {"metadata": metadata, "payload": payload}
     
     async def execute_task(self, task: Dict[str, Any]) -> Any:
         """
@@ -449,8 +448,15 @@ class MotivationBehaviorCoach(A2AAgent):
             # Obtener perfil del usuario si está disponible
             user_profile = None
             if user_id:
-                user_profile = self.supabase_client.get_user_profile(user_id)
-                logger.info(f"Perfil de usuario obtenido: {user_profile is not None}")
+                # Intentar obtener el perfil del usuario del contexto primero
+                user_profile = context.get("user_profile", {})
+                if not user_profile:
+                    try:
+                        user_profile = self.supabase_client.get_user_profile(user_id)
+                        if user_profile:
+                            context["user_profile"] = user_profile
+                    except Exception as e:
+                        logger.warning(f"No se pudo obtener el perfil del usuario {user_id}: {e}")
             
             # Construir el prompt para el modelo
             prompt = self._build_prompt(user_input, user_profile)
@@ -518,19 +524,30 @@ class MotivationBehaviorCoach(A2AAgent):
                 ]
             )
             
-            # Devolver respuesta estructurada según el protocolo A2A
-            return {
+            metadata = {
+                "status": "success",
+                "agent_id": self.agent_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            payload = {
                 "response": response,
                 "message": response_message,
                 "artifacts": artifacts
             }
+            return {"metadata": metadata, "payload": payload}
             
         except Exception as e:
             logger.error(f"Error en MotivationBehaviorCoach: {e}")
-            return {
-                "error": str(e), 
+            metadata = {
+                "status": "error",
+                "agent_id": self.agent_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            payload = {
+                "error": str(e),
                 "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre motivación y comportamiento."
             }
+            return {"metadata": metadata, "payload": payload}
     
     async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
         """
@@ -569,14 +586,29 @@ class MotivationBehaviorCoach(A2AAgent):
                 ]
             )
             
-            return {
+            metadata = {
                 "status": "success",
+                "agent_id": self.agent_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            payload = {
                 "response": response,
                 "message": response_message
             }
+            return {"metadata": metadata, "payload": payload}
+            
         except Exception as e:
-            logger.error(f"Error al procesar mensaje de agente: {e}")
-            return {"error": str(e)}
+            logger.error(f"Error al procesar mensaje de agente {from_agent}: {e}")
+            metadata = {
+                "status": "error",
+                "agent_id": self.agent_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            payload = {
+                "error": str(e),
+                "response": f"Error procesando mensaje del agente {from_agent}."
+            }
+            return {"metadata": metadata, "payload": payload}
     
     def _build_prompt(self, user_input: str, user_profile: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -615,6 +647,8 @@ class MotivationBehaviorCoach(A2AAgent):
         Returns:
             Dict[str, Any]: Plan de hábitos estructurado
         """
+        # TODO: Integrar RAG para buscar estrategias específicas de formación de hábitos de la filosofía NGX.
+        # TODO: Usar mcp7_query para obtener historial de hábitos/preferencias del usuario desde Supabase.
         prompt = f"""
         Genera un plan de formación de hábitos estructurado basado en la siguiente solicitud:
         
@@ -695,6 +729,9 @@ class MotivationBehaviorCoach(A2AAgent):
         Returns:
             Dict[str, Any]: Plan de metas estructurado
         """
+        # TODO: Integrar RAG para buscar marcos de establecimiento de metas (ej. WOOP, OKR) adaptados por NGX.
+        # TODO: Usar mcp7_query para obtener metas previas o métricas de progreso del usuario desde Supabase.
+        # TODO: Usar mcp8_think si la definición de la meta SMART requiere varios pasos de refinamiento.
         prompt = f"""
         Genera un plan de metas estructurado basado en la siguiente solicitud:
         
@@ -782,3 +819,12 @@ class MotivationBehaviorCoach(A2AAgent):
                 }
         
         return response
+
+    def get_agent_card(self) -> Dict[str, Any]:
+        """
+        Obtiene el Agent Card del agente según el protocolo A2A oficial.
+        
+        Returns:
+            Dict[str, Any]: Agent Card estandarizada
+        """
+        return self.agent_card.to_dict()
