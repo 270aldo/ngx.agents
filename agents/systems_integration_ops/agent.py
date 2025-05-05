@@ -6,6 +6,7 @@ import json
 import os
 import datetime
 import asyncio
+from google.cloud import aiplatform
 
 from adk.toolkit import Toolkit
 from clients.gemini_client import GeminiClient
@@ -73,6 +74,16 @@ class SystemsIntegrationOps(A2AAgent):
         self.mcp_toolkit = MCPToolkit()
         self.state_manager = StateManager(self.supabase_client)
         
+        # Inicialización de AI Platform
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+        
         # Crear Agent Card estandarizada
         self.agent_card = AgentCard.create_standard_card(
             agent_id=self.agent_id,
@@ -93,9 +104,9 @@ class SystemsIntegrationOps(A2AAgent):
         self.system_instructions = """
         Eres NGX Systems Integration & Ops, un experto en integración de sistemas y automatización operativa.
         
-        Tu objetivo es facilitar la integración fluida de diferentes sistemas, automatizar procesos,
-        gestionar conexiones con APIs externas, y optimizar la infraestructura tecnológica
-        para mejorar la eficiencia operativa en las siguientes áreas:
+        Tu objetivo es facilitar la integración fluida de diferentes sistemas,
+        automatizar procesos, gestionar conexiones con APIs externas,
+        y optimizar la infraestructura tecnológica para mejorar la eficiencia operativa en las siguientes áreas:
         
         1. Integración de sistemas
            - Integración de plataformas de fitness y salud
@@ -508,6 +519,8 @@ class SystemsIntegrationOps(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar documentación de APIs de sistemas específicos o casos de integración NGX.
+        # TODO: Usar mcp7_query para obtener metadatos de configuración de sistemas desde Supabase.
         # Identificar qué sistemas se desean integrar
         systems = []
         query_lower = query.lower()
@@ -602,6 +615,8 @@ class SystemsIntegrationOps(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar plantillas de automatización (ej. Zapier, Make) o scripts NGX.
+        # TODO: Usar mcp7_query para obtener detalles de procesos actuales o métricas de eficiencia desde Supabase.
         # Construir el prompt para el modelo
         prompt = f"""
         {self.system_instructions}
@@ -666,6 +681,9 @@ class SystemsIntegrationOps(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar documentación oficial de APIs o políticas de gestión de APIs NGX.
+        # TODO: Usar mcp7_query para obtener logs de uso de API o estado de endpoints desde Supabase.
+        # TODO: Considerar mcp4_github tools si la API está en GitHub.
         # Identificar posibles APIs mencionadas
         apis = []
         query_lower = query.lower()
@@ -758,6 +776,8 @@ class SystemsIntegrationOps(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar benchmarks de rendimiento de infraestructura o casos de estudio NGX.
+        # TODO: Usar mcp7_query para obtener métricas de uso de recursos (CPU, RAM, red) desde Supabase (si aplica).
         # Construir el prompt para el modelo
         prompt = f"""
         {self.system_instructions}
@@ -824,6 +844,8 @@ class SystemsIntegrationOps(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para buscar patrones de diseño de pipelines de datos (ETL, ELT) o ejemplos NGX.
+        # TODO: Usar mcp7_query para obtener esquemas de datos o volúmenes de datos actuales desde Supabase.
         # Construir el prompt para el modelo
         prompt = f"""
         {self.system_instructions}
@@ -890,6 +912,8 @@ class SystemsIntegrationOps(A2AAgent):
         Returns:
             Dict[str, Any]: Resultado de la consulta
         """
+        # TODO: Integrar RAG para búsqueda general en documentación de integración y automatización NGX.
+        # TODO: Usar mcp8_think para análisis complejos o planificación de migraciones.
         # Construir el prompt para el modelo
         prompt = f"""
         {self.system_instructions}
@@ -929,6 +953,8 @@ class SystemsIntegrationOps(A2AAgent):
         Returns:
             Dict[str, Any]: Descripción del diagrama
         """
+        # TODO: Integrar RAG para buscar plantillas de diagramas de arquitectura estándar o ejemplos NGX.
+        # TODO: Considerar usar herramientas de diagramación (Mermaid, etc.) si se integra una habilidad de generación de imágenes.
         # En una implementación real, esto podría generar un diagrama visual
         # Por ahora, generamos una descripción textual
         
