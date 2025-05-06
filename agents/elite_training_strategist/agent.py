@@ -7,13 +7,13 @@ personalizados basados en los objetivos, nivel y restricciones del atleta.
 Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
 """
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import time
 from datetime import datetime, timezone
 import re
 import os
 
-from google.adk.runtime import Toolkit 
+# from google.adk.agents import Agent # No longer needed here, imported in base
 from agents.base.adk_agent import ADKAgent
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
@@ -53,6 +53,12 @@ try:
         unit="s"
     )
     
+    error_count = meter.create_counter(
+        name="agent_errors",
+        description="Número de errores en el agente",
+        unit="1"
+    )
+    
     has_telemetry = True
 except ImportError:
     # Fallback si OpenTelemetry no está disponible
@@ -60,6 +66,7 @@ except ImportError:
     tracer = None
     request_counter = None
     response_time = None
+    error_count = None
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -73,33 +80,78 @@ class EliteTrainingStrategist(ADKAgent):
     personalizados basados en los objetivos, nivel y restricciones del atleta.
     Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
     """
-    
+
+    # Declarar campos para Pydantic/ADK
+    gemini_client: Optional[GeminiClient] = None
+    supabase_client: Optional[SupabaseClient] = None
+    tracer: Optional[trace.Tracer] = None
+    request_counter: Optional[metrics.Counter] = None
+    response_time: Optional[metrics.Histogram] = None
+    error_count: Optional[metrics.Counter] = None
+
     # Ajustar constructor
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None, **kwargs):
+    def __init__(self, 
+                 # Eliminar toolkit: Optional[Agent] = None, 
+                 # Eliminar a2a_server_url: Optional[str] = None, 
+                 state_manager: Optional[StateManager] = None,
+                 model: str = "gemini-1.5-flash", # Añadir parámetro model
+                 instruction: str = "Eres un estratega experto en entrenamiento deportivo.", # Añadir instrucción
+                 **kwargs):
         """
-        Inicializa el agente EliteTrainingStrategist usando ADK.
+        Inicializa el agente EliteTrainingStrategist usando la base ADKAgent refactorizada.
         """
         agent_id = "elite_training_strategist"
-        name = "NGX Elite Training Strategist"
-        description = "Diseña y periodiza programas de entrenamiento de élite."
-        capabilities = [
-            "elite_training",
-            "performance_analysis",
-            "periodization",
-            "exercise_prescription",
-            "adaptive_planning"
-        ]
-        version = "1.1.0"
+        name = "NGX_Elite_Training_Strategist" # Cambiado para ser un identificador válido
+        description = "Diseña y periodiza programas de entrenamiento de élite personalizados."
+        # capabilities = [...] # Ya no se pasa a la base
+        # version = "1.1.0" # Ya no se pasa a la base
 
-        # Inicializar clientes (añadir manejo de errores/config si es necesario)
-        # TODO: Asegúrate de que las variables de entorno o configuración para los clientes estén disponibles
+        # Definir Skills para Agent Card (ADK)
+        # agent_skills_definition = [...] # Ya no se usa esta definición para la base
+
+        # Crear lista de 'tools' (referencias a métodos)
+        # Asumiendo que los métodos _skill_... existen más adelante
+        agent_tools = []
+        if hasattr(self, '_skill_generate_training_plan'):
+            agent_tools.append(self._skill_generate_training_plan)
+        if hasattr(self, '_skill_analyze_performance'):
+            agent_tools.append(self._skill_analyze_performance)
+        if hasattr(self, '_skill_design_periodization'):
+            agent_tools.append(self._skill_design_periodization)
+        if hasattr(self, '_skill_prescribe_exercises'):
+            agent_tools.append(self._skill_prescribe_exercises)
+        # Añadir más skills aquí si existen
+
+        # Eliminar claves conflictivas de kwargs antes de llamar a super
+        kwargs.pop('agent_id', None) # Elimina la clave si existe, ignora si no
+        kwargs.pop('name', None)
+        kwargs.pop('description', None)
+
+        # Llamar al constructor de ADKAgent refactorizado
+        super().__init__(
+            agent_id=agent_id,
+            name=name,
+            description=description,
+            # capabilities=capabilities, # Eliminado
+            # toolkit=toolkit, # Eliminado
+            # version=version, # Eliminado
+            # a2a_server_url=a2a_server_url, # Eliminado
+            state_manager=state_manager,
+            # skills=agent_skills_definition, # Eliminado (se pasan 'tools')
+            model=model, # Pasar model
+            instruction=instruction, # Pasar instruction
+            tools=agent_tools, # Pasar la lista de métodos
+            **kwargs
+        )
+
+        # Inicializar clientes
         try:
             self.gemini_client = GeminiClient()
             logger.info("GeminiClient inicializado.")
         except Exception as e:
             logger.error(f"Error al inicializar GeminiClient: {e}", exc_info=True)
-            self.gemini_client = None # Marcar como no disponible
-            
+            # self.gemini_client ya es None por la declaración de clase
+
         try:
             # Asumiendo que SupabaseClient puede necesitar URL y Key
             supabase_url = os.getenv("SUPABASE_URL")
@@ -112,91 +164,15 @@ class EliteTrainingStrategist(ADKAgent):
                  self.supabase_client = None
         except Exception as e:
             logger.error(f"Error al inicializar SupabaseClient: {e}", exc_info=True)
-            self.supabase_client = None
+            # self.supabase_client ya es None por la declaración de clase
 
-        # Definir Skills para Agent Card (ADK)
-        agent_skills_definition = [
-            {
-                "name": "generate_training_plan",
-                "description": "Genera un plan de entrenamiento personalizado basado en objetivos, historial y perfil.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "string", "description": "ID del usuario."},
-                        "goals": {"type": "array", "items": {"type": "string"}, "description": "Objetivos principales."}, 
-                        "weeks": {"type": "integer", "description": "Duración del plan en semanas."},
-                        "constraints": {"type": "string", "description": "Limitaciones o preferencias."}
-                    },
-                    "required": ["user_id", "goals", "weeks"]
-                },
-                "output_schema": {"type": "object", "description": "Plan de entrenamiento detallado en formato Markdown."}
-            },
-            {
-                "name": "analyze_performance",
-                "description": "Analiza datos de rendimiento, identifica tendencias y sugiere ajustes.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "string", "description": "ID del usuario."},
-                        "performance_data": {"type": "object", "description": "Datos de rendimiento recientes."},
-                        "time_period": {"type": "string", "description": "Periodo de tiempo analizado."}
-                    },
-                    "required": ["user_id", "performance_data"]
-                },
-                "output_schema": {"type": "object", "description": "Análisis de rendimiento con insights y recomendaciones."}
-            },
-             {
-                "name": "design_periodization",
-                "description": "Diseña un esquema de periodización macro/meso/microciclo.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "string", "description": "ID del usuario."},
-                        "goal_event": {"type": "string", "description": "Evento o fecha objetivo principal."}, 
-                        "total_duration_months": {"type": "integer", "description": "Duración total en meses."}
-                    },
-                    "required": ["user_id", "goal_event", "total_duration_months"]
-                },
-                "output_schema": {"type": "object", "description": "Esquema de periodización detallado."}
-            },
-             {
-                "name": "prescribe_exercises",
-                "description": "Recomienda ejercicios específicos para un objetivo o grupo muscular.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "string", "description": "ID del usuario."},
-                        "target_muscle_or_goal": {"type": "string", "description": "Músculo, patrón de movimiento o habilidad a mejorar."}, 
-                        "equipment_available": {"type": "array", "items": {"type": "string"}, "description": "Equipo disponible."}
-                    },
-                    "required": ["user_id", "target_muscle_or_goal"]
-                },
-                "output_schema": {"type": "object", "description": "Lista de ejercicios recomendados con detalles (series, reps, etc.)."}
-            }
-            # ... (añadir más skills si es necesario)
-        ]
-
-        # Llamar al constructor de ADKAgent
-        super().__init__(
-            agent_id=agent_id,
-            name=name,
-            description=description,
-            capabilities=capabilities,
-            toolkit=toolkit,
-            version=version,
-            a2a_server_url=a2a_server_url, # Puede ser None si no se usa A2A
-            state_manager=state_manager,
-            skills=agent_skills_definition, # Pasar skills para Agent Card
-            **kwargs
-        )
-
-        # Inicializar telemetría si está disponible
+        # Inicializar telemetría
         self.tracer = tracer
         self.request_counter = request_counter
         self.response_time = response_time
-        self.has_telemetry = has_telemetry
+        self.error_count = error_count
 
-        logger.info(f"EliteTrainingStrategist inicializado ({len(capabilities)} capabilities) con protocolo ADK.")
+        logger.info(f"EliteTrainingStrategist inicializado ({len(agent_tools)} tools) con protocolo ADK.")
 
     # --- Métodos de Skill --- 
     # (Mover lógica de _generate_training_plan, _analyze_performance, etc., aquí)
@@ -689,9 +665,16 @@ class EliteTrainingStrategist(ADKAgent):
     # --- Mantener métodos auxiliares si son usados por la lógica interna --- 
     # (Ej: _extract_profile_details, _get_program_type_from_profile)
     def _extract_profile_details(self, client_profile_data: Optional[Dict[str, Any]]) -> str:
+        details = "" # <<< Inicializar aquí
         # ... (Lógica original sin cambios) ...
         return details
     
     def _get_program_type_from_profile(self, client_profile_data: Optional[Dict[str, Any]]) -> str:
-         # ... (Lógica original sin cambios) ...
-         return "general" # Default si no se puede determinar
+        # Implementación para extraer el tipo de programa del perfil
+        if client_profile_data and isinstance(client_profile_data, dict):
+            program_type = client_profile_data.get("program_type", "general")
+            # Asegurarse de que sea string y convertir a mayúsculas para consistencia
+            return str(program_type).upper()
+        return "GENERAL" # Default si no hay datos o no es diccionario
+
+    # --- Skills --- #
