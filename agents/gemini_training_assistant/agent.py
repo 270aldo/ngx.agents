@@ -22,6 +22,7 @@ from tools.vertex_gemini_tools import (
 from core.agent_card import AgentCard, Example
 from core.state_manager import StateManager
 from clients.supabase_client import SupabaseClient
+from core.contracts import create_task, create_result, validate_task, validate_result
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,39 @@ class GeminiTrainingAssistant(A2AAgent):
         ]
         
         skills = [
-            {"name": "vertex_gemini_generate", "description": "Genera texto utilizando los modelos Gemini"},
-            {"name": "vertex_gemini_chat", "description": "Mantiene conversaciones utilizando los modelos Gemini"},
-            {"name": "vertex_gemini_models", "description": "Obtiene información sobre los modelos de Gemini disponibles"}
+            {
+                "id": "vertex_gemini_generate",
+                "name": "Generar texto utilizando los modelos Gemini",
+                "description": "Genera texto utilizando los modelos Gemini",
+                "tags": ["generate", "text", "gemini"],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json", "markdown"],
+                "examples": [
+                    Example(input={"text": "Genera un plan de entrenamiento para principiantes"}, output={"markdown": "..."})
+                ]
+            },
+            {
+                "id": "vertex_gemini_chat",
+                "name": "Mantiene conversaciones utilizando los modelos Gemini",
+                "description": "Mantiene conversaciones utilizando los modelos Gemini",
+                "tags": ["chat", "conversational", "gemini"],
+                "inputModes": ["text"],
+                "outputModes": ["text", "markdown"],
+                "examples": [
+                    Example(input={"text": "¿Cómo puedo mejorar mi condición física?"}, output={"text": "..."})
+                ]
+            },
+            {
+                "id": "vertex_gemini_models",
+                "name": "Obtiene información sobre los modelos de Gemini disponibles",
+                "description": "Obtiene información sobre los modelos de Gemini disponibles",
+                "tags": ["models", "information", "gemini"],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json"],
+                "examples": [
+                    Example(input={"text": "¿Qué modelos de Gemini están disponibles?"}, output={"text": "..."})
+                ]
+            }
         ]
         
         # Ejemplos para la Agent Card
@@ -425,8 +456,7 @@ Formato el análisis de forma clara y estructurada.
         except Exception as e:
             logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
     
-    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, 
-                           session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Implementación asíncrona del procesamiento del agente GeminiTrainingAssistant.
         
@@ -436,7 +466,6 @@ Formato el análisis de forma clara y estructurada.
         Args:
             input_text: Texto de entrada del usuario
             user_id: ID del usuario (opcional)
-            session_id: ID de la sesión (opcional)
             **kwargs: Argumentos adicionales como context, parameters, etc.
             
         Returns:
@@ -447,11 +476,11 @@ Formato el análisis de forma clara y estructurada.
             logger.info(f"Ejecutando GeminiTrainingAssistant con input: {input_text[:50]}...")
             
             # Generar session_id si no se proporciona
-            if not session_id:
-                session_id = str(uuid.uuid4())
+            if not kwargs.get("session_id"):
+                kwargs["session_id"] = str(uuid.uuid4())
             
             # Obtener el contexto de la conversación
-            context = await self._get_context(user_id, session_id) if user_id else {}
+            context = await self._get_context(user_id, kwargs.get("session_id")) if user_id else {}
             
             # Obtener perfil del usuario si está disponible
             user_profile = None
@@ -471,7 +500,7 @@ Formato el análisis de forma clara y estructurada.
             if "plan de entrenamiento" in input_text.lower() or "rutina" in input_text.lower():
                 task_type = "generate_training_plan"
                 result = await self._generate_training_plan(input_text, context)
-            elif "nutrición" in input_text.lower() or "comida" in input_text.lower() or "dieta" in input_text.lower():
+            elif "nutrición" in input_text.lower() or "dieta" in input_text.lower():
                 task_type = "recommend_nutrition"
                 result = await self._recommend_nutrition(input_text, context)
             elif "progreso" in input_text.lower() or "avance" in input_text.lower() or "resultados" in input_text.lower():
@@ -579,7 +608,7 @@ Formato el análisis de forma clara y estructurada.
                 })
                 
                 # Actualizar el contexto en el StateManager
-                await self._update_context(context, user_id, session_id)
+                await self._update_context(context, user_id, kwargs.get("session_id"))
             
             # Devolver respuesta final
             return {
@@ -590,7 +619,7 @@ Formato el análisis de forma clara y estructurada.
                 "metadata": {
                     "task_type": task_type,
                     "user_id": user_id,
-                    "session_id": session_id,
+                    "session_id": kwargs.get("session_id"),
                     "model_used": result.get("model_used", "gemini-pro")
                 }
             }
@@ -611,4 +640,191 @@ Formato el análisis de forma clara y estructurada.
         Returns:
             Dict[str, Any]: Agent Card estandarizada
         """
-        return self.agent_card.to_dict()
+        logger.info(f"[{self.agent_id}] Solicitada Agent Card.")
+        if not hasattr(self, 'agent_card') or not self.agent_card:
+             logger.warning(f"[{self.agent_id}] Agent Card no inicializada, creándola ahora.")
+             self.agent_card = self._create_agent_card()
+        # Asegurarse de que se devuelve un diccionario, no el objeto AgentCard
+        return self.agent_card.to_dict() 
+
+    async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ejecuta una tarea solicitada por otro agente o sistema A2A.
+        
+        Args:
+            task: Tarea A2A
+        
+        Returns:
+            Dict[str, Any]: Resultado de la tarea
+        """
+        logger.info(f"[{self.agent_id}] Recibida tarea A2A: {task.get('task_id')}, skill: {task.get('skill_id')}")
+        if not validate_task(task):
+            logger.error(f"[{self.agent_id}] Tarea A2A inválida recibida: {task}")
+            return create_result(task.get('task_id', 'unknown'), status="error", error_message="Invalid task format")
+
+        skill_id = task.get('skill_id')
+        input_data = task.get('input_data', {})
+        task_id = task.get('task_id')
+
+        try:
+            # TODO: Implementar lógica para ejecutar skills específicos basados en skill_id
+            if skill_id == "vertex_gemini_generate":
+                # Extraer parámetros necesarios de input_data
+                user_input = input_data.get("text", "Generar texto general")
+                user_id = input_data.get("user_id")
+                # Llamar a la lógica ADK (o una versión adaptada para A2A)
+                result_data = await self._run_async_impl(user_input, user_id=user_id, session_id=task_id)
+                # Extraer la parte relevante de la respuesta ADK para el resultado A2A
+                output_content = result_data.get("message", {}).get("parts", [{}])[0].get("text", "Error al generar texto.")
+                if result_data.get("status") == "success":
+                    return create_result(task_id, status="success", output_data={"text": output_content})
+                else:
+                     return create_result(task_id, status="error", error_message=output_content)
+
+            elif skill_id == "vertex_gemini_chat":
+                 # Lógica similar para la conversación
+                 user_input = input_data.get("text", "Conversación general")
+                 user_id = input_data.get("user_id")
+                 result_data = await self._run_async_impl(user_input, user_id=user_id, session_id=task_id)
+                 output_content = result_data.get("message", {}).get("parts", [{}])[0].get("text", "Error al responder.")
+                 if result_data.get("status") == "success":
+                     return create_result(task_id, status="success", output_data={"text": output_content})
+                 else:
+                     return create_result(task_id, status="error", error_message=output_content)
+
+            else:
+                logger.warning(f"[{self.agent_id}] Skill no soportado solicitado: {skill_id}")
+                return create_result(task_id, status="error", error_message=f"Skill '{skill_id}' not supported")
+
+        except Exception as e:
+            logger.error(f"[{self.agent_id}] Error ejecutando tarea A2A {task_id} ({skill_id}): {e}", exc_info=True)
+            return create_result(task_id, status="error", error_message=f"Internal server error: {e}")
+
+    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Procesa un mensaje recibido de otro agente A2A.
+        
+        Args:
+            from_agent: ID del agente que envió el mensaje
+            content: Contenido del mensaje
+            
+        Returns:
+            Dict[str, Any]: Mensaje de respuesta (opcional)
+        """
+        message_id = content.get('message_id', 'unknown')
+        logger.info(f"[{self.agent_id}] Recibido mensaje A2A {message_id} de {from_agent}")
+        logger.debug(f"[{self.agent_id}] Contenido del mensaje: {content}")
+
+        # TODO: Implementar lógica para manejar diferentes tipos de mensajes A2A
+        # Ejemplo: Si es una solicitud de información, responder directamente.
+        # Ejemplo: Si es una notificación, registrarla.
+        # Ejemplo: Si requiere ejecutar una acción, podría llamar a _run_async_impl o execute_task
+
+        # Implementación de ejemplo: tratar el mensaje como una entrada de usuario
+        try:
+            user_input = ""
+            if content.get("parts") and isinstance(content["parts"], list):
+                text_parts = [part.get("text") for part in content["parts"] if part.get("type") == "text"]
+                user_input = " ".join(filter(None, text_parts))
+
+            if not user_input:
+                logger.warning(f"[{self.agent_id}] Mensaje A2A de {from_agent} no contiene texto procesable.")
+                # Podríamos no responder nada o enviar un error
+                return None # No responder
+
+            # Usar la lógica ADK para generar una respuesta
+            user_id = content.get("metadata", {}).get("user_id") # Asumiendo que el user_id viene en metadata
+            session_id = content.get("metadata", {}).get("session_id", message_id) # Usar message_id como fallback
+            response_data = await self._run_async_impl(user_input, user_id=user_id, session_id=session_id)
+
+            # Devolver la respuesta como un nuevo mensaje A2A (si es apropiado)
+            if response_data.get("status") == "success":
+                response_content = response_data.get("message", {}).get("parts", [{}])[0].get("text")
+                if response_content:
+                     reply_message = self.create_message(
+                         role="agent",
+                         parts=[self.create_text_part(f"En respuesta a tu mensaje ({message_id}): {response_content}")],
+                         metadata={"in_reply_to": message_id} # Referencia al mensaje original
+                     )
+                     logger.info(f"[{self.agent_id}] Enviando respuesta A2A a {from_agent}")
+                     return reply_message
+                else:
+                     logger.warning(f"[{self.agent_id}] La respuesta ADK generada no contenía texto para enviar como mensaje A2A.")
+                     return None
+            else:
+                 # Enviar un mensaje de error A2A
+                 error_details = response_data.get("error_details", "Error desconocido")
+                 error_reply = self.create_message(
+                     role="agent",
+                     parts=[self.create_text_part(f"No pude procesar tu mensaje ({message_id}): {error_details}")],
+                     metadata={"in_reply_to": message_id, "error": True}
+                 )
+                 logger.error(f"[{self.agent_id}] Enviando mensaje de error A2A a {from_agent}")
+                 return error_reply
+
+        except Exception as e:
+            logger.error(f"[{self.agent_id}] Error procesando mensaje A2A {message_id} de {from_agent}: {e}", exc_info=True)
+            # Podríamos devolver un mensaje de error A2A genérico
+            error_reply = self.create_message(
+                role="agent",
+                parts=[self.create_text_part(f"Error interno al procesar tu mensaje ({message_id}).")],
+                metadata={"in_reply_to": message_id, "error": True}
+            )
+            return error_reply
+
+        # Si no se genera respuesta, devolver None
+        return None
+
+    def _create_agent_card(self) -> AgentCard:
+        """
+        Crea la AgentCard estandarizada para este agente.
+        """
+        # Reutilizar skills definidos en __init__ o definirlos aquí
+        skills_for_card = [
+            {
+                "id": "vertex_gemini_generate",
+                "name": "Generar texto utilizando los modelos Gemini",
+                "description": "Genera texto utilizando los modelos Gemini",
+                "tags": ["generate", "text", "gemini"],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json", "markdown"],
+                "examples": [
+                    Example(input={"text": "Genera un plan de entrenamiento para principiantes"}, output={"markdown": "..."})
+                ]
+            },
+            {
+                "id": "vertex_gemini_chat",
+                "name": "Mantiene conversaciones utilizando los modelos Gemini",
+                "description": "Mantiene conversaciones utilizando los modelos Gemini",
+                "tags": ["chat", "conversational", "gemini"],
+                "inputModes": ["text"],
+                "outputModes": ["text", "markdown"],
+                "examples": [
+                    Example(input={"text": "¿Cómo puedo mejorar mi condición física?"}, output={"text": "..."})
+                ]
+            },
+            {
+                "id": "vertex_gemini_models",
+                "name": "Obtiene información sobre los modelos de Gemini disponibles",
+                "description": "Obtiene información sobre los modelos de Gemini disponibles",
+                "tags": ["models", "information", "gemini"],
+                "inputModes": ["text"],
+                "outputModes": ["text", "json"],
+                "examples": [
+                    Example(input={"text": "¿Qué modelos de Gemini están disponibles?"}, output={"text": "..."})
+                ]
+            }
+        ]
+        return AgentCard.create_standard_card(
+            agent_id=self.agent_id,
+            name=self.name,
+            description=self.description,
+            capabilities=self.capabilities,
+            skills=skills_for_card,
+            version=self.version,
+            examples=[
+                 Example(input={"message": "Necesito un plan de entrenamiento para un maratón"}, output={"response": "Aquí tienes un plan de entrenamiento de 16 semanas para prepararte para un maratón..."}),
+                 Example(input={"message": "¿Qué debo comer antes de entrenar?"}, output={"response": "Antes de entrenar, es recomendable consumir carbohidratos complejos y proteínas magras..."})
+            ]
+            # Añadir otros campos de AgentCard si es necesario
+        )

@@ -229,7 +229,7 @@ class SystemsIntegrationOps(A2AAgent):
         except Exception as e:
             logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
 
-    async def run(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Ejecuta el agente con un texto de entrada siguiendo el protocolo ADK oficial.
         

@@ -15,7 +15,7 @@ from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
 from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
-from agents.base.adk_agent import ADKAgent
+from agents.base.a2a_agent import A2AAgent
 from core.state_manager import StateManager
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result
@@ -24,7 +24,7 @@ from core.contracts import create_task, create_result, validate_task, validate_r
 logger = get_logger(__name__)
 
 
-class RecoveryCorrective(ADKAgent):
+class RecoveryCorrective(A2AAgent):
     """
     Agente Recovery & Corrective Specialist compatible con A2A
     
@@ -45,104 +45,94 @@ class RecoveryCorrective(ADKAgent):
         # Definir skills siguiendo el formato A2A con mejores prácticas
         skills = [
             {
-                "id": "recovery-corrective-injury-prevention",
-                "name": "Prevención de Lesiones",
-                "description": "Genera planes personalizados para prevenir lesiones específicas en diferentes actividades físicas y deportes",
-                "tags": ["prevention", "exercise", "safety", "injury", "training"],
+                "id": "injury-prevention-protocols",
+                "name": "Protocolos de Prevención de Lesiones",
+                "description": "Genera protocolos personalizados para prevenir lesiones comunes.",
+                "tags": ["injury", "prevention", "protocol", "safety", "exercise"],
                 "examples": [
-                    "Cómo prevenir lesiones en la espalda baja durante el entrenamiento de fuerza",
-                    "Plan de prevención para corredores con historial de lesiones en rodilla",
-                    "Ejercicios preventivos para tenistas con problemas de hombro"
+                    "Rutina de calentamiento para corredores para evitar lesiones de rodilla",
+                    "Ejercicios para fortalecer el manguito rotador"
                 ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
+                "inputModes": ["text"],
+                "outputModes": ["text", "markdown"]
             },
             {
-                "id": "recovery-corrective-rehabilitation",
-                "name": "Rehabilitación y Recuperación",
-                "description": "Desarrolla protocolos de rehabilitación personalizados para diferentes tipos de lesiones y condiciones físicas",
-                "tags": ["rehab", "recovery", "injury", "therapy", "healing"],
+                "id": "rehabilitation-guidance",
+                "name": "Guía de Rehabilitación",
+                "description": "Ofrece orientación y planes de rehabilitación basados en el tipo de lesión y la fase de recuperación.",
+                "tags": ["rehabilitation", "recovery", "injury", "physical therapy", "plan"],
                 "examples": [
-                    "Protocolo de rehabilitación para esguince de tobillo grado 2",
-                    "Plan de recuperación post-quirúrgico para reconstrucción de LCA",
-                    "Programa de rehabilitación para tendinitis rotuliana crónica"
+                    "Ejercicios para rehabilitar un esguince de tobillo (fase inicial)",
+                    "Plan de recuperación post-cirugía de LCA"
                 ],
                 "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
+                "outputModes": ["text", "markdown", "json"]
+            },
+             {
+                "id": "mobility-flexibility-improvement",
+                "name": "Mejora de Movilidad y Flexibilidad",
+                "description": "Diseña rutinas para mejorar la movilidad articular y la flexibilidad muscular.",
+                "tags": ["mobility", "flexibility", "stretching", "range of motion", "yoga"],
+                "examples": [
+                    "Rutina de movilidad de cadera para oficinistas",
+                    "Estiramientos para mejorar la flexibilidad de isquiotibiales"
+                ],
+                "inputModes": ["text"],
+                "outputModes": ["text", "markdown", "video_suggestion"]
             },
             {
-                "id": "recovery-corrective-mobility-assessment",
-                "name": "Evaluación y Mejora de Movilidad",
-                "description": "Evalúa limitaciones de movilidad y proporciona estrategias específicas para mejorar el rango de movimiento y la función articular",
-                "tags": ["mobility", "flexibility", "assessment", "range-of-motion", "joints"],
+                "id": "sleep-optimization-strategies",
+                "name": "Estrategias de Optimización del Sueño",
+                "description": "Proporciona consejos y técnicas para mejorar la calidad y cantidad del sueño.",
+                "tags": ["sleep", "recovery", "insomnia", "sleep hygiene", "performance"],
                 "examples": [
-                    "Evaluación de movilidad de cadera para mejorar sentadillas profundas",
-                    "Ejercicios para aumentar la movilidad de hombros en nadadores",
-                    "Protocolo para mejorar la dorsiflexión de tobillo limitada"
+                    "Consejos para dormir mejor por la noche",
+                    "Cómo crear una rutina relajante antes de acostarse"
+                ],
+                "inputModes": ["text"],
+                "outputModes": ["text", "markdown"]
+            },
+             {
+                "id": "hrv-analysis-interpretation",
+                "name": "Análisis e Interpretación de VFC (HRV)",
+                "description": "Interpreta los datos de Variabilidad de la Frecuencia Cardíaca (VFC) para evaluar la recuperación y el estrés.",
+                "tags": ["hrv", "vfc", "recovery", "stress", "autonomic nervous system", "biometrics"],
+                "examples": [
+                    "Mi VFC de hoy es 45ms, ¿qué significa?",
+                    "Cómo interpretar las tendencias de mi VFC semanal"
                 ],
                 "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
+                "outputModes": ["text", "markdown", "json"]
             },
             {
-                "id": "recovery-corrective-sleep-optimization",
-                "name": "Optimización del Sueño",
-                "description": "Analiza patrones de sueño y proporciona estrategias personalizadas para mejorar la calidad y cantidad del descanso para optimizar la recuperación",
-                "tags": ["sleep", "recovery", "rest", "circadian-rhythm", "performance"],
+                "id": "chronic-pain-management-techniques",
+                "name": "Técnicas de Manejo del Dolor Crónico",
+                "description": "Ofrece estrategias no farmacológicas para manejar el dolor crónico.",
+                "tags": ["pain management", "chronic pain", "non-pharmacological", "mindfulness", "therapy"],
                 "examples": [
-                    "Estrategias para mejorar el sueño durante periodos de alto estrés",
-                    "Rutina nocturna para atletas con problemas para conciliar el sueño",
-                    "Plan de optimización del sueño para viajes con cambios de zona horaria"
+                    "Técnicas de mindfulness para el dolor lumbar crónico",
+                    "Ejercicios suaves para aliviar la fibromialgia"
                 ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
-            },
-            {
-                "id": "recovery-corrective-hrv-protocols",
-                "name": "Protocolos basados en HRV",
-                "description": "Interpreta datos de variabilidad de frecuencia cardíaca y desarrolla estrategias de entrenamiento y recuperación basadas en el estado del sistema nervioso autónomo",
-                "tags": ["hrv", "heart-rate-variability", "recovery", "training", "autonomic-nervous-system"],
-                "examples": [
-                    "Interpretación de tendencias de HRV para periodización del entrenamiento",
-                    "Estrategias de recuperación basadas en valores bajos persistentes de HRV",
-                    "Protocolo de entrenamiento adaptativo basado en lecturas diarias de HRV"
-                ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
-            },
-            {
-                "id": "recovery-corrective-pain-management",
-                "name": "Manejo del Dolor",
-                "description": "Desarrolla estrategias integrales para el manejo del dolor agudo y crónico utilizando enfoques multidisciplinarios y basados en evidencia",
-                "tags": ["pain", "chronic", "management", "therapy", "relief"],
-                "examples": [
-                    "Estrategias no farmacológicas para manejar el dolor crónico de rodilla",
-                    "Plan integral para reducir el dolor lumbar en trabajadores de oficina",
-                    "Técnicas de autogestión para migrañas recurrentes relacionadas con el estrés"
-                ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
+                "inputModes": ["text"],
+                "outputModes": ["text", "markdown"]
             }
+            # Añadir más skills detallados si es necesario
         ]
         
-        # Inicializar agente base con los parámetros definidos
+        # Llamada al constructor de A2AAgent
         super().__init__(
-            agent_id="recovery_corrective_specialist",
-            name="Recovery & Corrective Specialist",
-            description="Especialista en prevención de lesiones, rehabilitación, movilidad, optimización del sueño, protocolos de HRV y manejo del dolor crónico. Proporciona evaluaciones personalizadas y planes de acción basados en evidencia científica.",
+            agent_id="recovery_corrective",
+            name="NGX Recovery & Corrective Specialist",
+            description="Especialista en prevención, rehabilitación, movilidad, sueño, HRV y manejo del dolor crónico.",
             capabilities=capabilities,
             toolkit=toolkit,
-            a2a_server_url=a2a_server_url or "https://recovery-corrective-api.ngx-agents.com/a2a",
-            state_manager=state_manager,
-            version="1.2.0",
-            skills=skills,
-            provider={
-                "organization": "NGX Health & Performance",
-                "url": "https://ngx-agents.com"
-            },
-            documentation_url="https://docs.ngx-agents.com/recovery-corrective"            
+            version="1.0.0",
+            skills=skills, # Pasar skills aquí
+            a2a_server_url=a2a_server_url,
+            state_manager=state_manager # Pasar state_manager si A2AAgent lo acepta
         )
         
-        # Inicialización de AI Platform
+        # Inicialización de AI Platform (después de super)
         gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
         gcp_region = os.getenv("GCP_REGION", "us-central1")
         try:
@@ -152,18 +142,22 @@ class RecoveryCorrective(ADKAgent):
         except Exception as e:
             logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
         
-        # Inicializar clientes y herramientas
-        self.gemini_client = GeminiClient(model_name="gemini-1.5-flash")
-        self.supabase_client = SupabaseClient()
-        self.mcp_toolkit = MCPToolkit()
+        # Inicializar clientes y herramientas (después de super)
+        self.gemini_client = GeminiClient(model_name="gemini-1.5-flash") # Asegúrate que el modelo es correcto
+        # self.supabase_client = SupabaseClient() # Descomentar si se usa
+        # self.mcp_toolkit = MCPToolkit() # Descomentar si se usa
         
-        # Inicializar estado del agente
-        self.update_state("recovery_protocols", {})  # Almacenar protocolos de recuperación generados
-        self.update_state("pain_assessments", {})  # Almacenar evaluaciones de dolor
-        
-        logger.info(f"RecoveryCorrective inicializado con {len(capabilities)} capacidades y {len(skills)} skills")
-    
-    async def _get_context(self, user_id: str, session_id: str) -> Dict[str, Any]:
+        # Las skills ya están definidas y pasadas a super(), no es necesario registrarlas de nuevo aquí si A2AAgent lo maneja.
+
+        # AgentCard se crea implícitamente en A2AAgent a partir de los parámetros
+        # o se puede sobreescribir get_agent_card() si se necesita personalización
+
+        # Configuración adicional específica del agente
+        self.system_instructions = "Eres un especialista experto en recuperación física, prevención de lesiones y manejo del dolor." 
+
+        logger.info(f"Agente {self.agent_id} inicializado.")
+
+    async def _get_context(self, user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Obtiene el contexto de la conversación desde el StateManager.
         
@@ -461,6 +455,7 @@ class RecoveryCorrective(ADKAgent):
                 "error": str(e),
                 "agent_id": self.agent_id
             }
+    
     def _summarize_pain_assessment(self, pain_assessment: Dict[str, Any]) -> str:
         """Genera un resumen textual de la evaluación de dolor para la respuesta al usuario."""
         summary_parts = []
@@ -997,3 +992,46 @@ class RecoveryCorrective(ADKAgent):
                 }
         
         return response
+
+# Bloque de ejecución para pruebas locales (si existe)
+if __name__ == '__main__':
+    import asyncio
+    import json
+    logging.basicConfig(level=logging.INFO)
+
+    async def main():
+        agent = RecoveryCorrective()
+
+        print("--- Prueba ADK (_run_async_impl) --- ")
+        adk_input = "Necesito ejercicios para prevenir el dolor de espalda baja"
+        adk_response = await agent._run_async_impl(adk_input, user_id="test_user_adk")
+        print(f"Entrada ADK: {adk_input}")
+        print(f"Respuesta ADK: {json.dumps(adk_response, indent=2)}\n")
+
+        print("--- Prueba A2A execute_task (usando base A2AAgent) --- ")
+        a2a_task = create_task(
+            skill_id="injury-prevention-protocols", 
+            input_data={"text": "Ejercicios de calentamiento para corredores", "user_id": "test_user_a2a_task"}
+        )
+        # La clase base A2AAgent llama a _run_async_impl por defecto si no se sobreescribe execute_task
+        a2a_result = await agent.execute_task(a2a_task) 
+        print(f"Tarea A2A: {json.dumps(a2a_task, indent=2)}")
+        print(f"Resultado A2A: {json.dumps(a2a_result, indent=2)}\n")
+
+        print("--- Prueba A2A process_message (usando base A2AAgent) --- ")
+        # Crear mensaje A2A correctamente
+        a2a_message_content = {
+            "message_id": str(uuid.uuid4()),
+            "role": "user", 
+            "parts": [{"type": "text", "text": "¿Cómo puedo mejorar mi movilidad de hombros?"}],
+            "metadata": {"user_id": "test_user_a2a_msg", "session_id": "session_recov1"}
+        }
+        a2a_response_msg = await agent.process_message(from_agent="other_agent_2", content=a2a_message_content)
+        print(f"Mensaje A2A entrante: {json.dumps(a2a_message_content, indent=2)}")
+        print(f"Respuesta A2A (mensaje): {json.dumps(a2a_response_msg, indent=2) if a2a_response_msg else 'None'}\n")
+
+        print("--- Prueba A2A get_agent_card --- ")
+        agent_card_dict = agent.get_agent_card()
+        print(f"Agent Card: {json.dumps(agent_card_dict, indent=2)}")
+
+    asyncio.run(main())
