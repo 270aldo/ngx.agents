@@ -91,88 +91,76 @@ class EliteTrainingStrategist(ADKAgent):
 
     # Ajustar constructor
     def __init__(self, 
-                 # Eliminar toolkit: Optional[Agent] = None, 
-                 # Eliminar a2a_server_url: Optional[str] = None, 
                  state_manager: Optional[StateManager] = None,
-                 model: str = "gemini-1.5-flash", # Añadir parámetro model
-                 instruction: str = "Eres un estratega experto en entrenamiento deportivo.", # Añadir instrucción
-                 **kwargs):
+                 mcp_toolkit: Optional[MCPToolkit] = None, 
+                 model: str = "gemini-1.5-flash", 
+                 instruction: str = "Eres un estratega experto en entrenamiento deportivo.", 
+                 **kwargs): 
         """
         Inicializa el agente EliteTrainingStrategist usando la base ADKAgent refactorizada.
         """
-        agent_id = "elite_training_strategist"
-        name = "NGX_Elite_Training_Strategist" # Cambiado para ser un identificador válido
-        description = "Diseña y periodiza programas de entrenamiento de élite personalizados."
-        # capabilities = [...] # Ya no se pasa a la base
-        # version = "1.1.0" # Ya no se pasa a la base
+        agent_id_val = "elite_training_strategist"
+        name_val = "NGX_Elite_Training_Strategist" 
+        description_val = "Diseña y periodiza programas de entrenamiento de élite personalizados, integrando análisis de rendimiento y prescripción de ejercicios."
+        
+        # Capacidades para BaseAgent y A2A (nombres simples)
+        capabilities_val = [
+            "generate_training_plan", "analyze_performance", 
+            "design_periodization", "prescribe_exercises"
+        ]
+        
+        # Herramientas (métodos de skill) para google.adk.agents.Agent
+        google_adk_tools_val = [
+            self._skill_generate_training_plan,
+            self._skill_analyze_performance,
+            self._skill_design_periodization,
+            self._skill_prescribe_exercises
+        ]
+        
+        # Skills para la AgentCard del protocolo A2A (con descripciones)
+        a2a_skills_val = [
+            {"name": "generate_training_plan", "description": "Genera un plan de entrenamiento detallado y personalizado basado en los objetivos del usuario, duración y restricciones.", "input_schema": {"user_id": "str", "goals": "List[str]", "weeks": "int"}, "output_schema": {"plan": "str"}},
+            {"name": "analyze_performance", "description": "Analiza datos de rendimiento sobre un periodo específico para identificar tendencias, mejoras y áreas que necesitan atención.", "input_schema": {"user_id": "str", "performance_data": "Dict"}, "output_schema": {"analysis": "str"}},
+            {"name": "design_periodization", "description": "Diseña una estrategia de periodización de entrenamiento a largo plazo enfocada en un evento objetivo.", "input_schema": {"user_id": "str", "goal_event": "str", "total_duration_months": "int"}, "output_schema": {"periodization_plan": "str"}},
+            {"name": "prescribe_exercises", "description": "Prescribe ejercicios específicos para una sesión de entrenamiento basada en su objetivo, grupos musculares y equipamiento disponible.", "input_schema": {"user_id": "str", "session_goal": "str"}, "output_schema": {"exercise_list": "List[str]"}}
+        ]
 
-        # Definir Skills para Agent Card (ADK)
-        # agent_skills_definition = [...] # Ya no se usa esta definición para la base
+        # Instanciar MCPToolkit si no se provee; se pasa como 'adk_toolkit'
+        actual_adk_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
 
-        # Crear lista de 'tools' (referencias a métodos)
-        # Asumiendo que los métodos _skill_... existen más adelante
-        agent_tools = []
-        if hasattr(self, '_skill_generate_training_plan'):
-            agent_tools.append(self._skill_generate_training_plan)
-        if hasattr(self, '_skill_analyze_performance'):
-            agent_tools.append(self._skill_analyze_performance)
-        if hasattr(self, '_skill_design_periodization'):
-            agent_tools.append(self._skill_design_periodization)
-        if hasattr(self, '_skill_prescribe_exercises'):
-            agent_tools.append(self._skill_prescribe_exercises)
-        # Añadir más skills aquí si existen
+        # Asegurar que state_manager se pasa a través de kwargs si está presente
+        if state_manager:
+            kwargs['state_manager'] = state_manager
 
-        # Eliminar claves conflictivas de kwargs antes de llamar a super
-        kwargs.pop('agent_id', None) # Elimina la clave si existe, ignora si no
-        kwargs.pop('name', None)
-        kwargs.pop('description', None)
-
-        # Llamar al constructor de ADKAgent refactorizado
         super().__init__(
-            agent_id=agent_id,
-            name=name,
-            description=description,
-            # capabilities=capabilities, # Eliminado
-            # toolkit=toolkit, # Eliminado
-            # version=version, # Eliminado
-            # a2a_server_url=a2a_server_url, # Eliminado
-            state_manager=state_manager,
-            # skills=agent_skills_definition, # Eliminado (se pasan 'tools')
-            model=model, # Pasar model
-            instruction=instruction, # Pasar instruction
-            tools=agent_tools, # Pasar la lista de métodos
-            **kwargs
+            agent_id=agent_id_val,
+            name=name_val,
+            description=description_val,
+            capabilities=capabilities_val,
+            model=model,
+            instruction=instruction,
+            google_adk_tools=google_adk_tools_val,
+            a2a_skills=a2a_skills_val, 
+            adk_toolkit=actual_adk_toolkit, 
+            **kwargs 
         )
 
-        # Inicializar clientes
-        try:
-            self.gemini_client = GeminiClient()
-            logger.info("GeminiClient inicializado.")
-        except Exception as e:
-            logger.error(f"Error al inicializar GeminiClient: {e}", exc_info=True)
-            # self.gemini_client ya es None por la declaración de clase
+        # Inicializar clientes específicos del agente
+        self.gemini_client = GeminiClient()
+        # Considerar si SupabaseClient debe ser inyectado o configurado globalmente
+        self.supabase_client = SupabaseClient() 
 
-        try:
-            # Asumiendo que SupabaseClient puede necesitar URL y Key
-            supabase_url = os.getenv("SUPABASE_URL")
-            supabase_key = os.getenv("SUPABASE_KEY")
-            if supabase_url and supabase_key:
-                self.supabase_client = SupabaseClient(supabase_url, supabase_key)
-                logger.info("SupabaseClient inicializado.")
-            else:
-                 logger.warning("SUPABASE_URL o SUPABASE_KEY no configuradas. SupabaseClient no inicializado.")
-                 self.supabase_client = None
-        except Exception as e:
-            logger.error(f"Error al inicializar SupabaseClient: {e}", exc_info=True)
-            # self.supabase_client ya es None por la declaración de clase
-
-        # Inicializar telemetría
+        # Configurar telemetría (lógica existente)
         self.tracer = tracer
         self.request_counter = request_counter
         self.response_time = response_time
         self.error_count = error_count
+        if has_telemetry:
+            logger.info("OpenTelemetry configurado para EliteTrainingStrategist.")
+        else:
+            logger.warning("OpenTelemetry no está disponible. EliteTrainingStrategist funcionará sin telemetría detallada.")
 
-        logger.info(f"EliteTrainingStrategist inicializado ({len(agent_tools)} tools) con protocolo ADK.")
+        logger.info(f"{self.name} ({self.agent_id}) inicializado y listo.")
 
     # --- Métodos de Skill --- 
     # (Mover lógica de _generate_training_plan, _analyze_performance, etc., aquí)
@@ -183,10 +171,10 @@ class EliteTrainingStrategist(ADKAgent):
         logger.info(f"Executing _skill_generate_training_plan for user_id={user_id}")
         
         # Obtener contexto (incluye perfil)
-        session_id = kwargs.get("session_id") # Asumiendo que session_id puede venir en kwargs
+        session_id = kwargs.get("session_id") 
         context = await self._get_context(user_id, session_id)
         client_profile = context.get("client_profile", {}) 
-        program_type = self._get_program_type_from_profile(client_profile) # Determinar tipo de programa
+        program_type = self._get_program_type_from_profile(client_profile) 
         
         if not self.gemini_client:
              logger.error("GeminiClient no está disponible para generar plan.")
@@ -202,14 +190,13 @@ class EliteTrainingStrategist(ADKAgent):
             prompt_base = f"Eres un entrenador experto en atletas PRIME (alto rendimiento). Diseña un plan de entrenamiento detallado de {weeks} semanas para un atleta con el siguiente perfil:\n{profile_details}\nObjetivos: {goal_str}.{constraints_str}\nEl plan debe incluir fases (ej. base, construcción, pico, descarga), tipos de sesiones (fuerza, resistencia, técnica, recuperación), intensidad (zonas, RPE) y volumen (duración/distancia). Formato: Markdown."
         elif program_type == "LONGEVITY":
             prompt_base = f"Eres un entrenador experto en atletas LONGEVITY (salud y bienestar). Diseña un plan de entrenamiento sostenible de {weeks} semanas para una persona con el siguiente perfil:\n{profile_details}\nObjetivos: {goal_str}.{constraints_str}\nEnfócate en movilidad, fuerza funcional, capacidad cardiovascular moderada y recuperación activa. El plan debe ser adaptable y promover la consistencia. Formato: Markdown."
-        else: # General/Unknown
+        else: 
              prompt_base = f"Diseña un plan de entrenamiento general de {weeks} semanas para una persona con el siguiente perfil:\n{profile_details}\nObjetivos: {goal_str}.{constraints_str}\nAsegúrate de que sea equilibrado y seguro. Formato: Markdown."
 
         # Incluir historial relevante si existe (últimas 2 interacciones)
         history_str = "\nHistorial reciente:\n"
         if context.get("history"):
              for entry in context["history"][-2:]:
-                 # Formatear historial (puede necesitar ajuste)
                  input_text = entry.get('input', {}).get('text', 'N/A')
                  output_text = entry.get('output', {}).get('response', 'N/A')
                  skill_used = entry.get('skill_used', 'N/A')
@@ -223,7 +210,7 @@ class EliteTrainingStrategist(ADKAgent):
         try:
             # Llamar a Gemini
             response = await self.gemini_client.generate_content(full_prompt)
-            training_plan_text = response if isinstance(response, str) else str(response) # Asegurar que sea string
+            training_plan_text = response if isinstance(response, str) else str(response) 
             
             # Crear artefactos (si aplica)
             artifacts = [
@@ -352,8 +339,7 @@ class EliteTrainingStrategist(ADKAgent):
             return {"response": "Error: Servicio de IA no disponible.", "artifacts": []}
 
         # 2. Construir el prompt para Gemini
-        # total_duration_months ya es un argumento, no se necesita regex.
-        total_duration_weeks = total_duration_months * 4 # Aproximación
+        total_duration_weeks = total_duration_months * 4 
 
         prompt = f"""
         Actúa como un diseñador experto de programas de entrenamiento y periodización.
@@ -484,7 +470,7 @@ class EliteTrainingStrategist(ADKAgent):
         # Depende de si Gemini puede manejar contexto + JSON estricto.
         # Por ahora, lo omitimos del prompt para maximizar la probabilidad de obtener JSON válido.
         # full_prompt = prompt # + history_str
-        logger.debug(f"Prompt para Gemini (prescribe_exercises): {prompt[:200]}...") # Log prompt sin historial
+        logger.debug(f"Prompt para Gemini (prescribe_exercises): {prompt[:200]}...") 
 
         # 3. Llamar a Gemini y procesar respuesta
         response_text = ""
@@ -503,7 +489,7 @@ class EliteTrainingStrategist(ADKAgent):
                 if json_match:
                     json_str = json_match.group(1).strip()
                 else:
-                    json_str = response_text.strip() # Asumir que es solo JSON
+                    json_str = response_text.strip() 
                 
                 exercise_list = json.loads(json_str)
                 if isinstance(exercise_list, list):
@@ -520,11 +506,11 @@ class EliteTrainingStrategist(ADKAgent):
                          response_text += f"- **{ex.get('exercise_name', 'Ejercicio desconocido')}**: {ex.get('sets', '?')} series x {ex.get('reps_or_duration', '?')} reps/duración, descanso: {ex.get('rest', '?')}. {ex.get('notes', '')}\n"
                 else:
                      logger.warning("La respuesta JSON no era una lista. Se devolverá como texto.")
-                     exercise_list = [] # Resetear si no es lista
+                     exercise_list = [] 
                      # Usar response_text crudo como respuesta
             except json.JSONDecodeError as json_e:
                 logger.warning(f"No se pudo parsear la respuesta de Gemini como JSON: {json_e}. Se devolverá como texto crudo.")
-                exercise_list = [] # Asegurar que está vacía si falla el parseo
+                exercise_list = [] 
                 # response_text ya contiene la respuesta cruda de Gemini
 
             result = {"response": response_text, "artifacts": artifacts}
@@ -533,7 +519,7 @@ class EliteTrainingStrategist(ADKAgent):
             logger.error(f"Error al prescribir ejercicios con Gemini para user_id {user_id}: {e}", exc_info=True)
             error_message = "Error al generar la prescripción de ejercicios. Por favor, intenta de nuevo más tarde."
             result = {"response": error_message, "artifacts": []}
-            exercise_list = [] # Asegurar lista vacía en caso de error de Gemini
+            exercise_list = [] 
 
         # 4. Actualizar contexto
         interaction_data = {
@@ -570,13 +556,13 @@ class EliteTrainingStrategist(ADKAgent):
                     logger.debug(f"Contexto cargado desde StateManager para key={context_key}")
                 else:
                     logger.debug(f"No se encontró contexto válido en StateManager para key={context_key}, inicializando.")
-                    context = {"history": []} # Inicializar si no hay datos o formato incorrecto
+                    context = {"history": []} 
             except Exception as e:
                 logger.warning(f"Error al cargar contexto desde StateManager para key={context_key}: {e}")
-                context = {"history": []} # Inicializar en caso de error
+                context = {"history": []} 
         else:
              logger.debug(f"No se usa StateManager para key={context_key} (faltan IDs o no está habilitado). Inicializando contexto.")
-             context = {"history": []} # Inicializar si no se usa StateManager
+             context = {"history": []} 
 
         # 2. Intentar obtener/actualizar perfil de Supabase si el contexto no lo tiene
         if not context.get("client_profile") and user_id and self.supabase_client:
@@ -636,27 +622,26 @@ class EliteTrainingStrategist(ADKAgent):
     # --- Métodos de Ciclo de Vida ADK --- 
 
     async def start(self) -> None:
-        """Inicia el agente, conectando y registrando skills."""
-        await super().start() # Llama al start de ADKAgent para conexión y registro base
+        """Inicia el agente, conectando y registrando."""
+        await super().start() 
         if self._running:
-            await self._register_skills()
-            logger.info(f"Skills de {self.agent_id} registradas.")
+            logger.info(f"Agente {self.agent_id} iniciado y conectado al servidor A2A.")
         else:
-             logger.warning(f"No se registraron skills para {self.agent_id} porque el inicio base falló.")
+             logger.warning(f"El agente {self.agent_id} no pudo iniciarse o conectarse correctamente.")
 
-    async def _register_skills(self) -> None:
-        """Registra las skills específicas de este agente con el toolkit ADK."""
-        if not self.toolkit:
-            logger.error(f"No se puede registrar skills para {self.agent_id}: Toolkit no inicializado.")
-            return
+    # async def _register_skills(self) -> None: 
+    #     """Registra las skills específicas de este agente con el toolkit ADK."""
+    #     if not self.toolkit:
+    #         logger.error(f"No se puede registrar skills para {self.agent_id}: Toolkit no inicializado.")
+    #         return
 
-        # Registrar cada función de skill
-        self.register_skill("generate_training_plan", self._skill_generate_training_plan)
-        self.register_skill("analyze_performance", self._skill_analyze_performance)
-        self.register_skill("design_periodization", self._skill_design_periodization)
-        self.register_skill("prescribe_exercises", self._skill_prescribe_exercises)
+    #     # Registrar cada función de skill
+    #     self.register_skill("generate_training_plan", self._skill_generate_training_plan)
+    #     self.register_skill("analyze_performance", self._skill_analyze_performance)
+    #     self.register_skill("design_periodization", self._skill_design_periodization)
+    #     self.register_skill("prescribe_exercises", self._skill_prescribe_exercises)
         
-        logger.info(f"{len(self.skills)} skills registradas para {self.agent_id}.")
+    #     logger.info(f"{len(self.skills)} skills registradas para {self.agent_id}.")
 
     # --- Eliminar métodos A2A/Antiguos --- 
     # (_run_async_impl, _process_request, _classify_request, _handle_*, _create_agent_card, get_agent_card)
@@ -665,7 +650,7 @@ class EliteTrainingStrategist(ADKAgent):
     # --- Mantener métodos auxiliares si son usados por la lógica interna --- 
     # (Ej: _extract_profile_details, _get_program_type_from_profile)
     def _extract_profile_details(self, client_profile_data: Optional[Dict[str, Any]]) -> str:
-        details = "" # <<< Inicializar aquí
+        details = "" 
         # ... (Lógica original sin cambios) ...
         return details
     
@@ -675,6 +660,4 @@ class EliteTrainingStrategist(ADKAgent):
             program_type = client_profile_data.get("program_type", "general")
             # Asegurarse de que sea string y convertir a mayúsculas para consistencia
             return str(program_type).upper()
-        return "GENERAL" # Default si no hay datos o no es diccionario
-
-    # --- Skills --- #
+        return "GENERAL" 

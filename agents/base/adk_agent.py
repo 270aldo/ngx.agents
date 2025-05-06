@@ -9,9 +9,11 @@ from typing import Dict, List, Any, Optional, Callable, Union, Type, Tuple, Sequ
 from datetime import datetime
 
 # Importar componentes de Google ADK directamente
-from google.adk.agents import Agent
+# from google.adk.agents import Agent # Ya no se hereda directamente
+from adk.toolkit import Toolkit # Para el parámetro adk_toolkit de BaseAgent
 
 # Importaciones internas
+from agents.base.a2a_agent import A2AAgent # Nueva clase base
 from core.state_manager import StateManager
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result
@@ -20,76 +22,97 @@ from core.contracts import create_task, create_result, validate_task, validate_r
 logger = get_logger(__name__)
 
 
-class ADKAgent(Agent): 
+class ADKAgent(A2AAgent): 
     """
-    Clase base extendida para agentes NGX que usan Google ADK.
+    Clase base unificada para agentes NGX que usan Google ADK y el protocolo A2A.
     
-    Hereda de google.adk.agents.Agent y añade gestión de estado y 
-    posiblemente otras funcionalidades comunes de NGX.
+    Hereda de A2AAgent (que a su vez hereda de BaseAgent y google.adk.agents.Agent)
+    y añade gestión de estado específica (StateManager) y otras funcionalidades comunes de NGX.
     """
-    # Declarar campos específicos de ADKAgent para Pydantic
-    agent_id: str
-    state_manager: Optional[StateManager] = None
+    # Declarar campos específicos de ADKAgent para Pydantic si es necesario
+    # agent_id: str # Heredado de BaseAgent
+    state_manager: Optional[StateManager] = None # Mantenemos StateManager si tiene un uso específico
 
     def __init__(
         self,
-        # Parámetros estándar de google.adk.agents.Agent (no predeterminados primero)
+        # Parámetros requeridos por A2AAgent/BaseAgent/GoogleAgent
         agent_id: str,
         name: str,
         description: str,
+        capabilities: List[str], # Para A2AAgent (genera a2a_skills) y BaseAgent
+
+        # Parámetros específicos de google.adk.agents.Agent
         model: str, 
         instruction: str, 
-        # Parámetros específicos de NGX y otros con valores predeterminados
-        tools: Optional[Sequence[Callable]] = None, 
-        # Otros parámetros opcionales de Agent que podríamos querer exponer
-        # response_format: Optional[str] = None,
-        # temperature: Optional[float] = None,
-        # ... otros
+        google_adk_tools: Optional[Sequence[Callable]] = None, # Skills para Google ADK
+
+        # Parámetros específicos de A2AAgent
+        a2a_skills: Optional[List[Dict[str, str]]] = None, # Skills para AgentCard A2A
+        endpoint: Optional[str] = None,
+        auto_register_skills: bool = True,
+        a2a_server_url: Optional[str] = None,
+        
+        # Parámetros específicos de BaseAgent
+        version: str = "1.0.0",
+        adk_toolkit: Optional[Toolkit] = None, # adk.toolkit.Toolkit para BaseAgent
+        
+        # Otros kwargs para google.adk.agents.Agent (e.g. response_format, temperature)
         **kwargs 
     ):
         """
-        Inicializa un agente NGX compatible con Google ADK.
+        Inicializa un agente NGX unificado compatible con Google ADK y A2A.
         
         Args:
             agent_id: ID del agente.
-            name: Nombre del agente (para google.adk.agents.Agent).
-            description: Descripción del agente (para google.adk.agents.Agent).
-            model: Modelo a usar por el agente (ej: 'gemini-1.5-flash', para google.adk.agents.Agent).
+            name: Nombre del agente.
+            description: Descripción del agente.
+            capabilities: Lista de capacidades (para A2AAgent/BaseAgent).
+            model: Modelo a usar por el agente (para google.adk.agents.Agent).
             instruction: Instrucción principal para el agente (para google.adk.agents.Agent).
-            tools: Secuencia de funciones (skills) que el agente puede usar (para google.adk.agents.Agent).
+            google_adk_tools: Secuencia de funciones (skills) que el agente ADK puede usar.
+            a2a_skills: Lista de habilidades para la AgentCard de A2A.
+            endpoint: Endpoint HTTP para A2A.
+            auto_register_skills: Si True, registra automáticamente las skills de A2AAgent.
+            a2a_server_url: URL del servidor A2A.
+            version: Versión del agente (para BaseAgent).
+            adk_toolkit: Instancia de adk.toolkit.Toolkit (para BaseAgent).
             **kwargs: Argumentos adicionales para pasar a google.adk.agents.Agent.
         """
-        # Llamar al constructor de la clase base google.adk.agents.Agent
+        # Preparar kwargs para las clases base
+        # google.adk.agents.Agent espera 'tools', no 'google_adk_tools'
+        if google_adk_tools:
+            kwargs['tools'] = google_adk_tools
+        
+        # BaseAgent espera 'toolkit', no 'adk_toolkit'
+        if adk_toolkit:
+            kwargs['toolkit'] = adk_toolkit
+
+        # Llamar al constructor de A2AAgent
         super().__init__(
-            # Pasar agent_id también a la base
             agent_id=agent_id,
             name=name,
             description=description,
-            model=model,
+            capabilities=capabilities,
+            endpoint=endpoint,
+            version=version,
+            skills=a2a_skills, 
+            auto_register_skills=auto_register_skills,
+            a2a_server_url=a2a_server_url,
+            # Pasar model, instruction y otros kwargs para BaseAgent y google.adk.agents.Agent
+            model=model, 
             instruction=instruction,
-            tools=tools,
-            # Pasar otros kwargs relevantes si los hubiera
             **kwargs
         )
         
-        # Atributos específicos de NGX
-        self.agent_id = agent_id
+        # Atributos específicos de NGX que ADKAgent gestiona adicionalmente
+        # self.agent_id = agent_id # Ya gestionado por BaseAgent
         self.state_manager = self.state_manager or StateManager()
         
-        # Ya no manejamos toolkit, client, agent_card aquí
-        # self.toolkit = None 
-        # self.adk_client: Optional[ADKClient] = None
-        # self.agent_card: GoogleAgentCard = self._create_agent_card()
+        # self._state: Dict[str, Any] = {} # Eliminado, se usa el de BaseAgent
         
-        # Estado interno (si aún es necesario más allá de StateManager)
-        self._state: Dict[str, Any] = {}
-        # self._running = False 
-        # self._message_queue = asyncio.Queue() 
-        
-        # Configurar telemetría (si aplica a nuestra capa)
         self._setup_telemetry()
         
-        logger.info(f"Agente ADK (Name: {self.name}) inicializado.")
+        logger.info(f"Agente ADK unificado (Name: {self.name}, ID: {self.agent_id}) inicializado.")
 
     def _setup_telemetry(self):
         """
@@ -100,28 +123,28 @@ class ADKAgent(Agent):
         # TODO: Implementar configuración de telemetría (ej: OpenTelemetry)
         pass
 
-    def get_state(self, key: str, default: Any = None) -> Any:
-        """
-        Obtiene un valor del estado interno del agente.
-        
-        Args:
-            key: Clave del estado
-            default: Valor por defecto si la clave no existe
-        
-        Returns:
-            Any: Valor del estado o valor por defecto
-        """
-        return self._state.get(key, default)
+    # def get_state(self, key: str, default: Any = None) -> Any: # Eliminado, usar el de BaseAgent
+    #     """
+    #     Obtiene un valor del estado interno del agente.
+    #     
+    #     Args:
+    #         key: Clave del estado
+    #         default: Valor por defecto si la clave no existe
+    #     
+    #     Returns:
+    #         Any: Valor del estado o valor por defecto
+    #     """
+    #     return self._state.get(key, default) # self._state ya no existe aquí
 
-    def update_state(self, key: str, value: Any) -> None:
-        """
-        Actualiza el estado interno del agente.
-        
-        Args:
-            key: Clave del estado
-            value: Valor a almacenar
-        """
-        self._state[key] = value
+    # def update_state(self, key: str, value: Any) -> None: # Eliminado, usar el de BaseAgent
+    #     """
+    #     Actualiza el estado interno del agente.
+    #     
+    #     Args:
+    #         key: Clave del estado
+    #         value: Valor a almacenar
+    #     """
+    #     self._state[key] = value # self._state ya no existe aquí
 
     # --------------------------------------------------------------------------
     # Métodos eliminados que ahora debería manejar google.adk.agents.Agent:
@@ -135,8 +158,7 @@ class ADKAgent(Agent):
     # - start / stop / run (probablemente manejados por la clase base Agent)
     # --------------------------------------------------------------------------
 
-    # Podríamos añadir métodos específicos de NGX aquí si fuera necesario,
-    # por ejemplo, para interactuar con Supabase o gestionar contexto específico.
+    # Métodos de lógica de negocio de NGX que permanecen en ADKAgent
     async def _get_context(self, user_id: str, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Método placeholder para obtener contexto (perfil, historial) del usuario.
@@ -154,10 +176,26 @@ class ADKAgent(Agent):
         pass
 
     def _get_program_type_from_profile(self, client_profile: Dict[str, Any]) -> str:
-        """Obtiene el tipo de programa (PRIME/LONGEVITY) del perfil."""
-        # Implementación simple, podría ser más robusta
-        program = client_profile.get("program_type", "PRIME").upper()
-        return program if program in ["PRIME", "LONGEVITY"] else "PRIME"
+        """Obtiene el tipo de programa (PRIME/LONGEVITY/GENERAL) del perfil del cliente."""
+        # Obtener el valor de program_type del perfil.
+        program_value = client_profile.get("program_type")
+
+        # Si program_type no está presente, es None, o es un string vacío, usar "PRIME" por defecto.
+        if not program_value: # Esto cubre None, '', False, etc.
+            selected_program = "PRIME"
+        else:
+            # Convertir a string (por si acaso) y luego a mayúsculas.
+            selected_program = str(program_value).upper()
+        
+        # Lista de tipos de programa válidos que pueden ser retornados directamente.
+        valid_program_types = ["PRIME", "LONGEVITY", "GENERAL"]
+        
+        # Si el programa seleccionado (después de uppercasing) está en la lista de válidos, retornarlo.
+        # De lo contrario, retornar "GENERAL" como fallback.
+        if selected_program in valid_program_types:
+            return selected_program
+        else:
+            return "GENERAL"
 
     def _extract_profile_details(self, client_profile: Dict[str, Any]) -> str:
         """Convierte detalles clave del perfil en un string formateado."""
@@ -173,4 +211,4 @@ class ADKAgent(Agent):
 
 # Nota: Se eliminaron los métodos _handle_adk_*, start, stop, run, _process_messages,
 # ya que se asume que la clase base google.adk.agents.Agent se encarga del ciclo
-# de vida principal y la comunicación.
+# de vida principal y la comunicación, y A2AAgent maneja la lógica A2A.
