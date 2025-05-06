@@ -33,7 +33,9 @@ class ClientSuccessLiaison(A2AAgent):
             "user_experience", 
             "customer_support", 
             "retention_strategies", 
-            "communication_management"
+            "communication_management",
+            "information_retrieval", # Added capability for search
+            "database_query" # Added capability for DB interaction
         ]
         
         # Definir skills siguiendo el formato A2A con mejores prácticas
@@ -44,9 +46,9 @@ class ClientSuccessLiaison(A2AAgent):
                 "description": "Diseña estrategias y programas para crear, desarrollar y mantener comunidades activas y comprometidas alrededor de productos y servicios",
                 "tags": ["community", "engagement", "events", "forums", "user-groups"],
                 "examples": [
-                    "¿Cómo puedo construir una comunidad más activa alrededor de mi producto?",
-                    "Estrategias para aumentar la participación en foros de usuarios",
-                    "Ideas para eventos comunitarios que generen engagement"
+                    {"input": "¿Cómo puedo construir una comunidad más activa alrededor de mi producto?", "output": "Podríamos implementar un programa de embajadores, organizar Q&A regulares con el equipo, y crear un foro dedicado..."},
+                    {"input": "Estrategias para aumentar la participación en foros de usuarios", "output": "Gamificación (puntos/insignias), moderadores activos, contenido exclusivo, y destacar contribuciones valiosas son buenas estrategias."},
+                    {"input": "Ideas para eventos comunitarios que generen engagement", "output": "Hackathons virtuales, webinars con expertos, concursos temáticos, sesiones de 'ask me anything' (AMA)."}
                 ],
                 "inputModes": ["text", "json"],
                 "outputModes": ["text", "json", "markdown"]
@@ -57,9 +59,9 @@ class ClientSuccessLiaison(A2AAgent):
                 "description": "Analiza y optimiza la experiencia del usuario en diferentes puntos de contacto para maximizar la satisfacción y minimizar la fricción",
                 "tags": ["ux", "customer-journey", "touchpoints", "onboarding", "user-flow"],
                 "examples": [
-                    "Cómo mejorar el proceso de onboarding para nuevos usuarios",
-                    "Identificar y resolver puntos de fricción en el customer journey",
-                    "Estrategias para optimizar la experiencia de usuario en una aplicación móvil"
+                    {"input": "Cómo mejorar el proceso de onboarding para nuevos usuarios", "output": "Implementar un tutorial interactivo, ofrecer checklists de primeros pasos, y personalizar la bienvenida basado en el rol o caso de uso."},
+                    {"input": "Identificar y resolver puntos de fricción en el customer journey", "output": "Mediante análisis de datos de uso, encuestas de satisfacción post-interacción, y mapas de experiencia del cliente."},
+                    {"input": "Estrategias para optimizar la experiencia de usuario en una aplicación móvil", "output": "Simplificar navegación, mejorar tiempos de carga, asegurar consistencia visual, y optimizar para diferentes tamaños de pantalla."}
                 ],
                 "inputModes": ["text", "json"],
                 "outputModes": ["text", "json", "markdown"]
@@ -70,9 +72,9 @@ class ClientSuccessLiaison(A2AAgent):
                 "description": "Desarrolla sistemas y procesos para proporcionar soporte efectivo, resolver problemas y maximizar la satisfacción del cliente",
                 "tags": ["support", "troubleshooting", "tickets", "resolution", "satisfaction"],
                 "examples": [
-                    "Cómo estructurar un sistema de tickets para soporte al cliente",
-                    "Mejores prácticas para reducir el tiempo de respuesta en soporte",
-                    "Estrategias para convertir interacciones de soporte en oportunidades de fidelización"
+                    {"input": "Cómo estructurar un sistema de tickets para soporte al cliente", "output": "Definir prioridades (urgente, normal, bajo), categorías (técnico, facturación, consulta), SLAs claros, y rutas de escalación."},
+                    {"input": "Mejores prácticas para reducir el tiempo de respuesta en soporte", "output": "Usar respuestas predefinidas para consultas comunes, implementar un chatbot para triaje inicial, y asegurar suficiente personal en horas pico."},
+                    {"input": "Estrategias para convertir interacciones de soporte en oportunidades de fidelización", "output": "Ofrecer soluciones proactivas, seguimiento post-resolución, y identificar oportunidades de up-selling/cross-selling relevantes."}
                 ],
                 "inputModes": ["text", "json"],
                 "outputModes": ["text", "json", "markdown"]
@@ -83,9 +85,9 @@ class ClientSuccessLiaison(A2AAgent):
                 "description": "Diseña e implementa programas y tácticas para maximizar la retención de clientes, reducir el churn y aumentar el lifetime value",
                 "tags": ["retention", "churn", "loyalty", "ltv", "win-back"],
                 "examples": [
-                    "Necesito ideas para mejorar la retención de usuarios en mi aplicación",
-                    "Estrategias para reducir el churn en una suscripción mensual",
-                    "Cómo diseñar un programa de fidelización efectivo"
+                    {"input": "Necesito ideas para mejorar la retención de usuarios en mi aplicación", "output": "Programas de lealtad, contenido exclusivo para suscriptores, encuestas de salida para entender motivos de churn, y mejoras basadas en feedback."},
+                    {"input": "Estrategias para reducir el churn en una suscripción mensual", "output": "Recordatorios de valor antes de la renovación, ofertas personalizadas, facilidad para pausar suscripción, y excelente soporte."},
+                    {"input": "Cómo diseñar un programa de fidelización efectivo", "output": "Recompensas escalonadas, beneficios exclusivos, acceso anticipado a nuevas funciones, y reconocimiento público (si aplica)."}
                 ],
                 "inputModes": ["text", "json"],
                 "outputModes": ["text", "json", "markdown"]
@@ -96,12 +98,36 @@ class ClientSuccessLiaison(A2AAgent):
                 "description": "Planifica y optimiza estrategias de comunicación con usuarios y clientes para maximizar el engagement y fortalecer relaciones",
                 "tags": ["communication", "emails", "messaging", "notifications", "campaigns"],
                 "examples": [
-                    "Cómo estructurar una campaña de email para reactivar usuarios inactivos",
-                    "Mejores prácticas para comunicaciones in-app",
-                    "Estrategias para personalizar comunicaciones masivas"
+                    {"input": "Cómo estructurar una campaña de email para reactivar usuarios inactivos", "output": "Segmentar por nivel de inactividad, ofrecer incentivos para volver, destacar novedades, y usar un asunto atractivo."},
+                    {"input": "Mejores prácticas para comunicaciones in-app", "output": "Ser contextuales, relevantes, breves, permitir al usuario controlar notificaciones, y evitar ser intrusivo."},
+                    {"input": "Estrategias para personalizar comunicaciones masivas", "output": "Usar datos demográficos, historial de compras/uso, preferencias declaradas, y segmentación conductual."}
                 ],
                 "inputModes": ["text", "json"],
                 "outputModes": ["text", "json", "markdown"]
+            },
+            {
+                "id": "web_search",
+                "name": "Web Search",
+                "description": "Realiza una búsqueda en la web para encontrar información relevante sobre un tema específico.",
+                "tags": ["search", "web", "information", "research"],
+                "examples": [
+                    {"input": "Busca las últimas tendencias en marketing de comunidades online", "output": "Resumen de artículos y estudios recientes sobre tendencias como..."},
+                    {"input": "¿Cuáles son las mejores plataformas para foros de soporte?", "output": "Comparativa de plataformas populares como Discourse, Zendesk Community, Khoros, etc., con sus pros y contras."}
+                ],
+                "inputModes": ["text"],
+                "outputModes": ["text", "markdown"]
+            },
+            { # New skill for fetching user profile via Supabase
+                "id": "get_user_profile",
+                "name": "Get User Profile",
+                "description": "Recupera el perfil de un usuario específico desde la base de datos.",
+                "tags": ["database", "user", "profile", "supabase", "query"],
+                "examples": [
+                    # This skill is typically invoked internally, not directly by user text
+                    {"input": {"user_id": "user-123"}, "output": {"user_id": "user-123", "name": "Jane Doe", "email": "jane@example.com", "preferences": {...}}}
+                ],
+                "inputModes": ["json"], # Expects user_id
+                "outputModes": ["json"] # Returns profile data
             }
         ]
         
@@ -112,16 +138,24 @@ class ClientSuccessLiaison(A2AAgent):
             description="Especialista en construcción de comunidad, optimización de experiencia de usuario, soporte al cliente, estrategias de retención y gestión de comunicaciones. Diseña e implementa programas para maximizar la satisfacción, engagement y retención de clientes.",
             capabilities=capabilities,
             toolkit=toolkit,
-            a2a_server_url=a2a_server_url or "https://client-success-api.ngx-agents.com/a2a",
+            a2a_server_url=a2a_server_url or "https://client-success-api.ngx-agents.com/a2a", # Default URL example
             state_manager=state_manager,
-            version="1.2.0",
-            skills=skills,
-            provider={
-                "organization": "NGX Health & Performance",
-                "url": "https://ngx-agents.com"
-            },
-            documentation_url="https://docs.ngx-agents.com/client-success-liaison"
+            version="1.4.0", # Incremented version due to added skill
+            skills=skills 
         )
+
+        # Inicializar clientes después de llamar a super()
+        self.gemini_client = GeminiClient(model_name="gemini-1.5-flash") # Modelo eficiente para estas tareas
+        self.supabase_client = SupabaseClient()
+        self.mcp_toolkit = MCPToolkit()
+
+        # Instrucción del sistema para Gemini
+        self.system_instructions = (
+            "Eres un experto en éxito del cliente y construcción de comunidades. "
+            "Tu objetivo es entender las necesidades del usuario y proporcionar estrategias, "
+            "ideas y soluciones prácticas para mejorar la experiencia, el engagement y la retención de clientes."
+        )
+        logger.info(f"Agente {self.agent_id} v{self.version} inicializado.")
         
         # Inicialización de AI Platform
         gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
@@ -132,12 +166,6 @@ class ClientSuccessLiaison(A2AAgent):
             logger.info("AI Platform inicializado correctamente.")
         except Exception as e:
             logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
-        
-        # Inicializar clientes y herramientas
-        self.gemini_client = GeminiClient(model_name="gemini-2.0-flash")
-        self.supabase_client = SupabaseClient()
-        self.mcp_toolkit = MCPToolkit()
-        self.state_manager = StateManager(self.supabase_client)
         
         # Inicializar estado del agente
         self.update_state("community_calendars", {})  # Almacenar calendarios de comunidad generados
@@ -304,12 +332,34 @@ class ClientSuccessLiaison(A2AAgent):
             user_profile = None
             if user_id:
                 # Intentar obtener el perfil del usuario del contexto primero
-                user_profile = context.get("user_profile", {})
+                user_profile = context.get("user_profile")
                 if not user_profile:
-                    user_profile = self.supabase_client.get_user_profile(user_id)
-                    if user_profile:
-                        context["user_profile"] = user_profile
-            
+                    logger.info(f"Perfil no encontrado en contexto para {user_id}. Consultando Supabase vía MCP.")
+                    try:
+                        # Construir la consulta SQL (¡Asegúrate de sanitizar user_id si no confías en él!)
+                        # Asumiendo tabla 'user_profiles' y columna 'user_id'
+                        sql_query = f"SELECT * FROM user_profiles WHERE user_id = '{user_id}' LIMIT 1;"
+                        # Invocar la herramienta MCP de Supabase
+                        # Asumiendo que el ID de la herramienta es 'supabase/query'
+                        query_result = await self.mcp_toolkit.invoke("supabase/query", sql=sql_query)
+                        
+                        # Procesar el resultado (esperamos una lista, tomamos el primer elemento si existe)
+                        if query_result and isinstance(query_result, list) and len(query_result) > 0:
+                            user_profile = query_result[0] 
+                            logger.info(f"Perfil obtenido de Supabase para {user_id}.")
+                            context["user_profile"] = user_profile # Guardar en contexto para futuro
+                        else:
+                             logger.warning(f"No se encontró perfil en Supabase para {user_id} o resultado inesperado: {query_result}")
+                             user_profile = {} # Dejar como diccionario vacío si no se encuentra
+                             context["user_profile"] = {} # Guardar vacío en contexto
+                             
+                    except Exception as e:
+                         logger.error(f"Error al consultar perfil de usuario {user_id} vía MCP: {e}", exc_info=True)
+                         user_profile = {} # Fallback a perfil vacío en caso de error
+                         context["user_profile"] = {} # Guardar vacío en contexto
+                         
+                # else: perfil ya estaba en el contexto
+
             # Clasificar el tipo de consulta
             query_type = self._classify_query(input_text)
             
@@ -381,7 +431,10 @@ class ClientSuccessLiaison(A2AAgent):
                 result = await self._handle_retention_request(input_text, context)
             elif query_type == "communication_management":
                 result = await self._handle_communication_request(input_text, context)
-            else:
+            elif query_type == "web_search": # Added block for web search
+                result = await self._handle_web_search(input_text, context)
+                # Web search results are typically not saved to state unless specifically requested
+            else: # Handles "general_request"
                 result = await self._handle_general_request(input_text, context)
             
             # Extraer la respuesta y metadatos del resultado
@@ -468,6 +521,8 @@ class ClientSuccessLiaison(A2AAgent):
             result = await self._handle_retention_request(user_input, context)
         elif query_type == "communication_request":
             result = await self._handle_communication_request(user_input, context)
+        elif query_type == "web_search": # Added block for web search
+            result = await self._handle_web_search(user_input, context)
         else:
             result = await self._handle_general_request(user_input, context)
         
@@ -532,20 +587,25 @@ class ClientSuccessLiaison(A2AAgent):
             str: Tipo de consulta
         """
         query_lower = query.lower()
+        search_keywords = ["busca", "search", "find", "investiga", "research", "encuentra", "lookup"]
         
-        if any(word in query_lower for word in ["comunidad", "grupo", "miembros", "pertenencia", "embajador"]):
-            return "community_request"
-        elif any(word in query_lower for word in ["experiencia", "usabilidad", "interfaz", "onboarding", "journey"]):
-            return "experience_request"
-        elif any(word in query_lower for word in ["soporte", "ayuda", "problema", "dificultad", "resolver"]):
-            return "support_request"
-        elif any(word in query_lower for word in ["retención", "fidelización", "abandono", "reactivar", "gamificación"]):
-            return "retention_request"
-        elif any(word in query_lower for word in ["comunicación", "mensaje", "email", "notificación", "contacto"]):
-            return "communication_request"
+        if any(query_lower.startswith(keyword + " ") for keyword in search_keywords):
+             return "web_search"
+        # Prioritize search detection before other keywords that might overlap
+
+        elif any(word in query_lower for word in ["comunidad", "grupo", "miembros", "pertenencia", "embajador", "foro"]):
+            return "community_building" # Aligned with _run_async_impl
+        elif any(word in query_lower for word in ["experiencia", "usabilidad", "interfaz", "onboarding", "journey", "ux"]):
+            return "user_experience" # Aligned
+        elif any(word in query_lower for word in ["soporte", "ayuda", "problema", "dificultad", "resolver", "ticket"]):
+            return "customer_support" # Aligned
+        elif any(word in query_lower for word in ["retención", "fidelización", "abandono", "reactivar", "churn", "loyalty"]):
+            return "retention_strategies" # Aligned
+        elif any(word in query_lower for word in ["comunicación", "mensaje", "email", "notificación", "contacto", "campaña"]):
+            return "communication_management" # Aligned
         else:
             return "general_request"
-    
+
     async def _handle_community_request(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Maneja consultas relacionadas con construcción de comunidad.
@@ -955,105 +1015,54 @@ class ClientSuccessLiaison(A2AAgent):
             "confidence": 0.8
         }
     
-    async def _generate_community_calendar(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_web_search(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Genera un calendario de eventos comunitarios.
+        Maneja las solicitudes de búsqueda web utilizando la herramienta MCP.
+        """
+        logger.info(f"Manejando solicitud de búsqueda web: {query[:50]}...")
         
-        Args:
-            context: Contexto para la generación del calendario
+        # Extraer la consulta real (eliminar la palabra clave inicial)
+        search_keywords = ["busca", "search", "find", "investiga", "research", "encuentra", "lookup"]
+        actual_query = query
+        for keyword in search_keywords:
+            if query.lower().startswith(keyword + " "):
+                actual_query = query[len(keyword) + 1:].strip()
+                break
+                
+        if not actual_query or actual_query == query: # Fallback si no se pudo extraer
+            actual_query = query
+            logger.warning("No se pudo extraer la consulta de búsqueda específica, usando el texto completo.")
+
+        try:
+            logger.info(f"Invocando herramienta 'search_web' con query: '{actual_query}'")
+            # Asumiendo que 'search_web' es el ID correcto de la herramienta en MCPToolkit
+            # y que devuelve una estructura como {'results': [{'title': ..., 'snippet': ..., 'url': ...}, ...]}
+            search_results = await self.mcp_toolkit.invoke("search_web", query=actual_query)
             
-        Returns:
-            Dict[str, Any]: Calendario de eventos
-        """
-        # TODO: Integrar RAG para buscar ideas de eventos populares o ejemplos de calendarios NGX.
-        # TODO: Usar mcp7_query para obtener información sobre eventos pasados o preferencias de la comunidad desde Supabase.
-        # Determinar el tipo de comunidad
-        community_type = context.get("community_type", "fitness")
-        time_frame = context.get("time_frame", "mensual")
-        
-        # Construir el prompt para el modelo
-        prompt = f"""
-        {self.system_instructions}
-        
-        Genera un calendario de eventos comunitarios para una comunidad de tipo: {community_type}.
-        Período: {time_frame}
-        
-        El calendario debe incluir:
-        1. Eventos educativos
-        2. Desafíos grupales
-        3. Sesiones de Q&A
-        4. Celebraciones de hitos
-        5. Actividades de networking
-        
-        Para cada evento, incluye:
-        - Nombre del evento
-        - Descripción breve
-        - Duración recomendada
-        - Objetivo principal
-        - Recursos necesarios
-        
-        Formatea el calendario de manera estructurada y fácil de seguir.
-        """
-        
-        # Generar calendario utilizando Gemini
-        calendar_content = await self.gemini_client.generate_response(prompt, temperature=0.3)
-        
-        # Crear estructura del calendario
-        community_calendar = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "community_type": community_type,
-            "time_frame": time_frame,
-            "calendar_type": "community_events",
-            "content": calendar_content
-        }
-        
-        return community_calendar
-    
-    async def _generate_customer_journey_map(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Genera un mapa de customer journey personalizado.
-        
-        Args:
-            context: Contexto para la generación del mapa
-            
-        Returns:
-            Dict[str, Any]: Mapa de customer journey
-        """
-        # TODO: Integrar RAG para buscar plantillas de journey maps o puntos de referencia de la industria/NGX.
-        # TODO: Usar mcp7_query para obtener datos reales del journey de usuarios específicos desde Supabase.
-        # Determinar el tipo de usuario
-        user_type = context.get("user_type", "principiante")
-        journey_focus = context.get("journey_focus", "onboarding")
-        
-        # Construir el prompt para el modelo
-        prompt = f"""
-        {self.system_instructions}
-        
-        Genera un mapa detallado de customer journey para un usuario de tipo: {user_type}.
-        Enfoque del journey: {journey_focus}
-        
-        El mapa debe incluir:
-        1. Etapas principales del journey
-        2. Touchpoints clave en cada etapa
-        3. Emociones y necesidades del usuario
-        4. Puntos de fricción potenciales
-        5. Oportunidades de mejora
-        6. Métricas relevantes para cada etapa
-        
-        Para cada etapa, proporciona detalles específicos y recomendaciones accionables.
-        Formatea el mapa de manera estructurada y fácil de seguir.
-        """
-        
-        # Generar mapa utilizando Gemini
-        journey_map_content = await self.gemini_client.generate_response(prompt, temperature=0.3)
-        
-        # Crear estructura del mapa
-        customer_journey_map = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "user_type": user_type,
-            "journey_focus": journey_focus,
-            "map_type": "customer_journey",
-            "content": journey_map_content
-        }
-        
-        return customer_journey_map
+            if search_results and search_results.get("results"): 
+                formatted_response = f"Aquí tienes algunos resultados de la búsqueda web para '{actual_query}':\n\n"
+                for i, result in enumerate(search_results["results"][:5]): # Limitar a 5 resultados
+                    title = result.get('title', 'Sin título')
+                    snippet = result.get('snippet', 'Sin descripción')
+                    url = result.get('url', '')
+                    formatted_response += f"{i+1}. **{title}**\n   {snippet}\n   [Fuente]({url})\n\n"
+                if len(search_results["results"]) > 5:
+                    formatted_response += "(Se encontraron más resultados)"
+                response_content = formatted_response
+            else:
+                logger.warning(f"La herramienta 'search_web' no devolvió resultados para '{actual_query}'")
+                response_content = f"No pude encontrar resultados en la web para '{actual_query}'."
+                
+        except Exception as e:
+            logger.error(f"Error invocando la herramienta 'search_web': {e}", exc_info=True)
+            response_content = f"Hubo un error al intentar buscar en la web: {e}"
+
+        return {"response": response_content, "artifacts": []} # No hay artefactos específicos de la búsqueda generalmente
+
+# Bloque de ejecución para pruebas locales
+if __name__ == '__main__':
+    # Ejemplo de ejecución local
+    agent = ClientSuccessLiaison()
+    user_input = "¿Cómo puedo mejorar la experiencia del usuario en mi aplicación móvil?"
+    result = agent._run_async_impl(user_input)
+    print(result)

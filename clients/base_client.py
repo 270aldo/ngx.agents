@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from functools import wraps
 from typing import Any, Callable, Dict, Optional, TypeVar
 
-from prototipo.config.secrets import settings
+from config.secrets import settings
 
 logger = logging.getLogger(__name__)
 

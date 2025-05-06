@@ -14,21 +14,23 @@ from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
 from tools.mcp_client import MCPClient  # Importar MCPClient
-from agents.base.a2a_agent import A2AAgent
-from core.agent_card import AgentCard, Example
+from agents.base.adk_agent import ADKAgent
 from core.state_manager import StateManager
 from core.logging_config import get_logger
 
 # Configurar logger
 logger = get_logger(__name__)
 
-class ProgressTracker(A2AAgent):
+class ProgressTracker(ADKAgent):
     """
     Agente especializado en seguimiento y análisis de progreso del usuario.
     """
 
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
-        # Definir capacidades según el protocolo A2A
+    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None, **kwargs):
+        # Definir atributos del agente
+        agent_id="progress_tracker"
+        name="NGX Progress Tracker"
+        description="Especialista en seguimiento, análisis y visualización de progreso"
         capabilities = [
             "progress_monitoring",
             "data_analysis",
@@ -36,19 +38,70 @@ class ProgressTracker(A2AAgent):
             "visualization",
             "goal_tracking"
         ]
+        version="1.1.0"
+        # Definir estructura de skills para Agent Card
+        agent_skills_definition = [
+            {
+                "name": "analyze_progress",
+                "description": "Analiza los datos de progreso del usuario e identifica tendencias.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "user_id": {"type": "string", "description": "ID del usuario."},
+                        "metrics": {"type": "array", "items": {"type": "string"}, "description": "Métricas a analizar (opcional)."},
+                        "time_period": {"type": "string", "description": "Periodo de tiempo (ej. 'last_month', 'last_3_months')."}
+                    },
+                    "required": ["user_id", "time_period"]
+                },
+                "output_schema": {"type": "object", "description": "Análisis del progreso con insights."}
+            },
+            {
+                "name": "visualize_progress",
+                "description": "Genera una visualización (gráfico) del progreso del usuario.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "user_id": {"type": "string", "description": "ID del usuario."},
+                        "metric": {"type": "string", "description": "Métrica a visualizar (ej. 'weight', 'performance')."},
+                        "time_period": {"type": "string", "description": "Periodo de tiempo."},
+                        "chart_type": {"type": "string", "description": "Tipo de gráfico (ej. 'line', 'bar')."}
+                    },
+                    "required": ["user_id", "metric", "time_period", "chart_type"]
+                },
+                "output_schema": {"type": "object", "description": "URL o datos de la imagen de visualización."}
+            },
+            {
+                "name": "compare_progress",
+                "description": "Compara el progreso entre dos periodos de tiempo.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "user_id": {"type": "string", "description": "ID del usuario."},
+                        "period1": {"type": "string", "description": "Primer periodo (ej. 'last_month')."},
+                        "period2": {"type": "string", "description": "Segundo periodo (ej. 'previous_month')."},
+                        "metrics": {"type": "array", "items": {"type": "string"}, "description": "Métricas a comparar."}
+                    },
+                    "required": ["user_id", "period1", "period2", "metrics"]
+                },
+                "output_schema": {"type": "object", "description": "Comparación del progreso con diferencias clave."}
+            }
+        ]
         
-        # Inicializar agente base con los parámetros definidos
+        # Llamar al constructor de ADKAgent
         super().__init__(
-            agent_id="progress_tracker",
-            name="NGX Progress Tracker",
-            description="Especialista en seguimiento, análisis y visualización de progreso",
+            agent_id=agent_id,
+            name=name,
+            description=description,
             capabilities=capabilities,
             toolkit=toolkit,
-            version="1.1.0",
-            a2a_server_url=a2a_server_url
+            version=version,
+            a2a_server_url=a2a_server_url,
+            state_manager=state_manager, # Pasar state_manager a la clase base
+            skills=agent_skills_definition, # Pasar definición de skills
+            **kwargs
         )
         
-        # Inicialización de Clientes y Herramientas
+        # Inicialización de Clientes y Herramientas (si es necesario específicamente aquí)
         gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
         gcp_region = os.getenv("GCP_REGION", "us-central1")
         try:
@@ -64,19 +117,11 @@ class ProgressTracker(A2AAgent):
         # self.mcp_toolkit = MCPToolkit() # Descomentar si se usa activamente
         # self.mcp_client = MCPClient() # Descomentar si se usa activamente
         
-        # Inicializar el StateManager para persistencia
-        self.state_manager = state_manager or StateManager()
-        
-        # Inicializar estado del agente
-        self.update_state("visualizations", {})  # Almacenar visualizaciones generadas
-        self.update_state("analyses", {})  # Almacenar análisis realizados
-        self.update_state("conversation_contexts", {})  # Almacenar contextos de conversación
-        
         # Directorio para guardar gráficos temporales
         self.tmp_dir = os.path.join(os.getcwd(), "tmp_progress")
         os.makedirs(self.tmp_dir, exist_ok=True)
 
-        # Instrucciones del sistema para el agente
+        # Instrucciones del sistema para el agente (se pueden pasar a super() si se quiere)
         self.system_instructions = """
         Eres NGX Progress Tracker, experto en seguimiento, análisis y visualización de progreso.
         Tu objetivo es ayudar a los usuarios a entender sus datos, identificar tendencias y ajustar estrategias.
@@ -84,288 +129,190 @@ class ProgressTracker(A2AAgent):
         Identifica patrones y sugiere ajustes para optimizar resultados.
         """
         
-        # Crear y configurar la tarjeta del agente
-        self.agent_card = self._create_agent_card()
-        
-        logger.info(f"ProgressTracker inicializado con {len(capabilities)} capacidades según protocolo A2A")
+        logger.info(f"ProgressTracker inicializado con {len(capabilities)} capacidades según protocolo ADK/A2A")
 
-    async def run(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """
-        Ejecuta el agente con un texto de entrada siguiendo el protocolo A2A oficial.
-        
-        Args:
-            input_text: Texto de entrada del usuario
-            user_id: ID del usuario (opcional)
-            **kwargs: Argumentos adicionales como context, parameters, etc.
-            
-        Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo A2A
-        """
+    # --- Métodos de Skill --- 
+    # Estos métodos contienen la lógica que antes estaba en execute_task
+    
+    async def _skill_analyze_progress(self, user_id: str, time_period: str, metrics: Optional[List[str]] = None, **kwargs) -> Dict[str, Any]:
+        """Skill para analizar el progreso del usuario."""
+        logger.info(f"Executing skill: analyze_progress for user {user_id} over {time_period}")
         try:
-            start_time = time.time()
-            logger.info(f"Ejecutando ProgressTracker con input: {input_text[:50]}...")
+            # 1. Obtener datos (simulado por ahora, idealmente de Supabase o StateManager)
+            user_data = await self._get_user_data(user_id, time_period, metrics)
+            if not user_data:
+                return {"status": "error", "message": "No se encontraron datos para el análisis."}
+
+            # 2. Preparar prompt para Gemini
+            metrics_str = ", ".join(metrics) if metrics else "todas las métricas disponibles"
+            data_summary = json.dumps(user_data, indent=2, default=str)[:1000] # Resumen de datos
+            prompt = f"{self.system_instructions}\nAnaliza los siguientes datos de progreso para el usuario {user_id} durante el periodo '{time_period}' para las métricas: {metrics_str}.\nDatos:\n{data_summary}\n\nIdentifica tendencias clave, insights y proporciona un resumen conciso del análisis en formato JSON." 
+
+            # 3. Llamar a Gemini para análisis
+            analysis_result = await self.gemini_client.generate_structured_output(prompt)
             
-            # Obtener session_id de los kwargs o generar uno nuevo
-            session_id = kwargs.get("session_id") or str(uuid.uuid4())
-            logger.debug(f"ProgressTracker usando session_id: {session_id}")
+            if not isinstance(analysis_result, dict):
+                 # Si no es JSON, intentar envolverlo
+                 analysis_result = {"analysis_summary": str(analysis_result)}
+
+            # 4. (Opcional) Guardar análisis en estado
+            analysis_id = f"analysis_{user_id}_{time.time():.0f}"
+            self.update_state(f"analysis_{analysis_id}", analysis_result) 
+
+            logger.info(f"Análisis completado para user {user_id}")
+            return {"status": "success", "analysis_id": analysis_id, "result": analysis_result}
+
+        except Exception as e:
+            logger.error(f"Error en skill analyze_progress: {e}", exc_info=True)
+            return {"status": "error", "message": f"Error al analizar progreso: {e}"} 
+
+    async def _skill_visualize_progress(self, user_id: str, metric: str, time_period: str, chart_type: str, **kwargs) -> Dict[str, Any]:
+        """Skill para visualizar el progreso del usuario."""
+        logger.info(f"Executing skill: visualize_progress for user {user_id}, metric {metric}, period {time_period}, type {chart_type}")
+        try:
+            # 1. Obtener datos (simulado)
+            user_data = await self._get_user_data(user_id, time_period, [metric])
+            if not user_data or metric not in user_data or not user_data[metric]:
+                 return {"status": "error", "message": f"No se encontraron datos para la métrica '{metric}'."}
+
+            # Extraer fechas y valores
+            dates = [item['date'] for item in user_data[metric]]
+            values = [item['value'] for item in user_data[metric]]
             
-            # Cargar el contexto de la conversación utilizando el método _get_context
-            # Este método ya maneja la carga desde StateManager o memoria según corresponda
-            context = await self._get_context(user_id, session_id)
-            
-            # Obtener datos de progreso
-            progress_data = context.get("progress_data")
-            if not progress_data and user_id:
-                progress_data = self.supabase_client.get_user_progress_data(user_id)
-            
-            # Determinar tipo de consulta y capacidades a utilizar
-            query_type = self._classify_query(input_text)
-            capabilities_used = []
-            
-            if query_type == "visualization_request":
-                result = await self._handle_visual_request(input_text, progress_data)
-                capabilities_used.append("visualization")
-                capabilities_used.append("progress_monitoring")
-            elif query_type == "analysis_request":
-                result = await self._handle_analysis_request(input_text, progress_data)
-                capabilities_used.append("data_analysis")
-                capabilities_used.append("trend_identification")
+            # Convertir fechas si son strings
+            try:
+                dates = [datetime.datetime.fromisoformat(d.replace('Z', '+00:00')) if isinstance(d, str) else d for d in dates]
+            except ValueError:
+                 logger.warning(f"No se pudieron parsear algunas fechas para visualización: {dates}")
+                 # Intentar continuar o devolver error
+
+            # 2. Generar gráfico
+            plt.figure(figsize=(10, 5))
+            if chart_type == 'line':
+                plt.plot(dates, values, marker='o')
+            elif chart_type == 'bar':
+                plt.bar(dates, values)
             else:
-                result = await self._handle_general_request(input_text, progress_data)
-                capabilities_used.append("goal_tracking")
+                 plt.plot(dates, values, marker='o') # Default a línea
+                 
+            plt.xlabel("Fecha")
+            plt.ylabel(metric.capitalize())
+            plt.title(f"Progreso de {metric.capitalize()} para Usuario {user_id} ({time_period})")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
             
-            response = result.get("response", "")
-            artifacts = result.get("artifacts", [])
-            message = result.get("message")
+            # 3. Guardar gráfico
+            viz_filename = f"viz_{user_id}_{metric}_{time.time():.0f}.png"
+            viz_filepath = os.path.join(self.tmp_dir, viz_filename)
+            plt.savefig(viz_filepath)
+            plt.close() # Cerrar figura para liberar memoria
             
-            # Si no hay mensaje en el resultado, crear uno según el protocolo A2A
-            if not message:
-                message = self.create_message(
-                    role="agent",
-                    parts=[self.create_text_part(response)]
-                )
-                
-                # Si hay artefactos, añadirlos al mensaje
-                for artifact in artifacts:
-                    message.parts.append(artifact)
-            
-            # Registrar la interacción si hay un usuario identificado
-            if user_id:
-                self.supabase_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=input_text,
-                    response=response
-                )
-                
-                # Interactuar con MCPClient
-                await self.mcp_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=input_text,
-                    response=response
-                )
-                logger.info("Interacción con MCPClient registrada")
-                
-                # Actualizar contexto y persistir en StateManager
-                await self._update_context(user_id, session_id, input_text, response)
-            
-            # Calcular tiempo de ejecución
-            execution_time = time.time() - start_time
-            
-            # Formatear respuesta según el protocolo A2A
-            return {
-                "status": "success",
-                "response": response,
-                "message": message,
-                "confidence": 0.9,
-                "execution_time": execution_time,
-                "agent_id": self.agent_id,
-                "artifacts": artifacts,
-                "metadata": {
-                    "capabilities_used": capabilities_used,
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "query_type": query_type,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "protocol": "a2a",
-                    "agent_version": "1.1.0"
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error en ProgressTracker: {e}", exc_info=True)
-            
-            # Crear mensaje de error según el protocolo A2A
-            error_message = self.create_message(
-                role="agent",
-                parts=[self.create_text_part("Lo siento, ha ocurrido un error al procesar tu solicitud de seguimiento de progreso.")]
-            )
-            
-            return {
-                "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud de seguimiento de progreso.",
-                "message": error_message,
-                "error": str(e),
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "error_type": type(e).__name__,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            }
+            # 4. (Opcional) Subir a almacenamiento o devolver path/URL
+            # Por ahora devolvemos path local (esto necesitaría más lógica para ser útil en ADK)
+            # En un escenario real, subiríamos a GCS/S3 y devolveríamos la URL firmada.
+            viz_url = f"file://{viz_filepath}" # Placeholder
 
-    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
-        msg = content.get("text", "")
-        logger.info("ProgressTracker procesando mensaje de %s: %s", from_agent, msg)
-        
+            logger.info(f"Visualización generada: {viz_filepath}")
+            return {"status": "success", "visualization_url": viz_url, "filepath": viz_filepath}
+
+        except Exception as e:
+            logger.error(f"Error en skill visualize_progress: {e}", exc_info=True)
+            # Limpiar figura si hubo error
+            plt.close()
+            return {"status": "error", "message": f"Error al visualizar progreso: {e}"}
+
+    async def _skill_compare_progress(self, user_id: str, period1: str, period2: str, metrics: List[str], **kwargs) -> Dict[str, Any]:
+        """Skill para comparar el progreso entre dos periodos."""
+        logger.info(f"Executing skill: compare_progress for user {user_id} between {period1} and {period2}")
         try:
-            start_time = time.time()
-            response_text = await self.gemini_client.generate_response(
-                f"Mensaje de {from_agent}: {msg}\nResponde de forma concisa y relevante con información de progreso si es posible."
-            )
-            message = self.create_message(role="agent", parts=[self.create_text_part(response_text)])
-            execution_time = time.time() - start_time
-            
-            return {
-                "status": "success", 
-                "response": response_text, 
-                "message": message,
-                "agent_id": self.agent_id,
-                "execution_time": execution_time,
-                "metadata": {
-                    "from_agent": from_agent,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "protocol": "a2a",
-                    "agent_version": "1.1.0"
-                }
-            }
+            # 1. Obtener datos para ambos periodos (simulado)
+            data_p1 = await self._get_user_data(user_id, period1, metrics)
+            data_p2 = await self._get_user_data(user_id, period2, metrics)
+
+            if not data_p1 or not data_p2:
+                 return {"status": "error", "message": "Datos insuficientes para comparación."}
+
+            # 2. Preparar prompt para Gemini
+            metrics_str = ", ".join(metrics)
+            summary_p1 = json.dumps(data_p1, indent=2, default=str)[:500]
+            summary_p2 = json.dumps(data_p2, indent=2, default=str)[:500]
+            prompt = f"""{self.system_instructions}\nCompara los datos de progreso del usuario {user_id} para las métricas '{metrics_str}' entre el periodo '{period1}' y el periodo '{period2}'.
+            Datos Periodo 1 ({period1}):\n{summary_p1}\n
+            Datos Periodo 2 ({period2}):\n{summary_p2}\n
+            Identifica las diferencias clave, calcula los cambios porcentuales si aplica, y proporciona un resumen de la comparación en formato JSON."""
+
+            # 3. Llamar a Gemini para comparación
+            comparison_result = await self.gemini_client.generate_structured_output(prompt)
+
+            if not isinstance(comparison_result, dict):
+                 comparison_result = {"comparison_summary": str(comparison_result)}
+
+            logger.info(f"Comparación completada para user {user_id}")
+            return {"status": "success", "result": comparison_result}
             
         except Exception as e:
-            logger.error(f"Error en process_message desde {from_agent}: {e}", exc_info=True)
-            error_message = self.create_message(
-                role="agent",
-                parts=[self.create_text_part(f"Error procesando mensaje de {from_agent}.")]
-            )
-            return {
-                "status": "error",
-                "response": f"Error procesando mensaje de {from_agent}: {str(e)}",
-                "message": error_message,
-                "error": str(e),
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "from_agent": from_agent,
-                    "error_type": type(e).__name__,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            }
+            logger.error(f"Error en skill compare_progress: {e}", exc_info=True)
+            return {"status": "error", "message": f"Error al comparar progreso: {e}"}
 
-    async def execute_task(self, task: Dict[str, Any]) -> Any:
-        """
-        Ejecuta una tarea solicitada por el servidor A2A.
-        
-        Args:
-            task: Tarea a ejecutar
-            
-        Returns:
-            Any: Resultado de la tarea según el protocolo A2A
-        """
-        try:
-            # Extraer información de la tarea
-            user_input = task.get("input", "")
-            context = task.get("context", {})
-            user_id = context.get("user_id")
-            session_id = context.get("session_id") or str(uuid.uuid4())
-            
-            # Cargar el contexto de la conversación
-            conversation_context = await self._get_context(user_id, session_id)
+    # Método auxiliar para obtener datos (simulación)
+    async def _get_user_data(self, user_id: str, time_period: str, metrics: Optional[List[str]]) -> Optional[Dict[str, Any]]:
+         """Obtiene datos del usuario (simulado). Debería interactuar con Supabase/StateManager."""
+         logger.debug(f"Simulando obtención de datos para user {user_id}, periodo {time_period}, métricas: {metrics}")
+         # Simulación: Devolver datos de ejemplo
+         # En una implementación real, consultaría Supabase o el StateManager
+         if time_period == 'last_month':
+             start_date = datetime.date.today() - datetime.timedelta(days=30)
+         elif time_period == 'last_3_months':
+             start_date = datetime.date.today() - datetime.timedelta(days=90)
+         else:
+             start_date = datetime.date.today() - datetime.timedelta(days=7)
+         
+         mock_data = {}
+         requested_metrics = metrics or ['weight', 'performance'] # Default metrics
 
-            logger.info("ProgressTracker recibió consulta: %s", user_input)
+         for metric in requested_metrics:
+             mock_data[metric] = []
+             current_date = start_date
+             base_value = 70 if metric == 'weight' else 80 # Valores base simulados
+             trend = -0.1 if metric == 'weight' else 0.2 # Tendencia simulada
+             while current_date <= datetime.date.today():
+                 value = base_value + (current_date - start_date).days * trend + np.random.randn() * (1 if metric == 'weight' else 2)
+                 mock_data[metric].append({"date": current_date.isoformat(), "value": round(value, 2)})
+                 current_date += datetime.timedelta(days=np.random.randint(1, 4)) # Días variables
+                 
+         # logger.debug(f"Datos simulados generados: {json.dumps(mock_data, indent=2, default=str)}")
+         return mock_data
 
-            # Obtener datos de progreso
-            progress_data = context.get("progress_data")
-            if not progress_data and user_id:
-                progress_data = self.supabase_client.get_user_progress_data(user_id)
-            
-            # Determinar tipo de consulta
-            query_type = self._classify_query(user_input)
-            capabilities_used = []
-            
-            # Procesar la consulta según su tipo
-            if query_type == "visualization_request":
-                result = await self._handle_visual_request(user_input, progress_data)
-                capabilities_used.extend(["visualization", "progress_monitoring"])
-            elif query_type == "analysis_request":
-                result = await self._handle_analysis_request(user_input, progress_data)
-                capabilities_used.extend(["data_analysis", "trend_identification"])
-            else:
-                result = await self._handle_general_request(user_input, progress_data)
-                capabilities_used.append("goal_tracking")
 
-            # Asegurar que el resultado tenga un mensaje A2A
-            if "message" not in result:
-                result["message"] = self.create_message(
-                    role="agent",
-                    parts=[self.create_text_part(result.get("response", ""))]
-                )
-                
-                # Si hay artefactos, añadirlos al mensaje
-                for artifact in result.get("artifacts", []):
-                    if isinstance(artifact, dict) and "parts" in artifact:
-                        result["message"].parts.extend(artifact["parts"])
-                    else:
-                        result["message"].parts.append(artifact)
+    # --- Métodos de Ciclo de Vida y Registro --- 
 
-            # Registrar interacción
-            if user_id:
-                self.supabase_client.log_interaction(user_id, self.agent_id, user_input, result["response"])
-                
-                # Interactuar con MCPClient
-                await self.mcp_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=user_input,
-                    response=result["response"]
-                )
-                logger.info("Interacción con MCPClient registrada")
-                
-                # Actualizar contexto y persistir en StateManager
-                await self._update_context(user_id, session_id, user_input, result["response"])
+    # Añadir método start
+    async def start(self) -> None:
+        """Inicia el agente, conectando y registrando skills."""
+        await super().start() # Llama al start de ADKAgent
+        if self._running:
+            await self._register_skills()
+            logger.info(f"Skills de {self.agent_id} registradas.")
+        else:
+             logger.warning(f"No se registraron skills para {self.agent_id} porque el inicio base falló.")
 
-            # Añadir metadatos A2A al resultado
-            result["agent_id"] = self.agent_id
-            result["metadata"] = {
-                "capabilities_used": capabilities_used,
-                "query_type": query_type,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "protocol": "a2a",
-                "agent_version": "1.1.0"
-            }
+    # Añadir método _register_skills
+    async def _register_skills(self) -> None:
+        """Registra las skills específicas de este agente."""
+        if not self.toolkit:
+            logger.error(f"No se puede registrar skills para {self.agent_id}: Toolkit no inicializado.")
+            return
             
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error en execute_task: {e}", exc_info=True)
-            
-            # Crear mensaje de error según el protocolo A2A
-            error_message = self.create_message(
-                role="agent",
-                parts=[self.create_text_part("Lo siento, ha ocurrido un error al procesar tu solicitud de seguimiento de progreso.")]
-            )
-            
-            return {
-                "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud de seguimiento de progreso.",
-                "message": error_message,
-                "error": str(e),
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "error_type": type(e).__name__,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            }
+        self.register_skill("analyze_progress", self._skill_analyze_progress)
+        self.register_skill("visualize_progress", self._skill_visualize_progress)
+        self.register_skill("compare_progress", self._skill_compare_progress)
+        logger.info(f"Skills analyze, visualize, compare registradas para {self.agent_id}")
 
-    # ------------- Internal helpers -------------
-    async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
+    # --- Métodos de Contexto (Revisar si son necesarios o usar StateManager directamente) ---
+
+    async def _get_context(
+        self, user_id: Optional[str], session_id: Optional[str]
+    ) -> Dict[str, Any]:
         """
         Obtiene el contexto de la conversación para un usuario y sesión específicos.
         
@@ -379,30 +326,28 @@ class ProgressTracker(A2AAgent):
         Returns:
             Dict[str, Any]: Contexto de la conversación
         """
-        # Intentar cargar desde StateManager si hay user_id y session_id
-        if user_id and session_id:
+        context_key = f"context_{user_id}_{session_id}" if user_id and session_id else f"context_default_{uuid.uuid4().hex[:6]}"
+        
+        # Intentar cargar desde StateManager (si está disponible)
+        if self.state_manager and user_id and session_id:
             try:
-                state_data = await self.state_manager.load_state(user_id, session_id)
-                if state_data and "context" in state_data:
-                    logger.debug(f"Contexto cargado desde StateManager para session_id={session_id}")
-                    return state_data["context"]
+                state_data = await self.state_manager.load_state(context_key)
+                if state_data and isinstance(state_data, dict):
+                    logger.debug(f"Contexto cargado desde StateManager para key={context_key}")
+                    return state_data
             except Exception as e:
                 logger.warning(f"Error al cargar contexto desde StateManager: {e}")
-        
-        # Fallback: Obtener contextos almacenados en memoria
-        contexts = self.get_state("conversation_contexts") or {}
-        
-        # Generar clave de contexto
-        context_key = f"{user_id}_{session_id}" if user_id and session_id else "default"
-        
-        # Obtener o inicializar contexto
-        if context_key not in contexts:
-            contexts[context_key] = {"history": []}
-            self.update_state("conversation_contexts", contexts)
-        
-        return contexts[context_key]
-        
-    async def _update_context(self, user_id: Optional[str], session_id: Optional[str], msg: str, resp: str) -> None:
+
+        # Fallback o si no se usa StateManager: usar estado interno del agente
+        context = self.get_state(context_key, None) 
+        if context is None:
+            context = {"history": []}
+            self.update_state(context_key, context)
+            logger.debug(f"Nuevo contexto inicializado en memoria para key={context_key}")
+
+        return context
+
+    async def _update_context(self, user_id: Optional[str], session_id: Optional[str], msg: str, resp: str):
         """
         Actualiza el contexto de la conversación con un nuevo mensaje y respuesta.
         
@@ -412,169 +357,24 @@ class ProgressTracker(A2AAgent):
             msg: Mensaje del usuario
             resp: Respuesta del bot
         """
-        # Obtener contexto actual
-        context = await self._get_context(user_id, session_id)
+        context_key = f"context_{user_id}_{session_id}" if user_id and session_id else f"context_default_{uuid.uuid4().hex[:6]}"
+        context = await self._get_context(user_id, session_id) # Obtener contexto (cargará o inicializará)
         
-        # Añadir nueva interacción al historial
-        if "history" not in context:
+        if "history" not in context or not isinstance(context["history"], list):
             context["history"] = []
             
         context["history"].append({"user": msg, "bot": resp, "timestamp": time.time()})
         
-        # Limitar el tamaño del historial (mantener últimas 10 interacciones)
-        if len(context["history"]) > 10:
-            context["history"] = context["history"][-10:]
-            
-        # Actualizar contexto en memoria
-        contexts = self.get_state("conversation_contexts") or {}
-        key = f"{user_id}_{session_id}" if user_id and session_id else "default"
-        contexts[key] = context
-        self.update_state("conversation_contexts", contexts)
-        
-        # Persistir en StateManager si hay user_id y session_id
-        if user_id and session_id:
+        # Limitar historial
+        context["history"] = context["history"][-10:] # Mantener últimas 10
+
+        # Guardar en StateManager o estado interno
+        if self.state_manager and user_id and session_id:
             try:
-                # Guardar contexto en StateManager
-                state_data = {"context": context}
-                await self.state_manager.save_state(state_data, user_id, session_id)
-                logger.debug(f"Contexto actualizado en StateManager para session_id={session_id}")
+                await self.state_manager.save_state(context, context_key)
+                logger.debug(f"Contexto actualizado en StateManager para key={context_key}")
             except Exception as e:
                 logger.warning(f"Error al guardar contexto en StateManager: {e}")
-    
-    def _classify_query(self, query: str) -> str:
-        q = query.lower()
-        if any(w in q for w in ["gráfico", "visual", "ver", "plot"]):
-            return "visualization_request"
-        if any(w in q for w in ["tendencia", "análisis", "patrón"]):
-            return "analysis_request"
-        return "general_request"
-
-    async def _handle_visual_request(self, query: str, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Maneja solicitudes de visualización."""
-        logger.info(f"Manejando solicitud de visualización: {query[:50]}...")
-        # TODO: Usar mcp7_query para obtener datos específicos de Supabase para visualizar.
-        # TODO: Integrar RAG para obtener guías sobre mejores prácticas de visualización según la filosofía NGX.
-        try:
-            # Lógica para generar visualización (simplificada)
-            if not data:
-                return {"response": "Lo siento, no tengo datos suficientes para generar una visualización.", "artifacts": []}
-            # Por simplicidad, graficar peso si existe body_composition
-            if "body_composition" not in data:
-                return {"response": "No se encontraron datos de composición corporal para graficar.", "artifacts": []}
-            dates = [datetime.datetime.strptime(d["date"], "%Y-%m-%d") for d in data["body_composition"]]
-            weights = [d["weight"] for d in data["body_composition"]]
-            fig_path = os.path.join(self.tmp_dir, f"weight_{uuid.uuid4().hex[:6]}.png")
-            plt.figure()
-            plt.plot(dates, weights, marker="o")
-            plt.title("Evolución del peso")
-            plt.xlabel("Fecha")
-            plt.ylabel("Peso (kg)")
-            plt.tight_layout()
-            plt.savefig(fig_path)
-            plt.close()
-            artifact = self.create_artifact(artifact_id=f"plot_{uuid.uuid4().hex[:8]}", artifact_type="image/png", parts=[self.create_file_part(fig_path)])
-            message = self.create_message(role="agent", parts=[self.create_text_part("Aquí tienes la visualización solicitada."), artifact])
-            return {"response": "Visualización generada.", "artifacts": [artifact], "message": message}
-        except Exception as e:
-            logger.error(f"Error en _handle_visual_request: {e}", exc_info=True)
-            return {"response": "Lo siento, ocurrió un error al generar la visualización.", "artifacts": [], "message": self.create_message(role="agent", parts=[self.create_text_part("Lo siento, ocurrió un error al generar la visualización.")])}
-
-    async def _handle_analysis_request(self, query: str, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Maneja solicitudes de análisis."""
-        logger.info(f"Manejando solicitud de análisis: {query[:50]}...")
-        # TODO: Usar mcp7_query para obtener datos históricos/métricas desde Supabase.
-        # TODO: Integrar RAG para obtener principios de análisis de NGX o benchmarks relevantes.
-        # TODO: Usar mcp8_think para análisis complejos o multi-paso.
-        try:
-            # Lógica para realizar análisis con Gemini (simplificada)
-            prompt = self.system_instructions + "\n\nDatos:" + json.dumps(data or {}, indent=2) + f"\n\nPregunta: {query}\nProporciona un análisis detallado basado en los datos."
-            response = await self.gemini_client.generate_response(prompt, temperature=0.4)
-            msg = self.create_message(role="agent", parts=[self.create_text_part(response)])
-            return {"response": response, "artifacts": [], "message": msg}
-        except Exception as e:
-            logger.error(f"Error en _handle_analysis_request: {e}", exc_info=True)
-            return {"response": "Lo siento, ocurrió un error al realizar el análisis.", "artifacts": [], "message": self.create_message(role="agent", parts=[self.create_text_part("Lo siento, ocurrió un error al realizar el análisis.")])}
-
-    async def _handle_general_request(self, query: str, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Maneja solicitudes generales o no clasificadas."""
-        logger.info(f"Manejando solicitud general: {query[:50]}...")
-        # TODO: Integrar RAG para proporcionar contexto general relevante a la consulta.
-        try:
-            # Lógica para respuesta general con Gemini (simplificada)
-            prompt = self.system_instructions + f"\n\nConsulta: {query}\nResponde de forma motivadora y basada en datos si están disponibles." + ("\n\nResumen de datos:\n" + json.dumps(data, indent=2) if data else "")
-            response = await self.gemini_client.generate_response(prompt)
-            msg = self.create_message(role="agent", parts=[self.create_text_part(response)])
-            return {"response": response, "artifacts": [], "message": msg}
-        except Exception as e:
-            logger.error(f"Error en _handle_general_request: {e}", exc_info=True)
-            return {"response": "Lo siento, ocurrió un error al procesar tu solicitud.", "artifacts": [], "message": self.create_message(role="agent", parts=[self.create_text_part("Lo siento, ocurrió un error al procesar tu solicitud.")])}
-
-    def _create_agent_card(self) -> AgentCard:
-        """
-        Crea una tarjeta de agente estandarizada según el protocolo A2A.
-        
-        Returns:
-            AgentCard: Tarjeta del agente estandarizada
-        """
-        # Crear ejemplos para la tarjeta del agente
-        examples = [
-            Example(
-                input={"message": "Muéstrame un gráfico de mi progreso de peso"},
-                output={"response": "Aquí tienes la visualización de tu progreso de peso a lo largo del tiempo. Puedes observar una tendencia descendente constante de 0.5kg por semana, lo que se alinea con tus objetivos de pérdida de peso saludable."}
-            ),
-            Example(
-                input={"message": "¿Qué tendencias ves en mis datos de entrenamiento?"},
-                output={"response": "Analizando tus datos de entrenamiento de los últimos 3 meses, he identificado las siguientes tendencias: 1) Aumento del 15% en tu capacidad de levantamiento de peso en ejercicios compuestos, 2) Mejora del 8% en resistencia cardiovascular, 3) Mayor consistencia en los entrenamientos de la mañana vs. los de la tarde. Recomiendo mantener la frecuencia actual y considerar aumentar la intensidad en tus sesiones de fuerza."}
-            ),
-            Example(
-                input={"message": "¿Cómo va mi progreso hacia mi meta de reducción de grasa corporal?"},
-                output={"response": "Tu progreso hacia la reducción de grasa corporal está en camino. Has reducido tu porcentaje de grasa corporal del 22% al 18% en 8 semanas, lo que representa un ritmo saludable de pérdida. Estás al 67% del camino hacia tu objetivo del 15%. Si mantienes este ritmo, alcanzarás tu objetivo en aproximadamente 4 semanas más."}
-            ),
-            Example(
-                input={"message": "Compara mi rendimiento actual con el del mes pasado"},
-                output={"response": "Comparando tu rendimiento actual con el del mes pasado: Fuerza: +7% en ejercicios principales. Resistencia: +12% en tiempo hasta el agotamiento. Recuperación: -15% en tiempo necesario entre series. Consistencia: +3 sesiones más que el mes anterior. En general, muestras una mejora significativa, especialmente en aspectos de resistencia y recuperación."}
-            )
-        ]
-        
-        # Crear la tarjeta del agente
-        return AgentCard(
-            title="NGX Progress Tracker",
-            description="Especialista en seguimiento, análisis y visualización de progreso para optimizar resultados y ajustar estrategias.",
-            instructions="Proporciona detalles sobre qué métricas quieres analizar, el período de tiempo que te interesa o solicita visualizaciones específicas de tu progreso.",
-            examples=examples,
-            capabilities=[
-                "Monitoreo continuo de métricas clave de progreso",
-                "Análisis cuantitativo de datos para extraer insights accionables",
-                "Identificación de tendencias y patrones en tu rendimiento",
-                "Generación de visualizaciones comprensibles de tu progreso",
-                "Seguimiento de metas SMART y evaluación de hitos"
-            ],
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string"},
-                    "user_data": {"type": "object"},
-                    "time_period": {"type": "string"}
-                },
-                "required": ["message"]
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "response": {"type": "string"},
-                    "visualization": {"type": "object"},
-                    "analysis": {"type": "object"},
-                    "recommendations": {"type": "array"}
-                },
-                "required": ["response"]
-            }
-        )
-        
-    def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
-        
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada
-        """
-        return self._create_agent_card().to_dict()
+        else:
+             self.update_state(context_key, context)
+             logger.debug(f"Contexto actualizado en memoria para key={context_key}")

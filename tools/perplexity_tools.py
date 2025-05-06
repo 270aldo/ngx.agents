@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from prototipo.clients.perplexity_client import perplexity_client
-from prototipo.core.skill import Skill, skill_registry
+from clients.perplexity_client import perplexity_client
+from core.skill import Skill, skill_registry
 
 
 class PerplexitySearchInput(BaseModel):

@@ -1,0 +1,429 @@
+"""
+Agente especializado en análisis e interpretación de datos biométricos.
+
+Este agente procesa datos biométricos como HRV, sueño, glucosa, 
+composición corporal, etc., para proporcionar insights personalizados
+y recomendaciones basadas en patrones individuales.
+
+Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
+"""
+import logging
+import uuid
+import time
+import json
+from typing import Dict, Any, Optional, List, Union
+
+try:
+    from google.adk.toolkit import Toolkit
+except ImportError:
+    from adk.toolkit import Toolkit
+
+from clients.gemini_client import GeminiClient
+from clients.supabase_client import SupabaseClient
+from tools.mcp_toolkit import MCPToolkit
+from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
+from agents.base.adk_agent import ADKAgent
+from core.agent_card import AgentCard, Example
+from core.state_manager import StateManager
+from core.logging_config import get_logger
+from core.contracts import create_task, create_result, validate_task, validate_result
+
+# Configurar logger
+logger = get_logger(__name__)
+
+
+class BiometricsInsightEngine(ADKAgent):
+    """
+    Agente especializado en análisis e interpretación de datos biométricos.
+    
+    Este agente procesa datos biométricos como HRV, sueño, glucosa, 
+    composición corporal, etc., para proporcionar insights personalizados
+    y recomendaciones basadas en patrones individuales.
+    
+    Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
+    """
+    
+    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
+        # Definir capacidades y habilidades
+        capabilities = [
+            "biometric_analysis", 
+            "pattern_recognition", 
+            "trend_identification", 
+            "personalized_insights",
+            "data_visualization"
+        ]
+        
+        # Definir skills siguiendo el formato A2A con mejores prácticas
+        skills = [
+            {
+                "id": "biometrics-insight-biometric-analysis",
+                "name": "Análisis de Datos Biométricos",
+                "description": "Analiza e interpreta datos biométricos como HRV, sueño, glucosa, composición corporal y otros marcadores para identificar patrones y oportunidades de mejora",
+                "tags": ["biometrics", "health-data", "analysis", "hrv", "sleep", "glucose"],
+                "examples": [
+                    "Analiza mis datos de HRV de la última semana",
+                    "Interpreta mis métricas de sueño y explica qué significan",
+                    "Qué indican mis niveles de glucosa después de las comidas"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
+            },
+            {
+                "id": "biometrics-insight-pattern-recognition",
+                "name": "Reconocimiento de Patrones",
+                "description": "Identifica patrones recurrentes en datos biométricos a lo largo del tiempo y su relación con hábitos, comportamientos y factores externos",
+                "tags": ["patterns", "correlations", "time-series", "trends", "causality"],
+                "examples": [
+                    "¿Qué patrones ves en mi recuperación relacionados con mi alimentación?",
+                    "Identifica patrones en mi HRV relacionados con mi calidad de sueño",
+                    "¿Cómo afectan mis entrenamientos a mis métricas de recuperación?"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
+            },
+            {
+                "id": "biometrics-insight-trend-identification",
+                "name": "Identificación de Tendencias",
+                "description": "Analiza tendencias a largo plazo en datos biométricos para identificar mejoras, deterioros o cambios significativos en el tiempo",
+                "tags": ["trends", "longitudinal-analysis", "progress", "regression", "changes"],
+                "examples": [
+                    "Muestra la evolución de mi HRV durante los últimos 3 meses",
+                    "¿Cómo ha cambiado mi calidad de sueño desde que empecé a meditar?",
+                    "Analiza la tendencia de mi recuperación después de entrenamientos intensos"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown"]
+            },
+            {
+                "id": "biometrics-insight-data-visualization",
+                "name": "Visualización de Datos",
+                "description": "Crea representaciones visuales de datos biométricos para facilitar la comprensión de patrones y relaciones entre diferentes métricas",
+                "tags": ["visualization", "charts", "graphs", "comparison", "dashboard"],
+                "examples": [
+                    "Muestra la relación entre mi sueño y mi HRV",
+                    "Visualiza mis niveles de estrés durante la semana laboral vs. fin de semana",
+                    "Compara mis métricas de recuperación antes y después de cambiar mi dieta"
+                ],
+                "inputModes": ["text", "json"],
+                "outputModes": ["text", "json", "markdown", "image"]
+            }
+        ]
+        
+        # Inicializar agente base con los parámetros definidos
+        super().__init__(
+            agent_id="biometrics_insight_engine",
+            name="NGX Biometrics Insight Engine",
+            description="Especialista en análisis e interpretación de datos biométricos para proporcionar insights personalizados y recomendaciones basadas en patrones individuales.",
+            capabilities=capabilities,
+            toolkit=toolkit,
+            a2a_server_url=a2a_server_url or "https://biometrics-api.ngx-agents.com/a2a",
+            state_manager=state_manager,
+            version="1.2.0",
+            skills=skills,
+            provider={
+                "organization": "NGX Health & Performance",
+                "url": "https://ngx-agents.com"
+            },
+            documentation_url="https://docs.ngx-agents.com/biometrics-insight-engine"
+        )
+        
+        # Inicializar clientes y herramientas
+        self.gemini_client = GeminiClient()
+        self.supabase_client = SupabaseClient()
+        
+        # Inicializar estado interno
+        self._state = {}
+    
+    async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
+        """
+        Obtiene el contexto de la conversación desde el StateManager.
+        
+        Args:
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            
+        Returns:
+            Dict[str, Any]: Contexto de la conversación
+        """
+        context = {
+            "history": [],
+            "analyses": [],
+            "user_profile": {},
+            "biometric_data": {}
+        }
+        
+        if user_id and session_id and self.state_manager:
+            try:
+                # Intentar obtener el contexto del StateManager
+                stored_context = await self.state_manager.get_context(user_id, session_id)
+                if stored_context:
+                    context = stored_context
+                    logger.info(f"Contexto recuperado para user_id={user_id}, session_id={session_id}")
+            except Exception as e:
+                logger.warning(f"Error al obtener contexto desde StateManager: {e}")
+        
+        return context
+    
+    async def _update_context(self, context: Dict[str, Any], user_id: Optional[str], session_id: Optional[str]) -> None:
+        """
+        Actualiza el contexto de la conversación en el StateManager.
+        
+        Args:
+            context: Contexto actualizado
+            user_id: ID del usuario
+            session_id: ID de la sesión
+        """
+        if user_id and session_id and self.state_manager:
+            try:
+                await self.state_manager.set_context(user_id, session_id, context)
+                logger.info(f"Contexto actualizado para user_id={user_id}, session_id={session_id}")
+            except Exception as e:
+                logger.warning(f"Error al guardar contexto en StateManager: {e}")
+    
+    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, 
+                       session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """
+        Implementación asíncrona del procesamiento del agente BiometricsInsightEngine.
+        
+        Sobrescribe el método de la clase base para proporcionar la implementación
+        específica del agente especializado en análisis de datos biométricos.
+        
+        Args:
+            input_text: Texto de entrada del usuario
+            user_id: ID del usuario (opcional)
+            session_id: ID de la sesión (opcional)
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta estandarizada del agente
+        """
+        # Delegamos al método _process_request para el procesamiento principal
+        return await self._process_request(input_text, user_id, session_id, **kwargs)
+    
+    async def _process_request(self, input_text: str, user_id: Optional[str] = None, 
+                           session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la solicitud del usuario y genera una respuesta utilizando las skills adecuadas.
+        
+        Args:
+            input_text: Texto de entrada del usuario
+            user_id: ID del usuario (opcional)
+            session_id: ID de la sesión (opcional)
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta estandarizada del agente
+        """
+        start_time = time.time()
+        result = {}
+        analysis_id = None
+        response_text = ""
+        response_type = "text"
+        
+        try:
+            # Generar ID de usuario y sesión si no se proporcionan
+            user_id = user_id or str(uuid.uuid4())
+            session_id = session_id or str(uuid.uuid4())
+            
+            # Obtener contexto de la conversación
+            context = await self._get_context(user_id, session_id)
+            
+            # Obtener perfil del usuario si está disponible
+            user_profile = kwargs.get("user_profile", {})
+            
+            # Obtener datos biométricos del usuario
+            # En un entorno real, esto se obtendría de una API o base de datos
+            # Para este ejemplo, usamos datos de muestra
+            biometric_data = kwargs.get("biometric_data", self._get_sample_biometric_data())
+            
+            # Analizar la entrada del usuario para determinar la skill a utilizar
+            if any(keyword in input_text.lower() for keyword in ["visualiza", "gráfico", "muestra", "compara", "dashboard"]):
+                # Usar skill de visualización de datos
+                try:
+                    result = await self.execute_skill("data_visualization", 
+                                                   input_text=input_text, 
+                                                   biometric_data=biometric_data,
+                                                   user_profile=user_profile, 
+                                                   context=context)
+                    
+                    # Generar respuesta
+                    if isinstance(result, dict) and "response" in result:
+                        response_text = result["response"]
+                    else:
+                        # Convertir resultado estructurado a texto
+                        response_text = "Visualización de datos biométricos:\n\n"
+                        if isinstance(result, dict):
+                            for key, value in result.items():
+                                if key != "response":
+                                    response_text += f"**{key.replace('_', ' ').title()}**: {value}\n"
+                        else:
+                            response_text = str(result)
+                    
+                    # Almacenar resultado en el estado
+                    visualizations = self._state.get("visualizations", {})
+                    analysis_id = str(uuid.uuid4())
+                    visualizations[analysis_id] = result
+                    self.update_state("visualizations", visualizations)
+                    response_type = "data_visualization"
+                    
+                except Exception as e:
+                    logger.error(f"Error al ejecutar skill data_visualization: {e}")
+                    response_text = "Lo siento, ha ocurrido un error al visualizar tus datos biométricos."
+                    result = {"error": str(e)}
+                    analysis_id = None
+                
+            elif any(keyword in input_text.lower() for keyword in ["tendencia", "tendencias", "evolución", "cambio", "progreso"]):
+                # Usar skill de análisis de tendencias
+                try:
+                    result = await self.execute_skill("trend_identification", 
+                                                   input_text=input_text, 
+                                                   biometric_data=biometric_data,
+                                                   user_profile=user_profile, 
+                                                   context=context)
+                    
+                    # Generar respuesta
+                    if isinstance(result, dict) and "response" in result:
+                        response_text = result["response"]
+                    else:
+                        # Convertir resultado estructurado a texto
+                        response_text = "Análisis de tendencias biométricas:\n\n"
+                        if isinstance(result, dict):
+                            for key, value in result.items():
+                                if key != "response":
+                                    response_text += f"**{key.replace('_', ' ').title()}**: {value}\n"
+                        else:
+                            response_text = str(result)
+                    
+                    # Almacenar resultado en el estado
+                    trend_analyses = self._state.get("trend_analyses", {})
+                    analysis_id = str(uuid.uuid4())
+                    trend_analyses[analysis_id] = result
+                    self.update_state("trend_analyses", trend_analyses)
+                    response_type = "trend_analysis"
+                    
+                except Exception as e:
+                    logger.error(f"Error al ejecutar skill trend_identification: {e}")
+                    response_text = "Lo siento, ha ocurrido un error al analizar las tendencias de tus datos biométricos."
+                    result = {"error": str(e)}
+                    analysis_id = None
+                
+            elif any(keyword in input_text.lower() for keyword in ["patrón", "patrones", "relación", "correlación", "conexión"]):
+                # Usar skill de reconocimiento de patrones
+                try:
+                    result = await self.execute_skill("pattern_recognition", 
+                                                   input_text=input_text, 
+                                                   biometric_data=biometric_data,
+                                                   user_profile=user_profile, 
+                                                   context=context)
+                    
+                    # Generar respuesta
+                    if isinstance(result, dict) and "response" in result:
+                        response_text = result["response"]
+                    else:
+                        # Convertir resultado estructurado a texto
+                        response_text = "Reconocimiento de patrones biométricos:\n\n"
+                        if isinstance(result, dict):
+                            for key, value in result.items():
+                                if key != "response":
+                                    response_text += f"**{key.replace('_', ' ').title()}**: {value}\n"
+                        else:
+                            response_text = str(result)
+                    
+                    # Almacenar resultado en el estado
+                    pattern_analyses = self._state.get("pattern_analyses", {})
+                    analysis_id = str(uuid.uuid4())
+                    pattern_analyses[analysis_id] = result
+                    self.update_state("pattern_analyses", pattern_analyses)
+                    response_type = "pattern_analysis"
+                    
+                except Exception as e:
+                    logger.error(f"Error al ejecutar skill pattern_recognition: {e}")
+                    response_text = "Lo siento, ha ocurrido un error al reconocer patrones en tus datos biométricos."
+                    result = {"error": str(e)}
+                    analysis_id = None
+                
+            else:
+                # Usar skill de análisis biométrico general
+                try:
+                    result = await self.execute_skill("biometric_analysis", 
+                                                   input_text=input_text, 
+                                                   biometric_data=biometric_data,
+                                                   user_profile=user_profile, 
+                                                   context=context)
+                    
+                    # Generar respuesta
+                    if isinstance(result, dict) and "response" in result:
+                        response_text = result["response"]
+                    else:
+                        # Convertir resultado estructurado a texto
+                        response_text = "Análisis de datos biométricos:\n\n"
+                        if isinstance(result, dict):
+                            for key, value in result.items():
+                                if key != "response":
+                                    response_text += f"**{key.replace('_', ' ').title()}**: {value}\n"
+                        else:
+                            response_text = str(result)
+                    
+                    # Almacenar resultado en el estado
+                    biometric_analyses = self._state.get("biometric_analyses", {})
+                    analysis_id = str(uuid.uuid4())
+                    biometric_analyses[analysis_id] = result
+                    self.update_state("biometric_analyses", biometric_analyses)
+                    response_type = "biometric_analysis"
+                    
+                except Exception as e:
+                    logger.error(f"Error al ejecutar skill biometric_analysis: {e}")
+                    response_text = "Lo siento, ha ocurrido un error al analizar tus datos biométricos."
+                    result = {"error": str(e)}
+                    analysis_id = None
+            
+            # Actualizar el contexto con la interacción
+            context["history"] = context.get("history", []) + [{
+                "user": input_text,
+                "bot": response_text,
+                "timestamp": time.time(),
+                "analysis_type": response_type
+            }]
+            await self._update_context(context, user_id, session_id)
+            
+            # Devolver respuesta estandarizada según el protocolo A2A
+            return {
+                "agent_id": "biometrics_insight_engine",
+                "version": "1.2.0",
+                "response": {
+                    "text": response_text,
+                    "type": response_type,
+                    "analysis_id": analysis_id,
+                    "metadata": {
+                        "generated_at": time.time(),
+                        "model": "gemini-2.0-flash",
+                        "prompt_tokens": len(input_text) // 4,  # Estimación aproximada
+                        "completion_tokens": len(response_text) // 4  # Estimación aproximada
+                    }
+                },
+                "user_id": user_id,
+                "session_id": session_id,
+                "timestamp": time.time(),
+                "conversation_id": session_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error al procesar solicitud: {e}")
+            # Devolver respuesta de error estandarizada según el protocolo A2A
+            return {
+                "agent_id": "biometrics_insight_engine",
+                "version": "1.2.0",
+                "response": {
+                    "text": f"Lo siento, ha ocurrido un error al procesar tu solicitud: {str(e)}",
+                    "type": "error",
+                    "metadata": {
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "generated_at": time.time()
+                    }
+                },
+                "user_id": user_id,
+                "session_id": session_id,
+                "timestamp": time.time(),
+                "conversation_id": session_id
+            }

@@ -12,9 +12,10 @@ from typing import Any, Dict, List, Optional, Union, BinaryIO
 
 from google.cloud import storage
 from google.cloud.storage import Blob, Bucket
+from google.oauth2 import service_account
 
-from prototipo.clients.base_client import BaseClient, retry_with_backoff
-from prototipo.config.secrets import settings
+from clients.base_client import BaseClient, retry_with_backoff
+from config.secrets import settings
 
 logger = logging.getLogger(__name__)
 

@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from prototipo.clients.vertex_client import vertex_client
-from prototipo.core.skill import Skill, skill_registry
+from clients.vertex_client import vertex_client
+from core.skill import Skill, skill_registry
 
 
 class VertexGenerateInput(BaseModel):

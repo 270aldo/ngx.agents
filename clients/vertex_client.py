@@ -10,10 +10,11 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from google.cloud import aiplatform
+from google.protobuf import json_format
 from vertexai.generative_models import GenerativeModel, GenerationConfig, Part
 
-from prototipo.clients.base_client import BaseClient, retry_with_backoff
-from prototipo.config.secrets import settings
+from clients.base_client import BaseClient, retry_with_backoff
+from config.secrets import settings
 
 logger = logging.getLogger(__name__)
 

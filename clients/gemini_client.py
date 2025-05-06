@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional, Union, BinaryIO
 import google.generativeai as genai
 from google.generativeai.types import GenerationConfig
 
-from prototipo.clients.base_client import BaseClient, retry_with_backoff
-from prototipo.config.secrets import settings
+from clients.base_client import BaseClient, retry_with_backoff
+from config.secrets import settings
 
 logger = logging.getLogger(__name__)
 

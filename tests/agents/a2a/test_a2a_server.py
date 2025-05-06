@@ -12,13 +12,13 @@ from unittest.mock import patch, MagicMock
 import sys
 import os
 # Añadir el directorio raíz del proyecto al sys.path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 sys.path.insert(0, project_root)
 
-from prototipo.a2a_server import app, registered_agents, tasks, manager
-from prototipo.a2a import (
+from infrastructure.a2a_server import app, registered_agents, tasks, manager
+from infrastructure.a2a.models import (
     TaskStatus, AgentStatus, MessageRole, PartType,
-    AgentInfo, TaskRequest, AgentMessage, AgentStatusUpdate
+    AgentInfo, TaskRequest, AgentMessage, AgentStatusUpdate, Task, Message, Part
 )
 
 # Cliente de prueba para FastAPI

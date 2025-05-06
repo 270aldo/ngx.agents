@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from prototipo.clients.gemini_client import gemini_client
-from prototipo.core.skill import Skill, skill_registry
+from clients.gemini_client import gemini_client
+from core.skill import Skill, skill_registry
 
 
 class GeminiChatInput(BaseModel):

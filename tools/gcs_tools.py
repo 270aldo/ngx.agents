@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from prototipo.clients.gcs_client import gcs_client
-from prototipo.core.skill import Skill, skill_registry
+from clients.gcs_client import gcs_client
+from core.skill import Skill, skill_registry
 
 
 class GCSUploadInput(BaseModel):
