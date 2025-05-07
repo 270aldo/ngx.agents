@@ -212,85 +212,137 @@ class PrecisionNutritionArchitect(ADKAgent):
         logger.info(f"{self.name} ({self.agent_id}) iniciado y conectado/registrado.")
 
     # --- Stubs de Métodos de Skill --- 
-    async def _skill_create_meal_plan(self, input_text: str, **kwargs) -> Dict[str, Any]:
-        user_id = kwargs.get('user_id')
-        session_id = kwargs.get('session_id')
-        user_profile = kwargs.get('user_profile')
-        # context = kwargs.get('context') # context variable is not directly used later, full_context is fetched
-        logger.info(f"Skill: Creando plan de comidas para '{input_text[:30]}...' (user_id={user_id}, session_id={session_id})")
-
-        if user_profile is None:
-            logger.debug(f"User profile not provided directly for meal plan. Attempting to fetch from context for user_id={user_id}, session_id={session_id}")
-            full_context = await self._get_context(user_id, session_id) 
-            user_profile = full_context.get("client_profile", {})
-            if not user_profile:
-                logger.warning(f"User profile still empty after fetching from context for meal plan creation. Proceeding with empty profile.")
-            else:
-                logger.debug(f"User profile obtained from context for meal plan: {bool(user_profile)}")
-
+    async def _skill_create_meal_plan(self, params: CreateMealPlanInput) -> CreateMealPlanOutput:
+        """
+        Genera un plan de comidas personalizado basado en el perfil y preferencias del usuario.
+        Args:
+            params: CreateMealPlanInput
+        Returns:
+            CreateMealPlanOutput
+        """
         try:
-            meal_plan = await self._generate_meal_plan(input_text, user_profile)
-            return create_result(status="success", response_data=meal_plan, artifacts=[self.create_artifact("meal_plan", meal_plan)])
+            # Uso de los datos del modelo Pydantic
+            meal_plan_dict = await self._generate_meal_plan(
+                params.input_text,
+                params.user_profile or {}
+            )
+            return CreateMealPlanOutput(**meal_plan_dict)
         except Exception as e:
             logger.error(f"Error en _skill_create_meal_plan: {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
+            # Devolver salida básica en caso de error
+            return CreateMealPlanOutput(
+                daily_plan=[],
+                total_calories=None,
+                macronutrient_distribution=None,
+                recommendations=["Error al generar el plan de comidas. Consulte a un profesional."],
+                notes=str(e)
+            )
 
-    async def _skill_recommend_supplements(self, input_text: str, **kwargs) -> Dict[str, Any]:
-        user_id = kwargs.get('user_id')
-        session_id = kwargs.get('session_id')
-        user_profile = kwargs.get('user_profile')
-        # context = kwargs.get('context') # context variable is not directly used later, full_context is fetched
-        logger.info(f"Skill: Recomendando suplementos para '{input_text[:30]}...' (user_id={user_id}, session_id={session_id})")
-
-        if user_profile is None:
-            logger.debug(f"User profile not provided directly for supplement recommendation. Attempting to fetch from context for user_id={user_id}, session_id={session_id}")
-            full_context = await self._get_context(user_id, session_id)
-            user_profile = full_context.get("client_profile", {})
-            if not user_profile:
-                logger.warning(f"User profile still empty after fetching from context for supplement recommendation. Proceeding with empty profile.")
-            else:
-                logger.debug(f"User profile obtained from context for supplements: {bool(user_profile)}")
-
+    async def _skill_recommend_supplements(self, params: RecommendSupplementsInput) -> RecommendSupplementsOutput:
+        """
+        Recomienda suplementos personalizados según el perfil y biomarcadores del usuario.
+        Args:
+            params: RecommendSupplementsInput
+        Returns:
+            RecommendSupplementsOutput
+        """
         try:
-            recommendations = await self._generate_supplement_recommendation(input_text, user_profile)
-            return create_result(status="success", response_data=recommendations, artifacts=[self.create_artifact("supplement_recommendations", recommendations)])
+            rec_dict = await self._generate_supplement_recommendation(
+                params.input_text,
+                params.user_profile or {}
+            )
+            return RecommendSupplementsOutput(**rec_dict)
         except Exception as e:
             logger.error(f"Error en _skill_recommend_supplements: {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
+            return RecommendSupplementsOutput(
+                supplements=[],
+                general_recommendations="Error al generar recomendaciones de suplementos. Consulte a un profesional.",
+                notes=str(e)
+            )
 
-    async def _skill_analyze_biomarkers(self, input_text: str, **kwargs) -> Dict[str, Any]:
+    async def _skill_analyze_biomarkers(self, params: AnalyzeBiomarkersInput) -> AnalyzeBiomarkersOutput:
         """
         Analiza biomarcadores y proporciona recomendaciones nutricionales y de estilo de vida.
         
         Args:
+            params: Parámetros de entrada para el análisis de biomarcadores
+        
+        Returns:
+            AnalyzeBiomarkersOutput: Resultado del análisis de biomarcadores
+        """
+        try:
+            # Generar análisis de biomarcadores usando el método interno (debe devolver un dict compatible)
+            biomarker_data = await self._generate_biomarker_analysis(params.input_text, params.biomarkers)
+            
+            analyses_list = []
+            for analysis in biomarker_data.get("analyses", []):
+                analyses_list.append(BiomarkerAnalysis(
+                    name=analysis.get("name", "No especificado"),
+                    value=analysis.get("value", "No disponible"),
+                    status=analysis.get("status", "No evaluado"),
+                    reference_range=analysis.get("reference_range", "No disponible"),
+                    interpretation=analysis.get("interpretation", "No disponible"),
+                    nutritional_implications=analysis.get("nutritional_implications", ["No especificado"]),
+                    recommendations=analysis.get("recommendations", ["Consulte a un profesional"])
+                ))
+            
+            return AnalyzeBiomarkersOutput(
+                analyses=analyses_list,
+                overall_assessment=biomarker_data.get("overall_assessment", "No se pudo realizar una evaluación completa."),
+                nutritional_priorities=biomarker_data.get("nutritional_priorities", ["Mantener una dieta equilibrada"]),
+                supplement_considerations=biomarker_data.get("supplement_considerations")
+            )
+        except Exception as e:
+            logger.error(f"Error en skill_analyze_biomarkers: {e}", exc_info=True)
+            # Devolver análisis básico en caso de error
+            return AnalyzeBiomarkersOutput(
+                analyses=[
+                    BiomarkerAnalysis(
+                        name="Error en análisis",
+                        value="N/A",
+                        status="No evaluado",
+                        reference_range="N/A",
+                        interpretation="No se pudo analizar debido a un error",
+                        nutritional_implications=["Mantener una dieta equilibrada"],
+                        recommendations=["Consulte a un profesional de la salud"]
+                    )
+                ],
+                overall_assessment="No se pudo realizar el análisis debido a un error en el procesamiento.",
+                nutritional_priorities=["Mantener una dieta equilibrada", "Consultar con un profesional"]
+            )
+
+    async def _skill_plan_chrononutrition(self, input_text: str, **kwargs) -> Dict[str, Any]:
+        """
+        Planifica estrategias de crononutrición personalizadas basadas en la entrada del usuario y su perfil.
+        
+        Args:
             input_text: Texto de entrada del usuario
-            **kwargs: Argumentos adicionales como user_id, session_id, biomarkers, etc.
+            **kwargs: Argumentos adicionales como user_id, session_id, user_profile, etc.
             
         Returns:
-            Dict[str, Any]: Resultado del análisis de biomarcadores
+            Dict[str, Any]: Resultado del plan de crononutrición
         """
         user_id = kwargs.get('user_id')
         session_id = kwargs.get('session_id')
-        biomarkers = kwargs.get('biomarkers') # Datos directos de biomarcadores
-        logger.info(f"Skill: Analizando biomarcadores para '{input_text[:30]}...' (user_id={user_id}, session_id={session_id})")
+        user_profile = kwargs.get('user_profile')
+        logger.info(f"Skill: Planificando crononutrición para '{input_text[:30]}...' (user_id={user_id}, session_id={session_id})")
 
-        if biomarkers is None:
-            logger.debug("Datos de biomarcadores no proporcionados directamente. Intentando obtener del perfil.")
+        if user_profile is None:
+            logger.debug("User profile no proporcionado directamente para crononutrición. Intentando obtener del contexto.")
             full_context = await self._get_context(user_id, session_id)
             user_profile = full_context.get("client_profile", {})
-            biomarkers = user_profile.get("biometrics", {}) # Asumiendo que están en client_profile.biometrics
-            if not biomarkers:
-                logger.error("Datos de biomarcadores no proporcionados y no encontrados en el perfil.")
-                return create_result(status="error", error_message="Datos de biomarcadores no proporcionados y no encontrados en el perfil.")
-            logger.debug(f"Biomarcadores obtenidos del perfil: {bool(biomarkers)}")
+            if not user_profile:
+                logger.warning("User profile sigue vacío después de obtener del contexto para crononutrición. Procediendo con perfil vacío.")
+            else:
+                logger.debug(f"User profile obtenido del contexto para crononutrición: {bool(user_profile)}")
         else:
-            logger.debug(f"Biomarcadores proporcionados directamente: {bool(biomarkers)}")
+            logger.debug(f"User profile proporcionado directamente para crononutrición: {bool(user_profile)}")
 
         try:
-            analysis = await self._generate_biomarker_analysis(input_text, biomarkers)
-            return create_result(status="success", response_data=analysis, artifacts=[self.create_artifact("biomarker_analysis", analysis)])
+            chronoplan = await self._generate_chrononutrition_plan(input_text, user_profile or {})
+            return create_result(status="success", response_data=chronoplan, artifacts=[self.create_artifact("chrononutrition_plan", chronoplan)])
         except Exception as e:
-            logger.error(f"Error en _skill_analyze_biomarkers: {e}", exc_info=True)
+            logger.error(f"Error en _skill_plan_chrononutrition: {e}", exc_info=True)
             return create_result(status="error", error_message=str(e))
             
     async def _generate_biomarker_analysis(self, user_input: str, biomarkers: Dict[str, Any]) -> Dict[str, Any]:
