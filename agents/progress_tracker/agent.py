@@ -1,7 +1,7 @@
 import logging
 import uuid
 import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 import json
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,12 +9,24 @@ import os
 import datetime
 from google.cloud import aiplatform
 
-from adk.toolkit import Toolkit
+from pydantic import BaseModel, Field
+
+from agents.base.adk_agent import ADKAgent, Skill, create_result
+from agents.progress_tracker.schemas import (
+    AnalyzeProgressInput,
+    AnalyzeProgressOutput,
+    VisualizeProgressInput,
+    VisualizeProgressOutput,
+    CompareProgressInput,
+    CompareProgressOutput,
+    ProgressAnalysisArtifact,
+    ProgressVisualizationArtifact
+)
+
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
-from tools.mcp_client import MCPClient  # Importar MCPClient
-from agents.base.adk_agent import ADKAgent
+from tools.mcp_client import MCPClient
 from core.state_manager import StateManager
 from core.logging_config import get_logger
 
@@ -26,99 +38,131 @@ class ProgressTracker(ADKAgent):
     Agente especializado en seguimiento y análisis de progreso del usuario.
     """
 
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None, **kwargs):
-        # Definir atributos del agente
-        agent_id="progress_tracker"
-        name="NGX Progress Tracker"
-        description="Especialista en seguimiento, análisis y visualización de progreso"
-        capabilities = [
-            "progress_monitoring",
+    def __init__(
+        self,
+        agent_id: str = "progress_tracker",
+        name: str = "NGX Progress Tracker",
+        description: str = "Especialista en seguimiento, análisis y visualización de progreso",
+        mcp_toolkit: Optional[Any] = None,
+        a2a_server_url: Optional[str] = None,
+        state_manager: Optional[Any] = None,
+        model: str = "gemini-1.5-flash",
+        instruction: str = "Eres un analista de datos especializado en seguimiento de progreso y visualización.",
+        **kwargs
+    ):
+        agent_id_val = agent_id
+        name_val = name
+        description_val = description
+        
+        # Capacidades para BaseAgent y A2A
+        capabilities_val = [
+            "analyze_progress",
+            "visualize_progress",
+            "compare_progress",
             "data_analysis",
-            "trend_identification",
-            "visualization",
-            "goal_tracking"
+            "trend_identification"
         ]
-        version="1.1.0"
-        # Definir estructura de skills para Agent Card
-        agent_skills_definition = [
+        
+        # Herramientas para Google ADK
+        google_adk_tools_val = [
+            # Aquí irían las herramientas específicas de Google ADK si se necesitan
+        ]
+        
+        # Skills para A2A
+        a2a_skills_val = [
             {
                 "name": "analyze_progress",
                 "description": "Analiza los datos de progreso del usuario e identifica tendencias.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "string", "description": "ID del usuario."},
-                        "metrics": {"type": "array", "items": {"type": "string"}, "description": "Métricas a analizar (opcional)."},
-                        "time_period": {"type": "string", "description": "Periodo de tiempo (ej. 'last_month', 'last_3_months')."}
-                    },
-                    "required": ["user_id", "time_period"]
-                },
-                "output_schema": {"type": "object", "description": "Análisis del progreso con insights."}
+                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "user_id": {"type": "string"}, "time_period": {"type": "string"}, "metrics": {"type": "array"} }, "required": ["user_id", "time_period"] },
+                "output_schema": { "type": "object", "properties": { "analysis": {"type": "object"} } }
             },
             {
                 "name": "visualize_progress",
                 "description": "Genera una visualización (gráfico) del progreso del usuario.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "string", "description": "ID del usuario."},
-                        "metric": {"type": "string", "description": "Métrica a visualizar (ej. 'weight', 'performance')."},
-                        "time_period": {"type": "string", "description": "Periodo de tiempo."},
-                        "chart_type": {"type": "string", "description": "Tipo de gráfico (ej. 'line', 'bar')."}
-                    },
-                    "required": ["user_id", "metric", "time_period", "chart_type"]
-                },
-                "output_schema": {"type": "object", "description": "URL o datos de la imagen de visualización."}
+                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "user_id": {"type": "string"}, "metric": {"type": "string"}, "time_period": {"type": "string"}, "chart_type": {"type": "string"} }, "required": ["user_id", "metric", "time_period"] },
+                "output_schema": { "type": "object", "properties": { "visualization": {"type": "object"} } }
             },
             {
                 "name": "compare_progress",
                 "description": "Compara el progreso entre dos periodos de tiempo.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "string", "description": "ID del usuario."},
-                        "period1": {"type": "string", "description": "Primer periodo (ej. 'last_month')."},
-                        "period2": {"type": "string", "description": "Segundo periodo (ej. 'previous_month')."},
-                        "metrics": {"type": "array", "items": {"type": "string"}, "description": "Métricas a comparar."}
-                    },
-                    "required": ["user_id", "period1", "period2", "metrics"]
-                },
-                "output_schema": {"type": "object", "description": "Comparación del progreso con diferencias clave."}
+                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "user_id": {"type": "string"}, "period1": {"type": "string"}, "period2": {"type": "string"}, "metrics": {"type": "array"} }, "required": ["user_id", "period1", "period2"] },
+                "output_schema": { "type": "object", "properties": { "comparison": {"type": "object"} } }
             }
         ]
         
-        # Llamar al constructor de ADKAgent
+        # Instanciar MCPToolkit si no se provee
+        actual_adk_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
+        
+        # Asegurar que state_manager se pasa a través de kwargs si está presente
+        if state_manager:
+            kwargs['state_manager'] = state_manager
+            
         super().__init__(
-            agent_id=agent_id,
-            name=name,
-            description=description,
-            capabilities=capabilities,
-            toolkit=toolkit,
-            version=version,
+            agent_id=agent_id_val,
+            name=name_val,
+            description=description_val,
+            capabilities=capabilities_val,
+            model=model,
+            instruction=instruction,
+            google_adk_tools=google_adk_tools_val,
+            a2a_skills=a2a_skills_val,
+            adk_toolkit=actual_adk_toolkit,
             a2a_server_url=a2a_server_url,
-            state_manager=state_manager, # Pasar state_manager a la clase base
-            skills=agent_skills_definition, # Pasar definición de skills
+            endpoint=f"/agents/{agent_id_val}",
             **kwargs
         )
         
-        # Inicialización de Clientes y Herramientas (si es necesario específicamente aquí)
+        # Inicializar clientes específicos del agente
+        self.gemini_client = GeminiClient(model_name=self.model)
+        self.supabase_client = SupabaseClient()
+        
+        # Directorio para guardar gráficos temporales
+        self.tmp_dir = os.path.join(os.getcwd(), "tmp_progress")
+        # Crear directorio si no existe
+        if not os.path.exists(self.tmp_dir):
+            os.makedirs(self.tmp_dir, exist_ok=True)
+        
+        # Definir skills
+        self.skills = {
+            "analyze_progress": Skill(
+                name="analyze_progress",
+                description="Analiza los datos de progreso del usuario e identifica tendencias.",
+                method=self._skill_analyze_progress,
+                input_schema=AnalyzeProgressInput,
+                output_schema=AnalyzeProgressOutput,
+            ),
+            "visualize_progress": Skill(
+                name="visualize_progress",
+                description="Genera una visualización (gráfico) del progreso del usuario.",
+                method=self._skill_visualize_progress,
+                input_schema=VisualizeProgressInput,
+                output_schema=VisualizeProgressOutput,
+            ),
+            "compare_progress": Skill(
+                name="compare_progress",
+                description="Compara el progreso entre dos periodos de tiempo.",
+                method=self._skill_compare_progress,
+                input_schema=CompareProgressInput,
+                output_schema=CompareProgressOutput,
+            ),
+        }
+        
+        logger.info(f"Agente {self.name} inicializado con {len(self.skills)} skills: {list(self.skills.keys())}")
+        
+        # Configurar sistema de instrucciones para Gemini
+        self.system_instructions = """Eres un analista de datos especializado en seguimiento de progreso y visualización. 
+        Tu objetivo es proporcionar análisis claros, concisos y útiles sobre el progreso del usuario en diversas métricas.
+        Identifica tendencias, patrones y proporciona recomendaciones accionables basadas en datos."""
+        
+        # Inicializar AI Platform si es necesario
         gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
         gcp_region = os.getenv("GCP_REGION", "us-central1")
         try:
             logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
             aiplatform.init(project=gcp_project_id, location=gcp_region)
-            logger.info("AI Platform inicializado correctamente.")
+            logger.info("AI Platform (Vertex AI SDK) inicializado correctamente para ProgressTracker.")
         except Exception as e:
-            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
-            # Considerar comportamiento si Vertex AI no está disponible
-        
-        self.gemini_client = GeminiClient(model_name="gemini-1.5-flash") # Asegurarse que el modelo es el correcto
-        # self.supabase_client = SupabaseClient() # Descomentar si se usa activamente
-        # self.mcp_toolkit = MCPToolkit() # Descomentar si se usa activamente
-        # self.mcp_client = MCPClient() # Descomentar si se usa activamente
-        
-        # Directorio para guardar gráficos temporales
-        self.tmp_dir = os.path.join(os.getcwd(), "tmp_progress")
+            logger.error(f"Error al inicializar AI Platform para ProgressTracker: {e}", exc_info=True)
         os.makedirs(self.tmp_dir, exist_ok=True)
 
         # Instrucciones del sistema para el agente (se pueden pasar a super() si se quiere)
@@ -134,14 +178,26 @@ class ProgressTracker(ADKAgent):
     # --- Métodos de Skill --- 
     # Estos métodos contienen la lógica que antes estaba en execute_task
     
-    async def _skill_analyze_progress(self, user_id: str, time_period: str, metrics: Optional[List[str]] = None, **kwargs) -> Dict[str, Any]:
+    async def _skill_analyze_progress(self, input_text: str, **kwargs) -> Dict[str, Any]:
         """Skill para analizar el progreso del usuario."""
-        logger.info(f"Executing skill: analyze_progress for user {user_id} over {time_period}")
+        logger.info(f"Skill '{self._skill_analyze_progress.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        time_period = kwargs.get("time_period", "last_month")
+        metrics = kwargs.get("metrics")
+        
         try:
+            # Obtener client_profile del contexto si es necesario
+            full_context = await self._get_context(user_id, session_id)
+            client_profile_from_context = full_context.get("client_profile", {})
+            
             # 1. Obtener datos (simulado por ahora, idealmente de Supabase o StateManager)
             user_data = await self._get_user_data(user_id, time_period, metrics)
             if not user_data:
-                return {"status": "error", "message": "No se encontraron datos para el análisis."}
+                return create_result(
+                    status="error", 
+                    error_message="No se encontraron datos para el análisis."
+                )
 
             # 2. Preparar prompt para Gemini
             metrics_str = ", ".join(metrics) if metrics else "todas las métricas disponibles"
@@ -152,28 +208,53 @@ class ProgressTracker(ADKAgent):
             analysis_result = await self.gemini_client.generate_structured_output(prompt)
             
             if not isinstance(analysis_result, dict):
-                 # Si no es JSON, intentar envolverlo
-                 analysis_result = {"analysis_summary": str(analysis_result)}
+                # Si no es JSON, intentar envolverlo
+                analysis_result = {"analysis_summary": str(analysis_result)}
 
             # 4. (Opcional) Guardar análisis en estado
             analysis_id = f"analysis_{user_id}_{time.time():.0f}"
-            self.update_state(f"analysis_{analysis_id}", analysis_result) 
+            if hasattr(self, 'update_state'):
+                self.update_state(f"analysis_{analysis_id}", analysis_result)
+
+            # 5. Crear artefacto
+            artifact = self.create_artifact(
+                label="ProgressAnalysis", 
+                content_type="application/json",
+                data=analysis_result
+            )
 
             logger.info(f"Análisis completado para user {user_id}")
-            return {"status": "success", "analysis_id": analysis_id, "result": analysis_result}
+            return create_result(
+                status="success", 
+                response_data={"analysis_id": analysis_id, "result": analysis_result},
+                artifacts=[artifact]
+            )
 
         except Exception as e:
-            logger.error(f"Error en skill analyze_progress: {e}", exc_info=True)
-            return {"status": "error", "message": f"Error al analizar progreso: {e}"} 
+            logger.error(f"Error en skill '{self._skill_analyze_progress.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
 
-    async def _skill_visualize_progress(self, user_id: str, metric: str, time_period: str, chart_type: str, **kwargs) -> Dict[str, Any]:
+    async def _skill_visualize_progress(self, input_text: str, **kwargs) -> Dict[str, Any]:
         """Skill para visualizar el progreso del usuario."""
-        logger.info(f"Executing skill: visualize_progress for user {user_id}, metric {metric}, period {time_period}, type {chart_type}")
+        logger.info(f"Skill '{self._skill_visualize_progress.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        metric = kwargs.get("metric", "weight")
+        time_period = kwargs.get("time_period", "last_month")
+        chart_type = kwargs.get("chart_type", "line")
+        
         try:
+            # Obtener client_profile del contexto si es necesario
+            full_context = await self._get_context(user_id, session_id)
+            client_profile_from_context = full_context.get("client_profile", {})
+            
             # 1. Obtener datos (simulado)
             user_data = await self._get_user_data(user_id, time_period, [metric])
             if not user_data or metric not in user_data or not user_data[metric]:
-                 return {"status": "error", "message": f"No se encontraron datos para la métrica '{metric}'."}
+                return create_result(
+                    status="error", 
+                    error_message=f"No se encontraron datos para la métrica '{metric}'."
+                )
 
             # Extraer fechas y valores
             dates = [item['date'] for item in user_data[metric]]
@@ -183,8 +264,8 @@ class ProgressTracker(ADKAgent):
             try:
                 dates = [datetime.datetime.fromisoformat(d.replace('Z', '+00:00')) if isinstance(d, str) else d for d in dates]
             except ValueError:
-                 logger.warning(f"No se pudieron parsear algunas fechas para visualización: {dates}")
-                 # Intentar continuar o devolver error
+                logger.warning(f"No se pudieron parsear algunas fechas para visualización: {dates}")
+                # Intentar continuar o devolver error
 
             # 2. Generar gráfico
             plt.figure(figsize=(10, 5))
@@ -193,7 +274,7 @@ class ProgressTracker(ADKAgent):
             elif chart_type == 'bar':
                 plt.bar(dates, values)
             else:
-                 plt.plot(dates, values, marker='o') # Default a línea
+                plt.plot(dates, values, marker='o') # Default a línea
                  
             plt.xlabel("Fecha")
             plt.ylabel(metric.capitalize())
@@ -212,25 +293,49 @@ class ProgressTracker(ADKAgent):
             # En un escenario real, subiríamos a GCS/S3 y devolveríamos la URL firmada.
             viz_url = f"file://{viz_filepath}" # Placeholder
 
+            # 5. Crear artefacto
+            artifact = self.create_artifact(
+                label="ProgressVisualization", 
+                content_type="image/png",
+                data={"url": viz_url, "metric": metric, "time_period": time_period}
+            )
+
             logger.info(f"Visualización generada: {viz_filepath}")
-            return {"status": "success", "visualization_url": viz_url, "filepath": viz_filepath}
+            return create_result(
+                status="success", 
+                response_data={"visualization_url": viz_url, "filepath": viz_filepath},
+                artifacts=[artifact]
+            )
 
         except Exception as e:
-            logger.error(f"Error en skill visualize_progress: {e}", exc_info=True)
+            logger.error(f"Error en skill '{self._skill_visualize_progress.__name__}': {e}", exc_info=True)
             # Limpiar figura si hubo error
             plt.close()
-            return {"status": "error", "message": f"Error al visualizar progreso: {e}"}
+            return create_result(status="error", error_message=str(e))
 
-    async def _skill_compare_progress(self, user_id: str, period1: str, period2: str, metrics: List[str], **kwargs) -> Dict[str, Any]:
+    async def _skill_compare_progress(self, input_text: str, **kwargs) -> Dict[str, Any]:
         """Skill para comparar el progreso entre dos periodos."""
-        logger.info(f"Executing skill: compare_progress for user {user_id} between {period1} and {period2}")
+        logger.info(f"Skill '{self._skill_compare_progress.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        period1 = kwargs.get("period1", "last_month")
+        period2 = kwargs.get("period2", "previous_month")
+        metrics = kwargs.get("metrics", ["weight", "performance"])
+        
         try:
+            # Obtener client_profile del contexto si es necesario
+            full_context = await self._get_context(user_id, session_id)
+            client_profile_from_context = full_context.get("client_profile", {})
+            
             # 1. Obtener datos para ambos periodos (simulado)
             data_p1 = await self._get_user_data(user_id, period1, metrics)
             data_p2 = await self._get_user_data(user_id, period2, metrics)
 
             if not data_p1 or not data_p2:
-                 return {"status": "error", "message": "Datos insuficientes para comparación."}
+                return create_result(
+                    status="error", 
+                    error_message="Datos insuficientes para comparación."
+                )
 
             # 2. Preparar prompt para Gemini
             metrics_str = ", ".join(metrics)
@@ -245,14 +350,25 @@ class ProgressTracker(ADKAgent):
             comparison_result = await self.gemini_client.generate_structured_output(prompt)
 
             if not isinstance(comparison_result, dict):
-                 comparison_result = {"comparison_summary": str(comparison_result)}
+                comparison_result = {"comparison_summary": str(comparison_result)}
+
+            # 4. Crear artefacto
+            artifact = self.create_artifact(
+                label="ProgressComparison", 
+                content_type="application/json",
+                data=comparison_result
+            )
 
             logger.info(f"Comparación completada para user {user_id}")
-            return {"status": "success", "result": comparison_result}
+            return create_result(
+                status="success", 
+                response_data={"result": comparison_result},
+                artifacts=[artifact]
+            )
             
         except Exception as e:
-            logger.error(f"Error en skill compare_progress: {e}", exc_info=True)
-            return {"status": "error", "message": f"Error al comparar progreso: {e}"}
+            logger.error(f"Error en skill '{self._skill_compare_progress.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
 
     # Método auxiliar para obtener datos (simulación)
     async def _get_user_data(self, user_id: str, time_period: str, metrics: Optional[List[str]]) -> Optional[Dict[str, Any]]:
@@ -284,29 +400,35 @@ class ProgressTracker(ADKAgent):
          return mock_data
 
 
-    # --- Métodos de Ciclo de Vida y Registro --- 
-
-    # Añadir método start
-    async def start(self) -> None:
-        """Inicia el agente, conectando y registrando skills."""
-        await super().start() # Llama al start de ADKAgent
-        if self._running:
-            await self._register_skills()
-            logger.info(f"Skills de {self.agent_id} registradas.")
+    # Método auxiliar para manejar errores
+    def _handle_error(self, error: Exception) -> Dict[str, Any]:
+        """
+        Maneja errores y devuelve un resultado formateado.
+        """
+        # Registrar el error
+        logger.error(f"Error en ProgressTracker: {error}", exc_info=True)
+        
+        # Crear un mensaje de error amigable
+        error_message = str(error)
+        if isinstance(error, ValueError):
+            friendly_message = f"Error de valor: {error_message}"
+        elif isinstance(error, TypeError):
+            friendly_message = f"Error de tipo: {error_message}"
+        elif isinstance(error, KeyError):
+            friendly_message = f"Error de clave: {error_message}"
         else:
-             logger.warning(f"No se registraron skills para {self.agent_id} porque el inicio base falló.")
-
-    # Añadir método _register_skills
-    async def _register_skills(self) -> None:
-        """Registra las skills específicas de este agente."""
-        if not self.toolkit:
-            logger.error(f"No se puede registrar skills para {self.agent_id}: Toolkit no inicializado.")
-            return
+            friendly_message = f"Error inesperado: {error_message}"
             
-        self.register_skill("analyze_progress", self._skill_analyze_progress)
-        self.register_skill("visualize_progress", self._skill_visualize_progress)
-        self.register_skill("compare_progress", self._skill_compare_progress)
-        logger.info(f"Skills analyze, visualize, compare registradas para {self.agent_id}")
+        # Devolver un resultado formateado con el error
+        return create_result(status="error", error_message=friendly_message)
+        
+    def _get_completion_message(self, skill_name: str, response_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Genera un mensaje de finalización personalizado para la skill, si es necesario.
+        """
+        # Implementación específica si se necesita un mensaje de finalización personalizado
+        # Por ahora, devolvemos None para usar el mensaje por defecto
+        return None
 
     # --- Métodos de Contexto (Revisar si son necesarios o usar StateManager directamente) ---
 
