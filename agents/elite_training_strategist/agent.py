@@ -6,21 +6,39 @@ Este agente utiliza el modelo Gemini para generar planes de entrenamiento
 personalizados basados en los objetivos, nivel y restricciones del atleta.
 Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
 """
-import uuid
-from typing import Dict, Any, Optional, List
-import time
-from datetime import datetime, timezone
-import re
+import logging
+import json
 import os
+from typing import Any, Dict, Optional, List, Type, Union
+from datetime import datetime
 
-# from google.adk.agents import Agent # No longer needed here, imported in base
-from agents.base.adk_agent import ADKAgent
+from pydantic import BaseModel, Field
+
+from agents.base.adk_agent import ADKAgent, Skill, create_result
+from agents.elite_training_strategist.schemas import (
+    GenerateTrainingPlanInput,
+    GenerateTrainingPlanOutput,
+    AdaptTrainingProgramInput,
+    AdaptTrainingProgramOutput,
+    AnalyzePerformanceDataInput,
+    AnalyzePerformanceDataOutput,
+    SetTrainingIntensityVolumeInput,
+    SetTrainingIntensityVolumeOutput,
+    PrescribeExerciseRoutinesInput,
+    PrescribeExerciseRoutinesOutput,
+    TrainingPlanArtifact,
+)
+
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
+from tools.mcp_client import MCPClient
 from core.state_manager import StateManager
 from core.logging_config import get_logger
 from google.cloud import aiplatform
+
+# Configurar logger
+logger = get_logger(__name__)
 
 # Configurar OpenTelemetry para observabilidad
 try:
@@ -68,70 +86,85 @@ except ImportError:
     response_time = None
     error_count = None
 
-# Configurar logger
-logger = get_logger(__name__)
-
 class EliteTrainingStrategist(ADKAgent):
     """
-    Agente especializado en diseñar y periodizar programas de entrenamiento 
-    para atletas de alto rendimiento.
-    
-    Este agente utiliza el modelo Gemini para generar planes de entrenamiento
-    personalizados basados en los objetivos, nivel y restricciones del atleta.
-    Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
+    Agente especializado en el diseño y periodización de programas de entrenamiento
+    para atletas de élite y usuarios avanzados, integrando análisis de rendimiento y
+    prescripción de ejercicios.
     """
 
-    # Declarar campos para Pydantic/ADK
-    gemini_client: Optional[GeminiClient] = None
-    supabase_client: Optional[SupabaseClient] = None
-    tracer: Optional[trace.Tracer] = None
-    request_counter: Optional[metrics.Counter] = None
-    response_time: Optional[metrics.Histogram] = None
-    error_count: Optional[metrics.Counter] = None
-
-    # Ajustar constructor
-    def __init__(self, 
-                 state_manager: Optional[StateManager] = None,
-                 mcp_toolkit: Optional[MCPToolkit] = None, 
-                 model: str = "gemini-1.5-flash", 
-                 instruction: str = "Eres un estratega experto en entrenamiento deportivo.", 
-                 **kwargs): 
-        """
-        Inicializa el agente EliteTrainingStrategist usando la base ADKAgent refactorizada.
-        """
-        agent_id_val = "elite_training_strategist"
-        name_val = "NGX_Elite_Training_Strategist" 
-        description_val = "Diseña y periodiza programas de entrenamiento de élite personalizados, integrando análisis de rendimiento y prescripción de ejercicios."
+    def __init__(
+        self,
+        agent_id: str = "elite_training_strategist",
+        name: str = "Elite Training Strategist",
+        description: str = "Specializes in designing and periodizing training programs for elite athletes.",
+        program_type: str = "PRIME",
+        mcp_toolkit: Optional[Any] = None,
+        a2a_server_url: Optional[str] = None,
+        state_manager: Optional[Any] = None,
+        model: str = "gemini-1.5-flash",
+        instruction: str = "Eres un estratega experto en entrenamiento deportivo.",
+        **kwargs
+    ):
+        agent_id_val = agent_id
+        name_val = name
+        description_val = description
         
-        # Capacidades para BaseAgent y A2A (nombres simples)
+        # Capacidades para BaseAgent y A2A
         capabilities_val = [
-            "generate_training_plan", "analyze_performance", 
-            "design_periodization", "prescribe_exercises"
+            "generate_training_plan", 
+            "adapt_training_program", 
+            "analyze_performance_data", 
+            "set_training_intensity_volume", 
+            "prescribe_exercise_routines"
         ]
         
-        # Herramientas (métodos de skill) para google.adk.agents.Agent
+        # Herramientas para Google ADK
         google_adk_tools_val = [
-            self._skill_generate_training_plan,
-            self._skill_analyze_performance,
-            self._skill_design_periodization,
-            self._skill_prescribe_exercises
+            # Aquí irían las herramientas específicas de Google ADK si se necesitan
         ]
         
-        # Skills para la AgentCard del protocolo A2A (con descripciones)
+        # Skills para A2A
         a2a_skills_val = [
-            {"name": "generate_training_plan", "description": "Genera un plan de entrenamiento detallado y personalizado basado en los objetivos del usuario, duración y restricciones.", "input_schema": {"user_id": "str", "goals": "List[str]", "weeks": "int"}, "output_schema": {"plan": "str"}},
-            {"name": "analyze_performance", "description": "Analiza datos de rendimiento sobre un periodo específico para identificar tendencias, mejoras y áreas que necesitan atención.", "input_schema": {"user_id": "str", "performance_data": "Dict"}, "output_schema": {"analysis": "str"}},
-            {"name": "design_periodization", "description": "Diseña una estrategia de periodización de entrenamiento a largo plazo enfocada en un evento objetivo.", "input_schema": {"user_id": "str", "goal_event": "str", "total_duration_months": "int"}, "output_schema": {"periodization_plan": "str"}},
-            {"name": "prescribe_exercises", "description": "Prescribe ejercicios específicos para una sesión de entrenamiento basada en su objetivo, grupos musculares y equipamiento disponible.", "input_schema": {"user_id": "str", "session_goal": "str"}, "output_schema": {"exercise_list": "List[str]"}}
+            {
+                "name": "generate_training_plan",
+                "description": "Genera un plan de entrenamiento completo basado en el perfil y objetivos del usuario.",
+                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "goals": {"type": "array"}, "preferences": {"type": "object"} }, "required": ["input_text"] },
+                "output_schema": { "type": "object", "properties": { "training_plan": {"type": "object"} } }
+            },
+            {
+                "name": "adapt_training_program",
+                "description": "Adapta un programa de entrenamiento existente basado en nuevos inputs o feedback.",
+                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "existing_plan_id": {"type": "string"}, "adaptation_reason": {"type": "string"} }, "required": ["input_text", "existing_plan_id"] },
+                "output_schema": { "type": "object", "properties": { "adapted_plan": {"type": "object"} } }
+            },
+            {
+                "name": "analyze_performance_data",
+                "description": "Analiza datos de rendimiento para proporcionar insights y recomendaciones.",
+                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "performance_data": {"type": "object"} }, "required": ["input_text", "performance_data"] },
+                "output_schema": { "type": "object", "properties": { "performance_analysis": {"type": "object"} } }
+            },
+            {
+                "name": "set_training_intensity_volume",
+                "description": "Establece o ajusta la intensidad y volumen de entrenamiento basado en la periodización y estado del usuario.",
+                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "current_phase": {"type": "string"}, "athlete_feedback": {"type": "object"} }, "required": ["input_text"] },
+                "output_schema": { "type": "object", "properties": { "intensity_volume_settings": {"type": "object"} } }
+            },
+            {
+                "name": "prescribe_exercise_routines",
+                "description": "Prescribe rutinas de ejercicios específicas, incluyendo variaciones y progresiones.",
+                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "focus_area": {"type": "string"}, "equipment_available": {"type": "array"} }, "required": ["input_text"] },
+                "output_schema": { "type": "object", "properties": { "exercise_routines": {"type": "object"} } }
+            }
         ]
-
-        # Instanciar MCPToolkit si no se provee; se pasa como 'adk_toolkit'
+        
+        # Instanciar MCPToolkit si no se provee
         actual_adk_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
-
+        
         # Asegurar que state_manager se pasa a través de kwargs si está presente
         if state_manager:
             kwargs['state_manager'] = state_manager
-
+            
         super().__init__(
             agent_id=agent_id_val,
             name=name_val,
@@ -140,524 +173,684 @@ class EliteTrainingStrategist(ADKAgent):
             model=model,
             instruction=instruction,
             google_adk_tools=google_adk_tools_val,
-            a2a_skills=a2a_skills_val, 
-            adk_toolkit=actual_adk_toolkit, 
-            **kwargs 
+            a2a_skills=a2a_skills_val,
+            adk_toolkit=actual_adk_toolkit,
+            a2a_server_url=a2a_server_url,
+            endpoint=f"/agents/{agent_id_val}",
+            program_type=program_type,
+            **kwargs
         )
-
+        
         # Inicializar clientes específicos del agente
-        self.gemini_client = GeminiClient()
-        # Considerar si SupabaseClient debe ser inyectado o configurado globalmente
-        self.supabase_client = SupabaseClient() 
-
-        # Configurar telemetría (lógica existente)
+        self.gemini_client = GeminiClient(model_name=self.model)
+        self.supabase_client = SupabaseClient()
+        
+        # Configurar telemetría
         self.tracer = tracer
         self.request_counter = request_counter
-        self.response_time = response_time
-        self.error_count = error_count
+        self.response_time_metric = response_time
+        
+        # Inicializar AI Platform si es necesario
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform (Vertex AI SDK) inicializado correctamente para ETS.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform para ETS: {e}", exc_info=True)
+            
         if has_telemetry:
             logger.info("OpenTelemetry configurado para EliteTrainingStrategist.")
         else:
             logger.warning("OpenTelemetry no está disponible. EliteTrainingStrategist funcionará sin telemetría detallada.")
-
-        logger.info(f"{self.name} ({self.agent_id}) inicializado y listo.")
-
-    # --- Métodos de Skill --- 
-    # (Mover lógica de _generate_training_plan, _analyze_performance, etc., aquí)
-
-    async def _skill_generate_training_plan(self, user_id: str, goals: List[str], weeks: int, constraints: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """Skill para generar un plan de entrenamiento."""
-        start_time = time.time()
-        logger.info(f"Executing _skill_generate_training_plan for user_id={user_id}")
-        
-        # Obtener contexto (incluye perfil)
-        session_id = kwargs.get("session_id") 
-        context = await self._get_context(user_id, session_id)
-        client_profile = context.get("client_profile", {}) 
-        program_type = self._get_program_type_from_profile(client_profile) 
-        
-        if not self.gemini_client:
-             logger.error("GeminiClient no está disponible para generar plan.")
-             return {"response": "Error: Servicio de IA no disponible.", "artifacts": []}
-
-        # Construir el prompt para Gemini
-        profile_details = self._extract_profile_details(client_profile)
-        goal_str = ", ".join(goals)
-        constraints_str = f" Restricciones adicionales: {constraints}." if constraints else ""
-
-        # Adaptar el prompt según el tipo de programa
-        if program_type == "PRIME":
-            prompt_base = f"Eres un entrenador experto en atletas PRIME (alto rendimiento). Diseña un plan de entrenamiento detallado de {weeks} semanas para un atleta con el siguiente perfil:\n{profile_details}\nObjetivos: {goal_str}.{constraints_str}\nEl plan debe incluir fases (ej. base, construcción, pico, descarga), tipos de sesiones (fuerza, resistencia, técnica, recuperación), intensidad (zonas, RPE) y volumen (duración/distancia). Formato: Markdown."
-        elif program_type == "LONGEVITY":
-            prompt_base = f"Eres un entrenador experto en atletas LONGEVITY (salud y bienestar). Diseña un plan de entrenamiento sostenible de {weeks} semanas para una persona con el siguiente perfil:\n{profile_details}\nObjetivos: {goal_str}.{constraints_str}\nEnfócate en movilidad, fuerza funcional, capacidad cardiovascular moderada y recuperación activa. El plan debe ser adaptable y promover la consistencia. Formato: Markdown."
-        else: 
-             prompt_base = f"Diseña un plan de entrenamiento general de {weeks} semanas para una persona con el siguiente perfil:\n{profile_details}\nObjetivos: {goal_str}.{constraints_str}\nAsegúrate de que sea equilibrado y seguro. Formato: Markdown."
-
-        # Incluir historial relevante si existe (últimas 2 interacciones)
-        history_str = "\nHistorial reciente:\n"
-        if context.get("history"):
-             for entry in context["history"][-2:]:
-                 input_text = entry.get('input', {}).get('text', 'N/A')
-                 output_text = entry.get('output', {}).get('response', 'N/A')
-                 skill_used = entry.get('skill_used', 'N/A')
-                 history_str += f"- Skill: {skill_used}, In: '{input_text[:50]}...', Out: '{output_text[:50]}...'\n"
-        else:
-             history_str = ""
-
-        full_prompt = prompt_base + history_str
-        logger.debug(f"Prompt para Gemini (generate_training_plan): {full_prompt[:200]}...")
-
-        try:
-            # Llamar a Gemini
-            response = await self.gemini_client.generate_content(full_prompt)
-            training_plan_text = response if isinstance(response, str) else str(response) 
             
-            # Crear artefactos (si aplica)
-            artifacts = [
-                {
-                    "type": "markdown",
-                    "label": f"Plan de Entrenamiento ({program_type}) - {weeks} Semanas",
-                    "content": training_plan_text
-                }
-            ]
-            result = {"response": training_plan_text, "artifacts": artifacts}
-
-        except Exception as e:
-            logger.error(f"Error al generar plan de entrenamiento con Gemini para user_id {user_id}: {e}", exc_info=True)
-            result = {"response": "Error: No se pudo generar el plan de entrenamiento.", "artifacts": []}
-
-        # Actualizar contexto con esta interacción
-        interaction_data = {
-            "skill_used": "generate_training_plan",
-            "input": {"user_id": user_id, "goals": goals, "weeks": weeks, "constraints": constraints},
-            "output": result,
-            "duration_ms": int((time.time() - start_time) * 1000)
+        # Definir skills
+        self.skills = {
+            "generate_training_plan": Skill(
+                name="generate_training_plan",
+                description="Genera un plan de entrenamiento completo basado en el perfil y objetivos del usuario.",
+                method=self._skill_generate_training_plan,
+                input_schema=GenerateTrainingPlanInput,
+                output_schema=GenerateTrainingPlanOutput,
+            ),
+            "adapt_training_program": Skill(
+                name="adapt_training_program",
+                description="Adapta un programa de entrenamiento existente basado en nuevos inputs o feedback.",
+                method=self._skill_adapt_training_program,
+                input_schema=AdaptTrainingProgramInput,
+                output_schema=AdaptTrainingProgramOutput,
+            ),
+            "analyze_performance_data": Skill(
+                name="analyze_performance_data",
+                description="Analiza datos de rendimiento para proporcionar insights y recomendaciones.",
+                method=self._skill_analyze_performance_data,
+                input_schema=AnalyzePerformanceDataInput,
+                output_schema=AnalyzePerformanceDataOutput,
+            ),
+            "set_training_intensity_volume": Skill(
+                name="set_training_intensity_volume",
+                description="Establece o ajusta la intensidad y volumen de entrenamiento basado en la periodización y estado del usuario.",
+                method=self._skill_set_training_intensity_volume,
+                input_schema=SetTrainingIntensityVolumeInput,
+                output_schema=SetTrainingIntensityVolumeOutput,
+            ),
+            "prescribe_exercise_routines": Skill(
+                name="prescribe_exercise_routines",
+                description="Prescribe rutinas de ejercicios específicas, incluyendo variaciones y progresiones.",
+                method=self._skill_prescribe_exercise_routines,
+                input_schema=PrescribeExerciseRoutinesInput,
+                output_schema=PrescribeExerciseRoutinesOutput,
+            ),
         }
-        await self._update_context(user_id, session_id, interaction_data)
+        logger.info(f"Agente {self.name} inicializado con {len(self.skills)} skills: {list(self.skills.keys())}")
 
-        return result
-
-    async def _skill_analyze_performance(self, user_id: str, performance_data: Dict[str, Any], time_period: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """Skill para analizar rendimiento."""
-        start_time = time.time()
-        logger.info(f"Executing _skill_analyze_performance for user_id={user_id}")
+    async def _skill_generate_training_plan(self, input_text: str, **kwargs) -> Dict[str, Any]:
+        """
+        Skill para generar un plan de entrenamiento.
+        """
+        logger.info(f"Skill '{self._skill_generate_training_plan.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        user_id = kwargs.get("user_id")
         session_id = kwargs.get("session_id")
         
-        # 1. Obtener contexto y perfil
-        context = await self._get_context(user_id, session_id)
-        client_profile = context.get("client_profile", {})
-        program_type = self._get_program_type_from_profile(client_profile)
-        profile_details = self._extract_profile_details(client_profile)
-
-        if not self.gemini_client:
-             logger.error("GeminiClient no está disponible para analizar rendimiento.")
-             return {"response": "Error: Servicio de IA no disponible.", "artifacts": []}
-
-        # 2. Construir el prompt para Gemini
-        performance_data_str = "\n".join([f"- {k}: {v}" for k, v in performance_data.items()])
-        time_period_str = f" para el período: {time_period}" if time_period else ""
-
-        prompt = f"""
-        Actúa como un especialista en análisis de rendimiento deportivo.
-        Analiza los siguientes datos de rendimiento{time_period_str}:
-        {performance_data_str}
-
-        Contexto del Atleta:
-        Programa: {program_type}
-        Perfil:
-        {profile_details}
-
-        Instrucciones:
-        - Identifica tendencias clave (positivas y negativas).
-        - Compara el rendimiento con los objetivos del atleta (si se conocen del perfil).
-        - Proporciona insights accionables y recomendaciones para ajustar el entrenamiento.
-        - Considera el tipo de programa ({program_type}) al hacer recomendaciones.
-        - Si es PRIME, enfócate en optimización marginal y picos de forma.
-        - Si es LONGEVITY, enfócate en sostenibilidad, prevención y disfrute.
-        - Formato: Markdown claro, con secciones para Tendencias, Comparación con Objetivos, y Recomendaciones.
-        """
-        
-        # Añadir historial relevante
-        history_str = "\nHistorial reciente:\n"
-        if context.get("history"):
-             for entry in context["history"][-2:]:
-                 input_text = entry.get('input', {}).get('text', 'N/A')
-                 output_text = entry.get('output', {}).get('response', 'N/A')
-                 skill_used = entry.get('skill_used', 'N/A')
-                 history_str += f"- Skill: {skill_used}, In: '{input_text[:50]}...', Out: '{output_text[:50]}...'\n"
-        else:
-             history_str = ""
-
-        full_prompt = prompt + history_str
-        logger.debug(f"Prompt para Gemini (analyze_performance): {full_prompt[:200]}...")
-
-        # 3. Llamar a Gemini y procesar respuesta
         try:
-            analysis_result_text = await self.gemini_client.generate_content(full_prompt)
-            analysis_result_text = analysis_result_text if isinstance(analysis_result_text, str) else str(analysis_result_text)
-            
-            # Crear artefactos (ej. resumen del análisis)
-            artifacts = [
-                {
-                    "type": "markdown",
-                    "label": f"Análisis de Rendimiento ({program_type}){f' - {time_period}' if time_period else ''}",
-                    "content": analysis_result_text
-                }
-            ]
-            result = {"response": analysis_result_text, "artifacts": artifacts}
+            # Obtener client_profile del contexto
+            full_context = await self._get_context(user_id, session_id)
+            client_profile_from_context = full_context.get("client_profile", {})
 
+            # Obtener parámetros relevantes de kwargs
+            goals = kwargs.get("goals", [input_text] if input_text else [])
+            preferences = kwargs.get("preferences", {})
+            training_history = kwargs.get("training_history", {})
+            duration_weeks = kwargs.get("duration_weeks", 8)
+
+            # Llamar a la lógica interna
+            plan_details = await self._generate_training_plan_logic(
+                user_profile=client_profile_from_context,
+                current_goals=goals,
+                current_preferences=preferences,
+                training_history=training_history,
+                duration_weeks=duration_weeks
+            )
+
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="TrainingPlan", 
+                content_type="application/json",
+                data=plan_details
+            )
+
+            return create_result(
+                status="success", 
+                response_data=plan_details,
+                artifacts=[artifact]
+            )
         except Exception as e:
-            logger.error(f"Error al generar análisis de rendimiento con Gemini para user_id {user_id}: {e}", exc_info=True)
-            error_message = "Error al generar el análisis de rendimiento. Por favor, intenta de nuevo más tarde."
-            result = {"response": error_message, "artifacts": []}
+            logger.error(f"Error en skill '{self._skill_generate_training_plan.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
 
-        # 4. Actualizar contexto
-        interaction_data = {
-            "skill_used": "analyze_performance",
-            "input": {"user_id": user_id, "performance_data": performance_data, "time_period": time_period},
-            "output": result,
-            "duration_ms": int((time.time() - start_time) * 1000)
-        }
-        await self._update_context(user_id, session_id, interaction_data)
+    async def _generate_training_plan_logic(
+        self, 
+        user_profile: Dict[str, Any], 
+        current_goals: List[str],
+        current_preferences: Optional[Dict[str, Any]] = None,
+        training_history: Optional[Dict[str, Any]] = None,
+        duration_weeks: int = 8
+    ) -> Dict[str, Any]:
+        """
+        Lógica interna para generar el plan de entrenamiento.
+        """
+        program_type = self._get_program_type_from_profile(user_profile)
+
+        # Construir prompt para Gemini
+        prompt_parts = [
+            f"Eres un entrenador de élite. Genera un plan de entrenamiento detallado para un programa tipo '{program_type}'.",
+        ]
+
+        # Información del perfil de usuario
+        prompt_parts.append("Considera el siguiente perfil de atleta:")
+        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
+        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
+        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
+        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
+        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
+        if user_profile.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {user_profile.get('experience_level')}")
+
+        prompt_parts.append(f"\nObjetivos Actuales del Atleta: {', '.join(current_goals)}")
+        prompt_parts.append(f"Duración del Plan: {duration_weeks} semanas")
+
+        if current_preferences:
+            prompt_parts.append(f"Preferencias: {json.dumps(current_preferences)}")
+        if training_history:
+            prompt_parts.append(f"Historial de Entrenamiento Relevante: {json.dumps(training_history)}")
         
-        return result
+        prompt_parts.append("\nEl plan debe ser estructurado, detallado, y adecuado para el tipo de programa y objetivos.")
+        prompt_parts.append("Incluye fases, microciclos, mesociclos si aplica, ejercicios específicos, series, repeticiones, descansos, y notas sobre intensidad y volumen.")
+        prompt_parts.append("Formato de Salida Esperado: JSON con claves como 'plan_name', 'program_type', 'duration_weeks', 'phases' (lista de fases), etc.")
+        prompt_parts.append("Cada fase debe tener 'phase_name', 'duration', 'description', y 'weekly_schedule'.")
+        prompt_parts.append("Cada 'weekly_schedule' debe ser una lista de días, cada día con 'day_name', 'focus', y 'workouts' (lista de workouts).")
+        prompt_parts.append("Cada 'workout' debe tener 'exercise_name', 'sets', 'reps', 'rest_seconds', 'intensity_notes'.")
+        
+        # Ejemplo para Gemini (Output Schema)
+        prompt_parts.append(
+            "\nEjemplo de la estructura JSON de salida deseada (GenerateTrainingPlanOutput):\n"
+            "{\n"
+            "  \"plan_name\": \"Plan de Fuerza Máxima para Powerlifter Avanzado\",\n"
+            "  \"program_type\": \"PRIME\",\n"
+            "  \"duration_weeks\": 12,\n"
+            "  \"description\": \"Un plan de 12 semanas enfocado en incrementar la fuerza máxima en sentadilla, press de banca y peso muerto.\",\n"
+            "  \"phases\": [\n"
+            "    {\n"
+            "      \"phase_name\": \"Fase de Acumulación (Semanas 1-4)\",\n"
+            "      \"duration_weeks\": 4,\n"
+            "      \"description\": \"Enfoque en volumen alto y técnica.\",\n"
+            "      \"weekly_schedule\": [\n" # Array de schedules diarios
+            "        {\n"
+            "          \"day_of_week\": \"Lunes\",\n" # e.g., Lunes, Martes, etc.
+            "          \"focus\": \"Sentadilla y Accesorios de Pierna\",\n"
+            "          \"sessions\": [\n" # Array de sesiones/bloques de entrenamiento para ese día
+            "            {\n"
+            "              \"session_name\": \"Entrenamiento Principal\",\n"
+            "              \"exercises\": [\n" # Array de ejercicios
+            "                { \"exercise_name\": \"Sentadilla Trasera\", \"sets\": 5, \"reps_range\": \"4-6\", \"rest_seconds\": 180, \"intensity_notes\": \"RPE 8-9\" },\n"
+            "                { \"exercise_name\": \"Prensa de Piernas\", \"sets\": 4, \"reps_range\": \"8-10\", \"rest_seconds\": 120, \"intensity_notes\": \"RPE 7-8\" }\n"
+            "              ]\n"
+            "            }\n"
+            "          ]\n"
+            "        }\n"
+            "      ]\n"
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
 
-    async def _skill_design_periodization(self, user_id: str, goal_event: str, total_duration_months: int, **kwargs) -> Dict[str, Any]:
-        """Skill para diseñar periodización."""
-        start_time = time.time()
-        logger.info(f"Executing _skill_design_periodization for user_id={user_id}, goal='{goal_event}', duration={total_duration_months} months")
+        final_prompt = "\n".join(prompt_parts)
+        logger.debug(f"Prompt para Gemini (generar plan): {final_prompt[:500]}...")
+
+        # Llamada a Gemini
+        if not self.gemini_client or not hasattr(self.gemini_client, 'generate_structured_output'):
+             logger.error("GeminiClient no está configurado correctamente. No se puede generar el plan de entrenamiento.")
+             return {"error": "GeminiClient not configured", "message": "Unable to generate training plan."}
+
+        generated_plan = await self.gemini_client.generate_structured_output(final_prompt)
+        
+        # Validar la estructura del plan generado
+        if not isinstance(generated_plan, dict) or not all(k in generated_plan for k in ["plan_name", "program_type", "duration_weeks", "phases"]):
+            logger.error(f"La salida de Gemini para el plan de entrenamiento no tiene la estructura esperada. Salida: {generated_plan}")
+            return {"error": "Invalid plan structure from LLM", "details": generated_plan}
+
+        return generated_plan
+
+    async def _skill_adapt_training_program(self, input_text: str, **kwargs) -> Dict[str, Any]:
+        """
+        Skill para adaptar un programa de entrenamiento existente.
+        """
+        logger.info(f"Skill '{self._skill_adapt_training_program.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        
+        try:
+            # Obtener client_profile del contexto
+            full_context = await self._get_context(user_id, session_id)
+            client_profile_from_context = full_context.get("client_profile", {})
+
+            # Obtener parámetros relevantes de kwargs
+            existing_plan_id = kwargs.get("existing_plan_id", "N/A")
+            adaptation_reason = kwargs.get("adaptation_reason", input_text if input_text else "No especificado")
+            feedback = kwargs.get("feedback", {})
+            new_goals = kwargs.get("new_goals", [])
+
+            # Llamar a la lógica interna
+            adapted_plan_details = await self._adapt_training_program_logic(
+                user_profile=client_profile_from_context,
+                existing_plan_id=existing_plan_id,
+                adaptation_reason=adaptation_reason,
+                feedback=feedback,
+                new_goals=new_goals
+            )
+
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="AdaptedTrainingProgram",
+                content_type="application/json",
+                data=adapted_plan_details
+            )
+
+            return create_result(
+                status="success",
+                response_data=adapted_plan_details,
+                artifacts=[artifact]
+            )
+        except Exception as e:
+            logger.error(f"Error en skill '{self._skill_adapt_training_program.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
+
+    async def _adapt_training_program_logic(
+        self, 
+        user_profile: Dict[str, Any],
+        existing_plan_id: str,
+        adaptation_reason: str,
+        feedback: Optional[Dict[str, Any]] = None,
+        new_goals: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Lógica interna para adaptar un programa de entrenamiento.
+        """
+        program_type = self._get_program_type_from_profile(user_profile)
+
+        prompt_parts = [
+            f"Eres un entrenador de élite. Adapta un plan de entrenamiento existente para un programa tipo '{program_type}'.",
+            f"Plan Existente (ID o descripción): {existing_plan_id}",
+            f"Razón para la Adaptación: {adaptation_reason}",
+        ]
+        
+        # Información del perfil de usuario
+        prompt_parts.append("Considera el siguiente perfil de atleta:")
+        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
+        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
+        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
+        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
+        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
+        if user_profile.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {user_profile.get('experience_level')}")
+
+        if feedback:
+            prompt_parts.append(f"Feedback del Atleta sobre el Plan Actual: {json.dumps(feedback)}")
+        if new_goals:
+            prompt_parts.append(f"Nuevos Objetivos o Ajustes a Objetivos: {', '.join(new_goals)}")
+
+        prompt_parts.append("\nEl plan adaptado debe reflejar los cambios solicitados manteniendo una estructura coherente y efectiva.")
+        prompt_parts.append("Modifica fases, ejercicios, volumen, intensidad según sea necesario.")
+        prompt_parts.append("Formato de Salida Esperado: JSON similar a GenerateTrainingPlanOutput, pero con una sección 'adaptation_summary'.")
+        prompt_parts.append(
+             "\nEjemplo de la estructura JSON de salida deseada (AdaptTrainingProgramOutput):\n"
+            "{\n"
+            "  \"adapted_plan_name\": \"Plan de Fuerza Adaptado - Enfoque Hipertrofia\",\n"
+            "  \"program_type\": \"PRIME\",\n"
+            "  \"adaptation_summary\": \"Se ajustó el volumen de accesorios y se modificó el rango de repeticiones para enfocarse más en hipertrofia, basado en el feedback del atleta.\",\n"
+            "  \"duration_weeks\": 8,\n"
+            "  \"description\": \"Plan adaptado de 8 semanas...\",\n"
+            "  \"phases\": [\n"
+            "    // ... estructura similar a GenerateTrainingPlanOutput ...\n"
+            "  ]\n"
+            "}"
+        )
+
+        final_prompt = "\n".join(prompt_parts)
+        logger.debug(f"Prompt para Gemini (adaptar plan): {final_prompt[:500]}...")
+
+        # Llamada a Gemini
+        if not self.gemini_client or not hasattr(self.gemini_client, 'generate_structured_output'):
+             logger.error("GeminiClient no está configurado correctamente. No se puede adaptar el plan.")
+             return {"error": "GeminiClient not configured", "message": "Unable to adapt training plan."}
+
+        adapted_plan = await self.gemini_client.generate_structured_output(final_prompt)
+
+        # Validar la estructura del plan adaptado
+        if not isinstance(adapted_plan, dict) or "adapted_plan_name" not in adapted_plan:
+            logger.error(f"La salida de Gemini para la adaptación del plan no tiene la estructura esperada. Salida: {adapted_plan}")
+            return {"error": "Invalid adapted plan structure from LLM", "details": adapted_plan}
+            
+        return adapted_plan
+
+    async def _skill_analyze_performance_data(self, input_text: str, **kwargs) -> Dict[str, Any]:
+        """
+        Skill para analizar datos de rendimiento.
+        """
+        logger.info(f"Skill '{self._skill_analyze_performance_data.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        
+        try:
+            # Obtener client_profile del contexto
+            full_context = await self._get_context(user_id, session_id)
+            client_profile_from_context = full_context.get("client_profile", {})
+
+            # Obtener parámetros relevantes de kwargs
+            performance_data = kwargs.get("performance_data", {})
+            metrics_to_focus = kwargs.get("metrics_to_focus", [])
+            comparison_period = kwargs.get("comparison_period", {})
+
+            # Llamar a la lógica interna
+            analysis_results = await self._analyze_performance_data_logic(
+                user_profile=client_profile_from_context,
+                performance_data=performance_data,
+                metrics_to_focus=metrics_to_focus,
+                comparison_period=comparison_period,
+                user_query=input_text
+            )
+
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="PerformanceAnalysis",
+                content_type="application/json",
+                data=analysis_results
+            )
+
+            return create_result(
+                status="success",
+                response_data=analysis_results,
+                artifacts=[artifact]
+            )
+        except Exception as e:
+            logger.error(f"Error en skill '{self._skill_analyze_performance_data.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
+
+    async def _analyze_performance_data_logic(
+        self, 
+        user_profile: Dict[str, Any],
+        performance_data: Dict[str, Any],
+        metrics_to_focus: Optional[List[str]] = None,
+        comparison_period: Optional[Dict[str, Any]] = None,
+        user_query: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Lógica interna para analizar datos de rendimiento.
+        """
+        program_type = self._get_program_type_from_profile(user_profile)
+
+        prompt_parts = [
+            f"Eres un analista de rendimiento deportivo de élite. Analiza los siguientes datos para un programa tipo '{program_type}'.",
+            f"Datos de Rendimiento Proporcionados: {json.dumps(performance_data)}",
+        ]
+
+        # Información del perfil de usuario
+        prompt_parts.append("Considera el siguiente perfil de atleta:")
+        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
+        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
+        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
+        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
+        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
+        if user_profile.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {user_profile.get('experience_level')}")
+
+        if user_query:
+            prompt_parts.append(f"Pregunta Específica del Usuario sobre los Datos: {user_query}")
+        if metrics_to_focus:
+            prompt_parts.append(f"Métricas Clave para Enfocar el Análisis: {', '.join(metrics_to_focus)}")
+        if comparison_period:
+            prompt_parts.append(f"Período de Comparación (si aplica): {json.dumps(comparison_period)}")
+
+        prompt_parts.append("\nProporciona un análisis detallado, identifica tendencias, fortalezas, debilidades y recomendaciones accionables.")
+        prompt_parts.append("Formato de Salida Esperado: JSON con 'analysis_summary', 'key_observations' (lista), 'recommendations' (lista).")
+        prompt_parts.append(
+             "\nEjemplo de la estructura JSON de salida deseada (AnalyzePerformanceDataOutput):\n"
+            "{\n"
+            "  \"analysis_summary\": \"Se observa una mejora del 10% en el máximo de sentadilla en el último mes, pero un estancamiento en los tiempos de carrera 5k.\",\n"
+            "  \"key_observations\": [\n"
+            "    { \"metric\": \"Máximo Sentadilla (kg)\", \"current_value\": 150, \"previous_value\": 135, \"change_percentage\": 11.1, \"observation\": \"Progreso significativo.\" },\n"
+            "    { \"metric\": \"Tiempo 5k (min)\", \"current_value\": \"25:00\", \"previous_value\": \"24:50\", \"change_percentage\": -0.67, \"observation\": \"Ligero retroceso, posible sobreentrenamiento o necesidad de ajuste en cardio.\" }\n"
+            "  ],\n"
+            "  \"recommendations\": [\n"
+            "    { \"recommendation_type\": \"Entrenamiento\", \"description\": \"Considerar un microciclo de descarga para la carrera y luego reintroducir series de velocidad.\" },\n"
+            "    { \"recommendation_type\": \"Nutrición/Recuperación\", \"description\": \"Asegurar ingesta calórica adecuada y sueño de calidad para soportar el entrenamiento de fuerza.\" }\n"
+            "  ]\n"
+            "}"
+        )
+        final_prompt = "\n".join(prompt_parts)
+        logger.debug(f"Prompt para Gemini (analizar rendimiento): {final_prompt[:500]}...")
+
+        # Llamada a Gemini
+        if not self.gemini_client or not hasattr(self.gemini_client, 'generate_structured_output'):
+             logger.error("GeminiClient no está configurado correctamente. No se puede analizar el rendimiento.")
+             return {"error": "GeminiClient not configured", "message": "Unable to analyze performance."}
+
+        analysis = await self.gemini_client.generate_structured_output(final_prompt)
+        
+        # Validar la estructura del análisis
+        if not isinstance(analysis, dict) or "analysis_summary" not in analysis:
+            logger.error(f"La salida de Gemini para el análisis de rendimiento no tiene la estructura esperada. Salida: {analysis}")
+            return {"error": "Invalid analysis structure from LLM", "details": analysis}
+
+        return analysis
+
+    async def _skill_set_training_intensity_volume(self, input_text: str, **kwargs) -> Dict[str, Any]:
+        """
+        Skill para establecer o ajustar la intensidad y volumen del entrenamiento.
+        """
+        logger.info(f"Skill '{self._skill_set_training_intensity_volume.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        
+        try:
+            # Obtener client_profile del contexto
+            full_context = await self._get_context(user_id, session_id)
+            client_profile_from_context = full_context.get("client_profile", {})
+
+            # Obtener parámetros relevantes de kwargs
+            current_phase = kwargs.get("current_phase", "No especificada")
+            athlete_feedback = kwargs.get("athlete_feedback", {})
+            performance_metrics = kwargs.get("performance_metrics", {})
+            goal_adjustment_reason = kwargs.get("goal_adjustment_reason", input_text if input_text else "Ajuste rutinario")
+
+            # Llamar a la lógica interna
+            intensity_volume_settings = await self._set_training_intensity_volume_logic(
+                user_profile=client_profile_from_context,
+                current_phase=current_phase,
+                athlete_feedback=athlete_feedback,
+                performance_metrics=performance_metrics,
+                goal_adjustment_reason=goal_adjustment_reason
+            )
+
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="TrainingIntensityVolumeSettings",
+                content_type="application/json",
+                data=intensity_volume_settings
+            )
+
+            return create_result(
+                status="success",
+                response_data=intensity_volume_settings,
+                artifacts=[artifact]
+            )
+        except Exception as e:
+            logger.error(f"Error en skill '{self._skill_set_training_intensity_volume.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
+
+    async def _set_training_intensity_volume_logic(
+        self, 
+        user_profile: Dict[str, Any],
+        current_phase: str,
+        athlete_feedback: Dict[str, Any],
+        performance_metrics: Dict[str, Any],
+        goal_adjustment_reason: str
+    ) -> Dict[str, Any]:
+        """
+        Lógica interna para establecer la intensidad y volumen del entrenamiento.
+        """
+        program_type = self._get_program_type_from_profile(user_profile)
+
+        prompt_parts = [
+            f"Eres un coach experto en periodización. Determina los ajustes óptimos de intensidad y volumen para un atleta en un programa '{program_type}'.",
+            f"Fase Actual del Entrenamiento: {current_phase}",
+            f"Feedback del Atleta: {json.dumps(athlete_feedback)}",
+            f"Métricas de Rendimiento Recientes: {json.dumps(performance_metrics)}",
+            f"Razón para el Ajuste (o tipo de ajuste): {goal_adjustment_reason}",
+        ]
+
+        # Información del perfil de usuario
+        prompt_parts.append("Considera el siguiente perfil de atleta:")
+        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
+        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
+        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
+        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
+        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
+        if user_profile.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {user_profile.get('experience_level')}")
+
+        prompt_parts.append("\nProporciona recomendaciones específicas para porcentajes de 1RM, RPE, series, repeticiones y volumen total semanal para los principales levantamientos o tipo de actividad.")
+        prompt_parts.append("Formato de Salida Esperado: JSON con 'adjustment_summary', 'recommended_intensity' (dict), 'recommended_volume' (dict).")
+        prompt_parts.append(
+            "\nEjemplo de la estructura JSON de salida deseada (SetTrainingIntensityVolumeOutput):\n"
+            "{\n"
+            "  \"adjustment_summary\": \"Se recomienda un ligero aumento en la intensidad y mantener el volumen para la fase de intensificación, basado en el buen RPE y progreso en métricas.\",\n"
+            "  \"recommended_intensity\": {\n"
+            "    \"primary_lifts_percentage_1rm\": \"80-90%\",\n"
+            "    \"accessory_rpe_target\": \"RPE 7-8\",\n"
+            "    \"cardio_zones\": \"Zonas 2-3 con picos en Zona 4\"\n"
+            "  },\n"
+            "  \"recommended_volume\": {\n"
+            "    \"primary_lifts_sets_per_week\": \"10-15 sets por grupo muscular principal\",\n"
+            "    \"accessory_lifts_reps_range\": \"8-12 reps\",\n"
+            "    \"total_training_hours_per_week\": \"8-10 horas\"\n"
+            "  },\n"
+            "  \"notes\": \"Monitorear la recuperación y ajustar si es necesario.\"\n"
+            "}"
+        )
+
+        final_prompt = "\n".join(prompt_parts)
+        logger.debug(f"Prompt para Gemini (ajustar I/V): {final_prompt[:500]}...")
+
+        # Llamada a Gemini
+        if not self.gemini_client or not hasattr(self.gemini_client, 'generate_structured_output'):
+             logger.error("GeminiClient no está configurado correctamente. No se pueden establecer I/V.")
+             return {"error": "GeminiClient not configured", "message": "Unable to set intensity/volume."}
+
+        settings = await self.gemini_client.generate_structured_output(final_prompt)
+        
+        # Validar la estructura de los ajustes
+        if not isinstance(settings, dict) or "adjustment_summary" not in settings:
+            logger.error(f"La salida de Gemini para el ajuste de I/V no tiene la estructura esperada. Salida: {settings}")
+            return {"error": "Invalid I/V settings structure from LLM", "details": settings}
+
+        return settings
+
+    async def _skill_prescribe_exercise_routines(self, input_text: str, **kwargs) -> Dict[str, Any]:
+        """
+        Skill para prescribir rutinas de ejercicios específicas.
+        """
+        logger.info(f"Skill '{self._skill_prescribe_exercise_routines.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        user_id = kwargs.get("user_id")
         session_id = kwargs.get("session_id")
 
-        # 1. Obtener contexto y perfil
-        context = await self._get_context(user_id, session_id)
-        client_profile = context.get("client_profile", {})
-        program_type = self._get_program_type_from_profile(client_profile)
-        profile_details = self._extract_profile_details(client_profile)
-
-        if not self.gemini_client:
-            logger.error("GeminiClient no está disponible para diseñar periodización.")
-            return {"response": "Error: Servicio de IA no disponible.", "artifacts": []}
-
-        # 2. Construir el prompt para Gemini
-        total_duration_weeks = total_duration_months * 4 
-
-        prompt = f"""
-        Actúa como un diseñador experto de programas de entrenamiento y periodización.
-        Diseña un plan de periodización detallado de aproximadamente {total_duration_weeks} semanas ({total_duration_months} meses) para alcanzar el siguiente objetivo/evento:
-        '{goal_event}'
-
-        Contexto del Atleta:
-        Programa: {program_type}
-        Perfil:
-        {profile_details}
-
-        Instrucciones:
-        - Estructura el plan en fases claras (ej. Base, Construcción, Pico, Transición).
-        - Define objetivos específicos para cada fase.
-        - Sugiere tipos de entrenamiento y enfoques para cada fase (ej. volumen vs. intensidad).
-        - Considera el tipo de programa ({program_type}) al diseñar la estructura:
-            - PRIME: Periodización más agresiva, picos definidos, recuperación planificada.
-            - LONGEVITY: Ondulaciones más suaves, énfasis en recuperación activa, flexibilidad.
-            - GENERAL/UNKNOWN/ERROR: Un modelo de periodización clásico y seguro.
-        - Formato: Markdown claro, con secciones por Fase, indicando duración, objetivos y enfoque.
-        """
-        
-        # Añadir historial relevante
-        history_str = "\nHistorial reciente:\n"
-        if context.get("history"):
-             for entry in context["history"][-2:]:
-                 input_text = entry.get('input', {}).get('text', 'N/A')
-                 output_text = entry.get('output', {}).get('response', 'N/A')
-                 skill_used = entry.get('skill_used', 'N/A')
-                 history_str += f"- Skill: {skill_used}, In: '{input_text[:50]}...', Out: '{output_text[:50]}...'\n"
-        else:
-             history_str = ""
-
-        full_prompt = prompt + history_str
-        logger.debug(f"Prompt para Gemini (design_periodization): {full_prompt[:200]}...")
-
-        # 3. Llamar a Gemini y procesar respuesta
         try:
-            periodization_plan_text = await self.gemini_client.generate_content(full_prompt)
-            periodization_plan_text = periodization_plan_text if isinstance(periodization_plan_text, str) else str(periodization_plan_text)
-            
-            # Crear artefactos
-            artifacts = [
-                {
-                    "type": "markdown",
-                    "label": f"Plan de Periodización ({program_type} - {total_duration_months} meses) para '{goal_event}'",
-                    "content": periodization_plan_text
-                }
-            ]
-            result = {"response": periodization_plan_text, "artifacts": artifacts}
+            # Obtener client_profile del contexto
+            full_context = await self._get_context(user_id, session_id)
+            client_profile_from_context = full_context.get("client_profile", {})
 
+            # Obtener parámetros relevantes de kwargs
+            focus_area = kwargs.get("focus_area", input_text if input_text else "Entrenamiento general de fuerza")
+            exercise_type = kwargs.get("exercise_type", "compound")
+            equipment_available = kwargs.get("equipment_available", ["full_gym"])
+            experience_level = kwargs.get("experience_level", client_profile_from_context.get("experience_level", "intermediate"))
+
+            # Llamar a la lógica interna
+            routines = await self._prescribe_exercise_routines_logic(
+                user_profile=client_profile_from_context,
+                focus_area=focus_area,
+                exercise_type=exercise_type,
+                equipment_available=equipment_available,
+                experience_level=experience_level
+            )
+
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="ExerciseRoutine",
+                content_type="application/json",
+                data=routines
+            )
+
+            return create_result(
+                status="success",
+                response_data=routines,
+                artifacts=[artifact]
+            )
         except Exception as e:
-            logger.error(f"Error al generar periodización con Gemini para user_id {user_id}: {e}", exc_info=True)
-            error_message = "Error al generar el plan de periodización. Por favor, intenta de nuevo más tarde."
-            result = {"response": error_message, "artifacts": []}
+            logger.error(f"Error en skill '{self._skill_prescribe_exercise_routines.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
 
-        # 4. Actualizar contexto
-        interaction_data = {
-            "skill_used": "design_periodization",
-            "input": {"user_id": user_id, "goal_event": goal_event, "total_duration_months": total_duration_months},
-            "output": result,
-            "duration_ms": int((time.time() - start_time) * 1000)
-        }
-        await self._update_context(user_id, session_id, interaction_data)
-        
-        return result
-
-    async def _skill_prescribe_exercises(self, user_id: str, session_goal: str, muscle_group: Optional[str] = None, equipment: Optional[List[str]] = None, **kwargs) -> Dict[str, Any]:
-        """Skill para prescribir ejercicios."""
-        start_time = time.time()
-        logger.info(f"Executing _skill_prescribe_exercises for user_id={user_id}, goal='{session_goal}', muscle='{muscle_group}', equip='{equipment}'")
-        session_id = kwargs.get("session_id")
-
-        # 1. Obtener contexto y perfil
-        context = await self._get_context(user_id, session_id)
-        client_profile = context.get("client_profile", {})
-        program_type = self._get_program_type_from_profile(client_profile)
-        profile_details = self._extract_profile_details(client_profile)
-
-        if not self.gemini_client:
-            logger.error("GeminiClient no está disponible para prescribir ejercicios.")
-            return {"response": "Error: Servicio de IA no disponible.", "artifacts": []}
-
-        # 2. Construir el prompt para Gemini
-        equipment_str = f"Equipo disponible: {', '.join(equipment)}." if equipment else "Equipo no especificado (asumir equipo básico/peso corporal)."
-        muscle_group_str = f"Enfocado en el grupo muscular: {muscle_group}." if muscle_group else "Objetivo general de la sesión."
-
-        prompt = f"""
-        Actúa como un entrenador personal experto.
-        Prescribe una lista de ejercicios específicos para una sesión de entrenamiento con el siguiente objetivo:
-        '{session_goal}'
-
-        {muscle_group_str}
-        {equipment_str}
-
-        Contexto del Atleta:
-        Programa: {program_type}
-        Perfil:
-        {profile_details}
-
-        Instrucciones:
-        - Selecciona ejercicios apropiados para el objetivo descrito en la solicitud, el perfil del cliente y el equipo potencialmente mencionado.
-        - Considera el tipo de programa ({program_type}):
-            - PRIME: Ejercicios compuestos eficientes, técnicas avanzadas si aplica.
-            - LONGEVITY: Ejercicios seguros, funcionales, con opciones de modificación.
-            - GENERAL/UNKNOWN/ERROR: Ejercicios estándar y probados.
-        - Proporciona series, repeticiones (o duración) y descansos recomendados para cada ejercicio.
-        - Incluye notas breves sobre técnica o enfoque si es relevante.
-        - Devuelve la lista de ejercicios EXCLUSIVAMENTE en formato JSON, como una lista de objetos. Cada objeto debe tener las claves: 'exercise_name', 'sets', 'reps_or_duration', 'rest', 'notes'.
-        - NO incluyas ningún texto introductorio o explicativo antes o después del JSON.
-        - Ejemplo de formato JSON esperado:
-          [{{"exercise_name": "Sentadilla con barra", "sets": 3, "reps_or_duration": "8-12 reps", "rest": "60-90s", "notes": "Mantener espalda recta."}},
-           {{"exercise_name": "Plancha", "sets": 3, "reps_or_duration": "30-60s", "rest": "30s", "notes": "Core apretado."}}]
+    async def _prescribe_exercise_routines_logic(
+        self, 
+        user_profile: Dict[str, Any],
+        focus_area: str,
+        exercise_type: str,
+        equipment_available: List[str],
+        experience_level: str
+    ) -> Dict[str, Any]:
         """
+        Lógica interna para prescribir rutinas de ejercicios.
+        """
+        program_type = self._get_program_type_from_profile(user_profile)
 
-        # Añadir historial relevante (podría influir en la selección de ejercicios)
-        history_str = "\nHistorial reciente (para contexto):\n"
-        if context.get("history"):
-             for entry in context["history"][-2:]:
-                 input_text = entry.get('input', {}).get('text', 'N/A')
-                 output_text = entry.get('output', {}).get('response', 'N/A')
-                 skill_used = entry.get('skill_used', 'N/A')
-                 history_str += f"- Skill: {skill_used}, In: '{input_text[:50]}...', Out: '{output_text[:50]}...'\n"
-        else:
-             history_str = ""
-             
-        # No añadir historial al prompt final si pedimos JSON estricto?
-        # Depende de si Gemini puede manejar contexto + JSON estricto.
-        # Por ahora, lo omitimos del prompt para maximizar la probabilidad de obtener JSON válido.
-        # full_prompt = prompt # + history_str
-        logger.debug(f"Prompt para Gemini (prescribe_exercises): {prompt[:200]}...") 
+        prompt_parts = [
+            f"Eres un especialista en ejercicios. Prescribe rutinas de ejercicios para un programa '{program_type}'.",
+            f"Área de Enfoque: {focus_area}",
+            f"Tipo de Ejercicio: {exercise_type}",
+            f"Equipamiento Disponible: {', '.join(equipment_available)}",
+            f"Nivel de Experiencia del Atleta: {experience_level}",
+        ]
 
-        # 3. Llamar a Gemini y procesar respuesta
-        response_text = ""
-        exercise_list = []
-        artifacts = []
+        # Información del perfil de usuario
+        prompt_parts.append("Considera el siguiente perfil de atleta:")
+        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
+        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
+        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
+        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
+        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
+
+        prompt_parts.append("\nProporciona una lista de ejercicios con detalles sobre series, repeticiones, tempo, descanso y notas técnicas o de seguridad.")
+        prompt_parts.append("Si es relevante, incluye progresiones o regresiones.")
+        prompt_parts.append("Formato de Salida Esperado: JSON con 'routine_name', 'focus_area', 'exercises' (lista).")
+        prompt_parts.append(
+            "\nEjemplo de la estructura JSON de salida deseada (PrescribeExerciseRoutinesOutput):\n"
+            "{\n"
+            "  \"routine_name\": \"Rutina de Empuje Tren Superior - Intermedio\",\n"
+            "  \"focus_area\": \"Fuerza de tren superior (empuje)\",\n"
+            "  \"exercise_type\": \"compound_isolation_mix\",\n"
+            "  \"estimated_duration_minutes\": 60,\n"
+            "  \"exercises\": [\n"
+            "    { \"exercise_name\": \"Press de Banca con Barra\", \"sets\": 4, \"reps_range\": \"6-8\", \"rest_seconds\": 90, \"tempo\": \"2-0-1-0\", \"notes\": \"Mantener retracción escapular.\" },\n"
+            "    { \"exercise_name\": \"Press Inclinado con Mancuernas\", \"sets\": 3, \"reps_range\": \"8-10\", \"rest_seconds\": 75, \"tempo\": \"2-0-1-0\", \"notes\": \"Ajustar inclinación a 30-45 grados.\" },\n"
+            "    { \"exercise_name\": \"Aperturas con Mancuernas\", \"sets\": 3, \"reps_range\": \"10-12\", \"rest_seconds\": 60, \"tempo\": \"3-0-1-0\", \"notes\": \"Controlar el estiramiento.\" }\n"
+            "  ],\n"
+            "  \"warm_up\": [\"Movilidad articular general\", \"Activación de manguito rotador\"],\n"
+            "  \"cool_down\": [\"Estiramientos estáticos para pectoral, hombros, tríceps\"]\n"
+            "}"
+        )
+        final_prompt = "\n".join(prompt_parts)
+        logger.debug(f"Prompt para Gemini (prescribir ejercicios): {final_prompt[:500]}...")
+
+        # Llamada a Gemini
+        if not self.gemini_client or not hasattr(self.gemini_client, 'generate_structured_output'):
+             logger.error("GeminiClient no está configurado correctamente. No se pueden prescribir rutinas.")
+             return {"error": "GeminiClient not configured", "message": "Unable to prescribe routines."}
+
+        routines = await self.gemini_client.generate_structured_output(final_prompt)
         
-        try:
-            response_text = await self.gemini_client.generate_content(prompt)
-            response_text = response_text if isinstance(response_text, str) else str(response_text)
-            logger.debug(f"Respuesta cruda de Gemini (prescribe_exercises): {response_text[:200]}...")
+        # Validar la estructura de la rutina
+        if not isinstance(routines, dict) or "routine_name" not in routines:
+            logger.error(f"La salida de Gemini para la prescripción de rutinas no tiene la estructura esperada. Salida: {routines}")
+            return {"error": "Invalid routine structure from LLM", "details": routines}
             
-            # Intentar parsear JSON
-            try:
-                # Limpiar posible ```json ... ``` de la respuesta
-                json_match = re.search(r'```json\n(.*)\n```', response_text, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(1).strip()
-                else:
-                    json_str = response_text.strip() 
-                
-                exercise_list = json.loads(json_str)
-                if isinstance(exercise_list, list):
-                     logger.info(f"Ejercicios parseados exitosamente como lista JSON ({len(exercise_list)} ejercicios).")
-                     # Crear artefacto con la lista estructurada
-                     artifacts.append({
-                         "type": "exercise_list",
-                         "label": f"Ejercicios para '{session_goal}' ({program_type})",
-                         "content": exercise_list
-                     })
-                     # Generar una respuesta textual legible desde la lista JSON
-                     response_text = f"Aquí tienes una sugerencia de ejercicios para tu sesión de '{session_goal}':\n\n"
-                     for ex in exercise_list:
-                         response_text += f"- **{ex.get('exercise_name', 'Ejercicio desconocido')}**: {ex.get('sets', '?')} series x {ex.get('reps_or_duration', '?')} reps/duración, descanso: {ex.get('rest', '?')}. {ex.get('notes', '')}\n"
-                else:
-                     logger.warning("La respuesta JSON no era una lista. Se devolverá como texto.")
-                     exercise_list = [] 
-                     # Usar response_text crudo como respuesta
-            except json.JSONDecodeError as json_e:
-                logger.warning(f"No se pudo parsear la respuesta de Gemini como JSON: {json_e}. Se devolverá como texto crudo.")
-                exercise_list = [] 
-                # response_text ya contiene la respuesta cruda de Gemini
+        return routines
 
-            result = {"response": response_text, "artifacts": artifacts}
+    def _get_completion_message(self, skill_name: str, response_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Genera un mensaje de finalización personalizado para la skill, si es necesario.
+        """
+        # Implementación específica si se necesita un mensaje de finalización personalizado
+        # Por ahora, devolvemos None para usar el mensaje por defecto
+        return None
 
-        except Exception as e:
-            logger.error(f"Error al prescribir ejercicios con Gemini para user_id {user_id}: {e}", exc_info=True)
-            error_message = "Error al generar la prescripción de ejercicios. Por favor, intenta de nuevo más tarde."
-            result = {"response": error_message, "artifacts": []}
-            exercise_list = [] 
-
-        # 4. Actualizar contexto
-        interaction_data = {
-            "skill_used": "prescribe_exercises",
-            "input": {"user_id": user_id, "session_goal": session_goal, "muscle_group": muscle_group, "equipment": equipment},
-            # Guardar la lista parseada si existe, o la respuesta textual si no.
-            "output": {"response": response_text, "parsed_exercises": exercise_list, "artifacts": artifacts},
-            "duration_ms": int((time.time() - start_time) * 1000)
-        }
-        await self._update_context(user_id, session_id, interaction_data)
+    def _handle_error(self, error: Exception) -> Dict[str, Any]:
+        """
+        Maneja errores y devuelve un resultado formateado.
+        """
+        # Registrar el error
+        logger.error(f"Error en EliteTrainingStrategist: {error}", exc_info=True)
         
-        # Devolver la respuesta textual y los artefactos (que pueden incluir la lista parseada)
-        return result
-
-    # --- Lógica Interna Original (Ahora llamada por Skills) --- 
-    # (Mantener _design_periodization, _prescribe_exercises como métodos privados 
-    # llamados por los métodos _skill_*, adaptando ligeramente si es necesario)
-
-    # --- Métodos de Contexto (Mantener y adaptar si es necesario) --- 
-    async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
-        """
-        Obtiene contexto (perfil de usuario, historial) para la solicitud.
-        Prioriza StateManager si está disponible.
-        """
-        context_key = f"context_{user_id}_{session_id}" if user_id and session_id else f"context_ets_default_{uuid.uuid4().hex[:6]}"
-        context = {}
-
-        # 1. Intentar cargar desde StateManager
-        if self.state_manager and user_id and session_id:
-            try:
-                state_data = await self.state_manager.load_state(user_id, session_id)
-                if state_data and isinstance(state_data.get("context"), dict):
-                    context = state_data["context"]
-                    logger.debug(f"Contexto cargado desde StateManager para key={context_key}")
-                else:
-                    logger.debug(f"No se encontró contexto válido en StateManager para key={context_key}, inicializando.")
-                    context = {"history": []} 
-            except Exception as e:
-                logger.warning(f"Error al cargar contexto desde StateManager para key={context_key}: {e}")
-                context = {"history": []} 
+        # Si hay telemetría disponible, incrementar contador de errores
+        if hasattr(self, 'error_count') and self.error_count:
+            self.error_count.add(1, {"agent": "EliteTrainingStrategist", "error_type": type(error).__name__})
+            
+        # Crear un mensaje de error amigable
+        error_message = str(error)
+        if isinstance(error, ValueError):
+            friendly_message = f"Error de valor: {error_message}"
+        elif isinstance(error, TypeError):
+            friendly_message = f"Error de tipo: {error_message}"
+        elif isinstance(error, KeyError):
+            friendly_message = f"Error de clave: {error_message}"
         else:
-             logger.debug(f"No se usa StateManager para key={context_key} (faltan IDs o no está habilitado). Inicializando contexto.")
-             context = {"history": []} 
-
-        # 2. Intentar obtener/actualizar perfil de Supabase si el contexto no lo tiene
-        if not context.get("client_profile") and user_id and self.supabase_client:
-            try:
-                client_profile = await self.supabase_client.get_client_profile(user_id)
-                if client_profile:
-                    context["client_profile"] = client_profile
-                    logger.info(f"Perfil de cliente obtenido/actualizado de Supabase para user_id {user_id}")
-                else:
-                    logger.warning(f"No se encontró perfil de cliente en Supabase para user_id {user_id}")
-                    # No marcar como vacío aquí, podría haber datos previos en el contexto
-            except Exception as e:
-                logger.error(f"Error al obtener perfil de Supabase para user_id {user_id}: {e}")
-                # No modificar el contexto existente en caso de error
-                
-        # 3. Fallback: usar estado interno (memoria) SOLO si no hay StateManager
-        #    Esta parte se eliminó previamente, la mantenemos comentada como referencia.
-        #    Si se requiere estado en memoria sin StateManager, necesitaría una implementación específica.
-        # if not self.state_manager:
-        #      # Lógica para manejar contexto en memoria si es necesario
-        #      logger.debug(f"Contexto gestionado en memoria (requiere implementación) para key={context_key}")
-        
-        # Añadir user_id al contexto si no está (podría venir del StateManager)
-        if "user_id" not in context and user_id:
-             context["user_id"] = user_id
-        
-        # Asegurar que history existe y es una lista
-        if "history" not in context or not isinstance(context.get("history"), list):
-            context["history"] = []
-
-        return context
-
-    async def _update_context(self, user_id: Optional[str], session_id: Optional[str], interaction_data: Dict[str, Any]):
-        """
-        Actualiza el contexto (perfil de usuario, historial) para la solicitud.
-        Utiliza StateManager si está disponible.
-        """
-        context_key = f"context_{user_id}_{session_id}" if user_id and session_id else f"context_ets_default_{uuid.uuid4().hex[:6]}"
-        context = await self._get_context(user_id, session_id)
-
-        # Actualizar datos en el contexto
-        context.update(interaction_data)
-
-        # 1. Guardar en StateManager si está disponible
-        if self.state_manager and user_id and session_id:
-            try:
-                await self.state_manager.save_state(user_id, session_id, {"context": context})
-                logger.debug(f"Contexto actualizado en StateManager para key={context_key}")
-            except Exception as e:
-                logger.warning(f"Error al guardar contexto en StateManager para {context_key}: {e}")
-        # Corregido: Quitar self.update_state y la lógica de memoria interna si no se implementa
-        # else:
-        #     # Actualizar estado en memoria si no hay StateManager (requiere implementación)
-        #     # self.update_state(context_key, context)
-        #     logger.debug(f"Contexto actualizado en memoria (requiere implementación) para key={context_key}")
-
-    # --- Métodos de Ciclo de Vida ADK --- 
-
-    async def start(self) -> None:
-        """Inicia el agente, conectando y registrando."""
-        await super().start() 
-        if self._running:
-            logger.info(f"Agente {self.agent_id} iniciado y conectado al servidor A2A.")
-        else:
-             logger.warning(f"El agente {self.agent_id} no pudo iniciarse o conectarse correctamente.")
-
-    # async def _register_skills(self) -> None: 
-    #     """Registra las skills específicas de este agente con el toolkit ADK."""
-    #     if not self.toolkit:
-    #         logger.error(f"No se puede registrar skills para {self.agent_id}: Toolkit no inicializado.")
-    #         return
-
-    #     # Registrar cada función de skill
-    #     self.register_skill("generate_training_plan", self._skill_generate_training_plan)
-    #     self.register_skill("analyze_performance", self._skill_analyze_performance)
-    #     self.register_skill("design_periodization", self._skill_design_periodization)
-    #     self.register_skill("prescribe_exercises", self._skill_prescribe_exercises)
-        
-    #     logger.info(f"{len(self.skills)} skills registradas para {self.agent_id}.")
-
-    # --- Eliminar métodos A2A/Antiguos --- 
-    # (_run_async_impl, _process_request, _classify_request, _handle_*, _create_agent_card, get_agent_card)
-    # Ya no son necesarios porque ADKAgent maneja el flujo.
-
-    # --- Mantener métodos auxiliares si son usados por la lógica interna --- 
-    # (Ej: _extract_profile_details, _get_program_type_from_profile)
-    def _extract_profile_details(self, client_profile_data: Optional[Dict[str, Any]]) -> str:
-        details = "" 
-        # ... (Lógica original sin cambios) ...
-        return details
-    
-    def _get_program_type_from_profile(self, client_profile_data: Optional[Dict[str, Any]]) -> str:
-        # Implementación para extraer el tipo de programa del perfil
-        if client_profile_data and isinstance(client_profile_data, dict):
-            program_type = client_profile_data.get("program_type", "general")
-            # Asegurarse de que sea string y convertir a mayúsculas para consistencia
-            return str(program_type).upper()
-        return "GENERAL" 
+            friendly_message = f"Error inesperado: {error_message}"
+            
+        # Devolver un resultado formateado con el error
+        return create_result(status="error", error_message=friendly_message)
