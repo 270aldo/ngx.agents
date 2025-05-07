@@ -25,17 +25,26 @@ from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
 from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
-from agents.base.a2a_agent import A2AAgent
+from agents.base.adk_agent import ADKAgent
 from core.agent_card import AgentCard, Example
 from core.state_manager import StateManager
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result
 
+# Importar esquemas para las skills
+from agents.biometrics_insight_engine.schemas import (
+    BiometricAnalysisInput, BiometricAnalysisOutput,
+    PatternRecognitionInput, PatternRecognitionOutput,
+    TrendIdentificationInput, TrendIdentificationOutput,
+    DataVisualizationInput, DataVisualizationOutput,
+    BiometricAnalysisArtifact, BiometricVisualizationArtifact
+)
+
 # Configurar logger
 logger = get_logger(__name__)
 
 
-class BiometricsInsightEngine(A2AAgent):
+class BiometricsInsightEngine(ADKAgent):
     """
     Agente especializado en análisis e interpretación de datos biométricos.
 
@@ -43,16 +52,17 @@ class BiometricsInsightEngine(A2AAgent):
     composición corporal, etc., para proporcionar insights personalizados
     y recomendaciones basadas en patrones individuales.
 
-    Implementa los protocolos oficiales A2A y ADK para comunicación entre agentes.
+    Implementa el protocolo ADK para comunicación entre agentes.
     """
 
     def __init__(
         self,
         toolkit: Optional[Toolkit] = None,
-        a2a_server_url: Optional[str] = None,
         state_manager: Optional[StateManager] = None,
+        system_instructions: Optional[str] = None,
+        gemini_client: Optional[GeminiClient] = None,
     ):
-        # Definir capacidades y habilidades
+        # Definir capacidades
         capabilities = [
             "biometric_analysis",
             "pattern_recognition",
@@ -61,86 +71,76 @@ class BiometricsInsightEngine(A2AAgent):
             "data_visualization",
         ]
 
-        # Definir skills siguiendo el formato A2A con mejores prácticas
-        skills = [
-            {
-                "id": "biometrics-insight-biometric-analysis",
+        # Inicializar sistema y clientes
+        self.system_instructions = system_instructions or """
+        Eres un especialista en análisis e interpretación de datos biométricos.
+        Tu objetivo es proporcionar insights personalizados y recomendaciones basadas en patrones individuales.
+        Analiza datos biométricos como HRV, sueño, glucosa, composición corporal, etc., para identificar patrones y tendencias.
+        Tus análisis deben ser precisos, basados en evidencia y personalizados para cada usuario.
+        """
+        
+        # Crear directorio temporal para visualizaciones si es necesario
+        self.tmp_dir = os.path.join(os.getcwd(), "tmp", "biometrics_viz")
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        
+        # Inicializar clientes
+        self.gemini_client = gemini_client or GeminiClient()
+        
+        # Definir skills directamente
+        self.skills = {
+            "biometric_analysis": {
+                "skill_id": "biometric_analysis",
                 "name": "Análisis de Datos Biométricos",
-                "description": "Analiza e interpreta datos biométricos como HRV, sueño, glucosa, composición corporal y otros marcadores para identificar patrones y oportunidades de mejora",
-                "tags": [
-                    "biometrics",
-                    "health-data",
-                    "analysis",
-                    "hrv",
-                    "sleep",
-                    "glucose",
-                ],
+                "description": "Analiza e interpreta datos biométricos como HRV, sueño, glucosa, composición corporal y otros marcadores",
+                "method": self._generate_biometric_analysis,
+                "input_schema": BiometricAnalysisInput,
+                "output_schema": BiometricAnalysisOutput,
                 "examples": [
                     "Analiza mis datos de HRV de la última semana",
                     "Interpreta mis métricas de sueño y explica qué significan",
                     "Qué indican mis niveles de glucosa después de las comidas",
                 ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"],
             },
-            {
-                "id": "biometrics-insight-pattern-recognition",
+            "pattern_recognition": {
+                "skill_id": "pattern_recognition",
                 "name": "Reconocimiento de Patrones",
-                "description": "Identifica patrones recurrentes en datos biométricos a lo largo del tiempo y su relación con hábitos, comportamientos y factores externos",
-                "tags": [
-                    "patterns",
-                    "correlations",
-                    "time-series",
-                    "trends",
-                    "causality",
-                ],
+                "description": "Identifica patrones recurrentes en datos biométricos y su relación con hábitos y comportamientos",
+                "method": self._generate_pattern_analysis,
+                "input_schema": PatternRecognitionInput,
+                "output_schema": PatternRecognitionOutput,
                 "examples": [
                     "¿Qué patrones ves en mi recuperación relacionados con mi alimentación?",
                     "Identifica patrones en mi HRV relacionados con mi calidad de sueño",
                     "¿Cómo afectan mis entrenamientos a mis métricas de recuperación?",
                 ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"],
             },
-            {
-                "id": "biometrics-insight-trend-identification",
+            "trend_identification": {
+                "skill_id": "trend_identification",
                 "name": "Identificación de Tendencias",
-                "description": "Analiza tendencias a largo plazo en datos biométricos para identificar mejoras, deterioros o cambios significativos en el tiempo",
-                "tags": [
-                    "trends",
-                    "longitudinal-analysis",
-                    "progress",
-                    "regression",
-                    "changes",
-                ],
+                "description": "Analiza tendencias a largo plazo en datos biométricos para identificar mejoras o cambios significativos",
+                "method": self._generate_trend_analysis,
+                "input_schema": TrendIdentificationInput,
+                "output_schema": TrendIdentificationOutput,
                 "examples": [
                     "Muestra la evolución de mi HRV durante los últimos 3 meses",
                     "¿Cómo ha cambiado mi calidad de sueño desde que empecé a meditar?",
                     "Analiza la tendencia de mi recuperación después de entrenamientos intensos",
                 ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"],
             },
-            {
-                "id": "biometrics-insight-data-visualization",
+            "data_visualization": {
+                "skill_id": "data_visualization",
                 "name": "Visualización de Datos",
-                "description": "Crea representaciones visuales de datos biométricos para facilitar la comprensión de patrones y relaciones entre diferentes métricas",
-                "tags": [
-                    "visualization",
-                    "charts",
-                    "graphs",
-                    "comparison",
-                    "dashboard",
-                ],
+                "description": "Crea representaciones visuales de datos biométricos para facilitar la comprensión de patrones",
+                "method": self._generate_visualization,
+                "input_schema": DataVisualizationInput,
+                "output_schema": DataVisualizationOutput,
                 "examples": [
                     "Muestra la relación entre mi sueño y mi HRV",
                     "Visualiza mis niveles de estrés durante la semana laboral vs. fin de semana",
                     "Compara mis métricas de recuperación antes y después de cambiar mi dieta",
                 ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown", "image"],
             },
-        ]
+        }
 
         # Inicializar agente base con los parámetros definidos
         super().__init__(
@@ -149,16 +149,10 @@ class BiometricsInsightEngine(A2AAgent):
             description="Especialista en análisis e interpretación de datos biométricos para proporcionar insights personalizados y recomendaciones basadas en patrones individuales.",
             capabilities=capabilities,
             toolkit=toolkit,
-            a2a_server_url=a2a_server_url
-            or "https://biometrics-api.ngx-agents.com/a2a",
             state_manager=state_manager,
             version="1.2.0",
-            skills=skills,
-            provider={
-                "organization": "NGX Health & Performance",
-                "url": "https://ngx-agents.com",
-            },
-            documentation_url="https://docs.ngx-agents.com/biometrics-insight-engine",
+            system_instructions=self.system_instructions,
+            skills=self.skills,
         )
 
         # Inicialización de AI Platform
@@ -471,81 +465,126 @@ class BiometricsInsightEngine(A2AAgent):
     async def _generate_biometric_analysis(
         self,
         input_text: str,
-        biometric_data: Dict[str, Any],
-        user_profile: Optional[Dict[str, Any]] = None,
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Genera un análisis de datos biométricos estructurado.
 
         Args:
             input_text: Texto de entrada del usuario
-            biometric_data: Datos biométricos del usuario
-            user_profile: Perfil del usuario
+            **kwargs: Parámetros adicionales, incluyendo biometric_data y user_profile
 
         Returns:
-            Dict[str, Any]: Análisis biométrico estructurado
+            Dict[str, Any]: Análisis biométrico estructurado con formato create_result
         """
-        # TODO: Integrar RAG para obtener contexto sobre rangos normales/óptimos de biomarcadores según NGX.
-        # TODO: Usar mcp7_query para obtener umbrales personalizados del usuario o datos históricos adicionales desde Supabase.
-        prompt = f"""
-        Genera un análisis detallado de los siguientes datos biométricos:
+        logger.info(f"Skill '{self._generate_biometric_analysis.__name__}' llamada con entrada: '{input_text[:50]}...'")
         
-        "{input_text}"
+        # Extraer parámetros de kwargs
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        biometric_data = kwargs.get("biometric_data", {})
+        user_profile = kwargs.get("user_profile")
         
-        Datos biométricos disponibles:
-        {json.dumps(biometric_data, indent=2)}
-        
-        El análisis debe incluir:
-        1. Interpretación de los datos principales
-        2. Insights clave identificados
-        3. Patrones relevantes
-        4. Recomendaciones personalizadas
-        5. Áreas de mejora
-        
-        Devuelve el análisis en formato JSON estructurado.
-        """
-
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += f"""
+        try:
+            # Obtener client_profile del contexto si es necesario y no se proporcionó user_profile
+            if not user_profile and user_id:
+                full_context = await self._get_context(user_id, session_id)
+                user_profile = full_context.get("client_profile", {})
             
-            Considera la siguiente información del usuario:
-            - Nombre: {user_profile.get('name', 'N/A')}
-            - Edad: {user_profile.get('age', 'N/A')}
-            - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
-            - Objetivos de salud: {', '.join(user_profile.get('health_goals', ['N/A']))}
-            - Condiciones: {', '.join(user_profile.get('conditions', ['N/A']))}
+            # Verificar que tenemos datos biométricos para analizar
+            if not biometric_data:
+                return create_result(
+                    status="error",
+                    error_message="No se proporcionaron datos biométricos para analizar."
+                )
+            
+            # Preparar prompt para el modelo
+            prompt = f"""
+            {self.system_instructions}
+            
+            Genera un análisis detallado de los siguientes datos biométricos:
+            
+            "{input_text}"
+            
+            Datos biométricos disponibles:
+            {json.dumps(biometric_data, indent=2)}
+            
+            El análisis debe incluir:
+            1. Interpretación de los datos principales
+            2. Insights clave identificados
+            3. Patrones relevantes
+            4. Recomendaciones personalizadas
+            5. Áreas de mejora
+            
+            Devuelve el análisis en formato JSON estructurado.
             """
 
-        # Generar el análisis biométrico
-        try:
-            vertex_skill = VertexGeminiGenerateSkill()
-            result = await vertex_skill.execute(
-                {"prompt": prompt, "temperature": 0.3, "model": "gemini-2.0-flash"}
-            )
-            response = result.get("text", "")
-        except Exception as e:
-            logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
-            # Fallback a cliente Gemini directo
-            response = await self.gemini_client.generate_structured_output(prompt)
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += f"""
+                
+                Considera la siguiente información del usuario:
+                - Nombre: {user_profile.get('name', 'N/A')}
+                - Edad: {user_profile.get('age', 'N/A')}
+                - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
+                - Objetivos de salud: {', '.join(user_profile.get('health_goals', ['N/A']))}
+                - Condiciones: {', '.join(user_profile.get('conditions', ['N/A']))}
+                """
 
-        # Si la respuesta no es un diccionario, intentar convertirla
-        if not isinstance(response, dict):
+            # Generar el análisis biométrico
             try:
-                response = json.loads(response)
-            except:
-                # Si no se puede convertir, crear un diccionario básico
-                response = {
-                    "interpretation": "Interpretación no disponible",
-                    "main_insights": ["No se pudieron identificar insights"],
-                    "patterns": ["No se pudieron identificar patrones"],
-                    "recommendations": ["Recomendaciones no disponibles"],
-                    "areas_for_improvement": [
-                        "No se pudieron identificar áreas de mejora"
-                    ],
-                }
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute(
+                    {"prompt": prompt, "temperature": 0.3, "model": "gemini-2.0-flash"}
+                )
+                response = result.get("text", "")
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                response = await self.gemini_client.generate_structured_output(prompt)
 
-        return response
+            # Si la respuesta no es un diccionario, intentar convertirla
+            if not isinstance(response, dict):
+                try:
+                    response = json.loads(response)
+                except:
+                    # Si no se puede convertir, crear un diccionario básico
+                    response = {
+                        "interpretation": "Interpretación no disponible",
+                        "main_insights": ["No se pudieron identificar insights"],
+                        "patterns": ["No se pudieron identificar patrones"],
+                        "recommendations": ["Recomendaciones no disponibles"],
+                        "areas_for_improvement": [
+                            "No se pudieron identificar áreas de mejora"
+                        ],
+                    }
+            
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="BiometricAnalysis",
+                content_type="application/json",
+                data={
+                    "analysis_id": str(uuid.uuid4()),
+                    "analysis_type": "biometric_analysis",
+                    "metrics_analyzed": list(biometric_data.keys()),
+                    "timestamp": time.time(),
+                    "summary": response.get("interpretation", "Análisis completado")
+                }
+            )
+            
+            # Generar respuesta textual
+            response_text = self._summarize_analysis(response)
+            
+            return create_result(
+                status="success",
+                response_data=response,
+                response_text=response_text,
+                artifacts=[artifact]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en skill '{self._generate_biometric_analysis.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
 
     async def _generate_pattern_analysis(
         self,
@@ -620,166 +659,445 @@ class BiometricsInsightEngine(A2AAgent):
                     "correlations": ["No se pudieron identificar correlaciones"],
                     "influencing_factors": ["No se pudieron identificar factores"],
                     "recommendations": ["Recomendaciones no disponibles"],
-                    "possible_causes": ["No se pudieron identificar causas"],
                 }
 
         return response
 
+    async def _generate_pattern_analysis(
+        self,
+        input_text: str,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Genera un análisis de patrones en datos biométricos estructurado.
+
+        Args:
+            input_text: Texto de entrada del usuario
+            **kwargs: Parámetros adicionales, incluyendo biometric_data y user_profile
+
+        Returns:
+            Dict[str, Any]: Análisis de patrones estructurado con formato create_result
+        """
+        logger.info(f"Skill '{self._generate_pattern_analysis.__name__}' llamada con entrada: '{input_text[:50]}...'")
+        
+        # Extraer parámetros de kwargs
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        biometric_data = kwargs.get("biometric_data", {})
+        user_profile = kwargs.get("user_profile")
+        
+        try:
+            # Obtener client_profile del contexto si es necesario y no se proporcionó user_profile
+            if not user_profile and user_id:
+                full_context = await self._get_context(user_id, session_id)
+                user_profile = full_context.get("client_profile", {})
+            
+            # Verificar que tenemos datos biométricos para analizar
+            if not biometric_data:
+                return create_result(
+                    status="error",
+                    error_message="No se proporcionaron datos biométricos para analizar patrones."
+                )
+            
+            # Preparar prompt para el modelo
+            prompt = f"""
+            {self.system_instructions}
+            
+            Identifica patrones recurrentes en los siguientes datos biométricos:
+            
+            "{input_text}"
+            
+            Datos biométricos disponibles:
+            {json.dumps(biometric_data, indent=2)}
+            
+            El análisis debe incluir:
+            1. Patrones identificados con descripción detallada
+            2. Correlaciones entre diferentes métricas
+            3. Posibles relaciones causales (si aplica)
+            4. Recomendaciones basadas en los patrones identificados
+            
+            Devuelve el análisis en formato JSON estructurado.
+            """
+
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += f"""
+                
+                Considera la siguiente información del usuario:
+                - Nombre: {user_profile.get('name', 'N/A')}
+                - Edad: {user_profile.get('age', 'N/A')}
+                - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
+                - Objetivos de salud: {', '.join(user_profile.get('health_goals', ['N/A']))}
+                - Condiciones: {', '.join(user_profile.get('conditions', ['N/A']))}
+                """
+
+            # Generar el análisis de patrones
+            try:
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute(
+                    {"prompt": prompt, "temperature": 0.2, "model": "gemini-2.0-flash"}
+                )
+                response = result.get("text", "")
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                response = await self.gemini_client.generate_structured_output(prompt)
+
+            # Si la respuesta no es un diccionario, intentar convertirla
+            if not isinstance(response, dict):
+                try:
+                    response = json.loads(response)
+                except:
+                    # Si no se puede convertir, crear un diccionario básico
+                    response = {
+                        "identified_patterns": [
+                            {"name": "No se pudieron identificar patrones", "description": ""}
+                        ],
+                        "correlations": [
+                            {
+                                "metrics": ["N/A", "N/A"],
+                                "correlation_type": "N/A",
+                                "strength": "N/A",
+                            }
+                        ],
+                        "causality_analysis": {"possible_causes": ["No se pudo determinar"]},
+                        "recommendations": ["No hay recomendaciones disponibles"],
+                    }
+            
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="PatternAnalysis",
+                content_type="application/json",
+                data={
+                    "analysis_id": str(uuid.uuid4()),
+                    "analysis_type": "pattern_recognition",
+                    "metrics_analyzed": list(biometric_data.keys()),
+                    "timestamp": time.time(),
+                    "patterns_count": len(response.get("identified_patterns", []))
+                }
+            )
+            
+            # Generar respuesta textual
+            response_text = "Análisis de patrones en datos biométricos:\n\n"
+            
+            # Añadir patrones identificados
+            response_text += "**Patrones identificados:**\n"
+            for pattern in response.get("identified_patterns", []):
+                response_text += f"- {pattern.get('name', 'Patrón sin nombre')}: {pattern.get('description', '')}\n"
+            
+            # Añadir correlaciones
+            response_text += "\n**Correlaciones:**\n"
+            for correlation in response.get("correlations", []):
+                metrics = correlation.get("metrics", [])
+                if len(metrics) >= 2:
+                    response_text += f"- {metrics[0]} y {metrics[1]}: {correlation.get('correlation_type', 'No especificado')} ({correlation.get('strength', 'N/A')})\n"
+            
+            # Añadir recomendaciones
+            response_text += "\n**Recomendaciones:**\n"
+            for recommendation in response.get("recommendations", []):
+                response_text += f"- {recommendation}\n"
+            
+            return create_result(
+                status="success",
+                response_data=response,
+                response_text=response_text,
+                artifacts=[artifact]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en skill '{self._generate_pattern_analysis.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
+
     async def _generate_trend_analysis(
         self,
         input_text: str,
-        biometric_data: Dict[str, Any],
-        user_profile: Optional[Dict[str, Any]] = None,
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Genera un análisis de tendencias de datos biométricos estructurado.
 
         Args:
             input_text: Texto de entrada del usuario
-            biometric_data: Datos biométricos del usuario
-            user_profile: Perfil del usuario
+            **kwargs: Parámetros adicionales, incluyendo biometric_data y user_profile
 
         Returns:
-            Dict[str, Any]: Análisis de tendencias estructurado
+            Dict[str, Any]: Análisis de tendencias estructurado con formato create_result
         """
-        # TODO: Integrar RAG para contextualizar las tendencias (ej. ¿es normal esta tendencia para el perfil del usuario?).
-        # TODO: Usar mcp7_query para obtener datos históricos más extensos y calcular tendencias a largo plazo.
-        prompt = f"""
-        Analiza las tendencias en los siguientes datos biométricos:
+        logger.info(f"Skill '{self._generate_trend_analysis.__name__}' llamada con entrada: '{input_text[:50]}...'")
         
-        "{input_text}"
+        # Extraer parámetros de kwargs
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        biometric_data = kwargs.get("biometric_data", {})
+        user_profile = kwargs.get("user_profile")
         
-        Datos biométricos disponibles:
-        {json.dumps(biometric_data, indent=2)}
-        
-        El análisis debe incluir:
-        1. Tendencias identificadas a lo largo del tiempo
-        2. Cambios significativos en métricas clave
-        3. Progreso hacia objetivos
-        4. Proyecciones futuras
-        5. Recomendaciones basadas en tendencias
-        
-        Devuelve el análisis en formato JSON estructurado.
-        """
-
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += f"""
+        try:
+            # Obtener client_profile del contexto si es necesario y no se proporcionó user_profile
+            if not user_profile and user_id:
+                full_context = await self._get_context(user_id, session_id)
+                user_profile = full_context.get("client_profile", {})
             
-            Considera la siguiente información del usuario:
-            - Nombre: {user_profile.get('name', 'N/A')}
-            - Edad: {user_profile.get('age', 'N/A')}
-            - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
-            - Objetivos de salud: {', '.join(user_profile.get('health_goals', ['N/A']))}
-            - Condiciones: {', '.join(user_profile.get('conditions', ['N/A']))}
+            # Verificar que tenemos datos biométricos para analizar
+            if not biometric_data:
+                return create_result(
+                    status="error",
+                    error_message="No se proporcionaron datos biométricos para analizar tendencias."
+                )
+            
+            # Preparar prompt para el modelo
+            prompt = f"""
+            {self.system_instructions}
+            
+            Analiza las tendencias en los siguientes datos biométricos:
+            
+            "{input_text}"
+            
+            Datos biométricos disponibles:
+            {json.dumps(biometric_data, indent=2)}
+            
+            El análisis debe incluir:
+            1. Tendencias identificadas a lo largo del tiempo
+            2. Cambios significativos en métricas clave
+            3. Progreso hacia objetivos
+            4. Proyecciones futuras
+            5. Recomendaciones basadas en tendencias
+            
+            Devuelve el análisis en formato JSON estructurado.
             """
 
-        # Generar el análisis de tendencias
-        try:
-            vertex_skill = VertexGeminiGenerateSkill()
-            result = await vertex_skill.execute(
-                {"prompt": prompt, "temperature": 0.3, "model": "gemini-2.0-flash"}
-            )
-            response = result.get("text", "")
-        except Exception as e:
-            logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
-            # Fallback a cliente Gemini directo
-            response = await self.gemini_client.generate_structured_output(prompt)
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += f"""
+                
+                Considera la siguiente información del usuario:
+                - Nombre: {user_profile.get('name', 'N/A')}
+                - Edad: {user_profile.get('age', 'N/A')}
+                - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
+                - Objetivos de salud: {', '.join(user_profile.get('health_goals', ['N/A']))}
+                - Condiciones: {', '.join(user_profile.get('conditions', ['N/A']))}
+                """
 
-        # Si la respuesta no es un diccionario, intentar convertirla
-        if not isinstance(response, dict):
+            # Generar el análisis de tendencias
             try:
-                response = json.loads(response)
-            except:
-                # Si no se puede convertir, crear un diccionario básico
-                response = {
-                    "trends": ["No se pudieron identificar tendencias"],
-                    "significant_changes": [
-                        "No se pudieron identificar cambios significativos"
-                    ],
-                    "progress": "Progreso no disponible",
-                    "projections": ["Proyecciones no disponibles"],
-                    "recommendations": ["Recomendaciones no disponibles"],
-                }
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute(
+                    {"prompt": prompt, "temperature": 0.3, "model": "gemini-2.0-flash"}
+                )
+                response = result.get("text", "")
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                response = await self.gemini_client.generate_structured_output(prompt)
 
-        return response
+            # Si la respuesta no es un diccionario, intentar convertirla
+            if not isinstance(response, dict):
+                try:
+                    response = json.loads(response)
+                except:
+                    # Si no se puede convertir, crear un diccionario básico
+                    response = {
+                        "trends": ["No se pudieron identificar tendencias"],
+                        "significant_changes": [
+                            "No se pudieron identificar cambios significativos"
+                        ],
+                        "progress": "Progreso no disponible",
+                        "projections": ["Proyecciones no disponibles"],
+                        "recommendations": ["Recomendaciones no disponibles"],
+                    }
+            
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="TrendAnalysis",
+                content_type="application/json",
+                data={
+                    "analysis_id": str(uuid.uuid4()),
+                    "analysis_type": "trend_identification",
+                    "metrics_analyzed": list(biometric_data.keys()),
+                    "timestamp": time.time(),
+                    "trends_count": len(response.get("trends", []))
+                }
+            )
+            
+            # Generar respuesta textual
+            response_text = "Análisis de tendencias en datos biométricos:\n\n"
+            
+            # Añadir tendencias identificadas
+            response_text += "**Tendencias identificadas:**\n"
+            for trend in response.get("trends", []):
+                if isinstance(trend, dict):
+                    response_text += f"- {trend.get('name', 'Tendencia sin nombre')}: {trend.get('description', '')}\n"
+                else:
+                    response_text += f"- {trend}\n"
+            
+            # Añadir cambios significativos
+            response_text += "\n**Cambios significativos:**\n"
+            for change in response.get("significant_changes", []):
+                if isinstance(change, dict):
+                    response_text += f"- {change.get('metric', 'Métrica no especificada')}: {change.get('description', '')}\n"
+                else:
+                    response_text += f"- {change}\n"
+            
+            # Añadir progreso
+            progress = response.get("progress", "Progreso no disponible")
+            response_text += f"\n**Progreso hacia objetivos:**\n{progress}\n"
+            
+            # Añadir recomendaciones
+            response_text += "\n**Recomendaciones:**\n"
+            for recommendation in response.get("recommendations", []):
+                response_text += f"- {recommendation}\n"
+            
+            return create_result(
+                status="success",
+                response_data=response,
+                response_text=response_text,
+                artifacts=[artifact]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en skill '{self._generate_trend_analysis.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
 
     async def _generate_visualization(
         self,
         input_text: str,
-        biometric_data: Dict[str, Any],
-        user_profile: Optional[Dict[str, Any]] = None,
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Genera una visualización de datos biométricos estructurada.
 
         Args:
             input_text: Texto de entrada del usuario
-            biometric_data: Datos biométricos del usuario
-            user_profile: Perfil del usuario
+            **kwargs: Parámetros adicionales, incluyendo biometric_data y user_profile
 
         Returns:
-            Dict[str, Any]: Visualización estructurada
+            Dict[str, Any]: Visualización estructurada con formato create_result
         """
-        # TODO: Usar mcp7_query para obtener los datos específicos a visualizar desde Supabase.
-        # TODO: Considerar usar una herramienta externa de visualización si se requiere complejidad (integración futura).
-        prompt = f"""
-        Genera una descripción para una visualización de los siguientes datos biométricos:
+        logger.info(f"Skill '{self._generate_visualization.__name__}' llamada con entrada: '{input_text[:50]}...'")
         
-        "{input_text}"
+        # Extraer parámetros de kwargs
+        user_id = kwargs.get("user_id")
+        session_id = kwargs.get("session_id")
+        biometric_data = kwargs.get("biometric_data", {})
+        user_profile = kwargs.get("user_profile")
+        visualization_type = kwargs.get("visualization_type", "line")
+        metrics = kwargs.get("metrics", [])
         
-        Datos biométricos disponibles:
-        {json.dumps(biometric_data, indent=2)}
-        
-        La visualización debe incluir:
-        1. Tipo de gráfico recomendado
-        2. Métricas a visualizar
-        3. Ejes y escalas
-        4. Patrones destacados
-        5. Interpretación de la visualización
-        
-        Devuelve la descripción en formato JSON estructurado.
-        """
-
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += f"""
+        try:
+            # Obtener client_profile del contexto si es necesario y no se proporcionó user_profile
+            if not user_profile and user_id:
+                full_context = await self._get_context(user_id, session_id)
+                user_profile = full_context.get("client_profile", {})
             
-            Considera la siguiente información del usuario:
-            - Nombre: {user_profile.get('name', 'N/A')}
-            - Edad: {user_profile.get('age', 'N/A')}
-            - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
-            - Objetivos de salud: {', '.join(user_profile.get('health_goals', ['N/A']))}
-            - Condiciones: {', '.join(user_profile.get('conditions', ['N/A']))}
+            # Verificar que tenemos datos biométricos para visualizar
+            if not biometric_data:
+                return create_result(
+                    status="error",
+                    error_message="No se proporcionaron datos biométricos para visualizar."
+                )
+            
+            # Preparar prompt para el modelo
+            prompt = f"""
+            {self.system_instructions}
+            
+            Genera una descripción para una visualización de los siguientes datos biométricos:
+            
+            "{input_text}"
+            
+            Datos biométricos disponibles:
+            {json.dumps(biometric_data, indent=2)}
+            
+            La visualización debe incluir:
+            1. Tipo de gráfico recomendado
+            2. Métricas a visualizar
+            3. Ejes y escalas
+            4. Patrones destacados
+            5. Interpretación de la visualización
+            
+            Devuelve la descripción en formato JSON estructurado.
             """
 
-        # Generar la visualización
-        try:
-            vertex_skill = VertexGeminiGenerateSkill()
-            result = await vertex_skill.execute(
-                {"prompt": prompt, "temperature": 0.3, "model": "gemini-2.0-flash"}
-            )
-            response = result.get("text", "")
-        except Exception as e:
-            logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
-            # Fallback a cliente Gemini directo
-            response = await self.gemini_client.generate_structured_output(prompt)
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += f"""
+                
+                Considera la siguiente información del usuario:
+                - Nombre: {user_profile.get('name', 'N/A')}
+                - Edad: {user_profile.get('age', 'N/A')}
+                - Nivel de actividad: {user_profile.get('activity_level', 'N/A')}
+                - Objetivos de salud: {', '.join(user_profile.get('health_goals', ['N/A']))}
+                - Condiciones: {', '.join(user_profile.get('conditions', ['N/A']))}
+                """
 
-        # Si la respuesta no es un diccionario, intentar convertirla
-        if not isinstance(response, dict):
+            # Generar la visualización
             try:
-                response = json.loads(response)
-            except:
-                # Si no se puede convertir, crear un diccionario básico
-                response = {
-                    "chart_type": "No se pudo determinar el tipo de gráfico",
-                    "metrics": ["No se pudieron identificar métricas"],
-                    "axes": {"x": "No disponible", "y": "No disponible"},
-                    "highlighted_patterns": ["No se pudieron identificar patrones"],
-                    "interpretation": "Interpretación no disponible",
-                }
+                vertex_skill = VertexGeminiGenerateSkill()
+                result = await vertex_skill.execute(
+                    {"prompt": prompt, "temperature": 0.3, "model": "gemini-2.0-flash"}
+                )
+                response = result.get("text", "")
+            except Exception as e:
+                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
+                # Fallback a cliente Gemini directo
+                response = await self.gemini_client.generate_structured_output(prompt)
 
-        return response
+            # Si la respuesta no es un diccionario, intentar convertirla
+            if not isinstance(response, dict):
+                try:
+                    response = json.loads(response)
+                except:
+                    # Si no se puede convertir, crear un diccionario básico
+                    response = {
+                        "chart_type": "No se pudo determinar el tipo de gráfico",
+                        "metrics": ["No se pudieron identificar métricas"],
+                        "axes": {"x": "No disponible", "y": "No disponible"},
+                        "highlighted_patterns": ["No se pudieron identificar patrones"],
+                        "interpretation": "Interpretación no disponible",
+                    }
+            
+            # Crear artefacto
+            artifact = self.create_artifact(
+                label="BiometricVisualization",
+                content_type="application/json",
+                data={
+                    "visualization_id": str(uuid.uuid4()),
+                    "visualization_type": response.get("chart_type", visualization_type),
+                    "metrics_included": response.get("metrics", metrics if metrics else list(biometric_data.keys())),
+                    "timestamp": time.time(),
+                    "url": f"visualization_{user_id}_{time.time()}.png" # URL simulada
+                }
+            )
+            
+            # Generar respuesta textual
+            response_text = "Visualización de datos biométricos:\n\n"
+            
+            # Añadir tipo de gráfico
+            chart_type = response.get("chart_type", "No especificado")
+            response_text += f"**Tipo de gráfico recomendado:** {chart_type}\n\n"
+            
+            # Añadir métricas a visualizar
+            response_text += "**Métricas a visualizar:**\n"
+            for metric in response.get("metrics", []):
+                response_text += f"- {metric}\n"
+            
+            # Añadir interpretación
+            interpretation = response.get("interpretation", "No disponible")
+            response_text += f"\n**Interpretación:**\n{interpretation}\n"
+            
+            # Añadir patrones destacados
+            response_text += "\n**Patrones destacados:**\n"
+            for pattern in response.get("highlighted_patterns", []):
+                response_text += f"- {pattern}\n"
+            
+            return create_result(
+                status="success",
+                response_data=response,
+                response_text=response_text,
+                artifacts=[artifact]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en skill '{self._generate_visualization.__name__}': {e}", exc_info=True)
+            return create_result(status="error", error_message=str(e))
 
     def _summarize_analysis(self, analysis: Dict[str, Any]) -> str:
         """Genera un resumen textual del análisis para la respuesta al usuario."""
