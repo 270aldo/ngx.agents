@@ -245,49 +245,31 @@ class EliteTrainingStrategist(ADKAgent):
         }
         logger.info(f"Agente {self.name} inicializado con {len(self.skills)} skills: {list(self.skills.keys())}")
 
-    async def _skill_generate_training_plan(self, input_text: str, **kwargs) -> Dict[str, Any]:
-        """
-        Skill para generar un plan de entrenamiento.
-        """
-        logger.info(f"Skill '{self._skill_generate_training_plan.__name__}' llamada con entrada: '{input_text[:50]}...'")
-        user_id = kwargs.get("user_id")
-        session_id = kwargs.get("session_id")
-        
-        try:
-            # Obtener client_profile del contexto
-            full_context = await self._get_context(user_id, session_id)
-            client_profile_from_context = full_context.get("client_profile", {})
-
-            # Obtener parámetros relevantes de kwargs
-            goals = kwargs.get("goals", [input_text] if input_text else [])
-            preferences = kwargs.get("preferences", {})
-            training_history = kwargs.get("training_history", {})
-            duration_weeks = kwargs.get("duration_weeks", 8)
-
-            # Llamar a la lógica interna
-            plan_details = await self._generate_training_plan_logic(
-                user_profile=client_profile_from_context,
-                current_goals=goals,
-                current_preferences=preferences,
-                training_history=training_history,
-                duration_weeks=duration_weeks
-            )
-
-            # Crear artefacto
-            artifact = self.create_artifact(
-                label="TrainingPlan", 
-                content_type="application/json",
-                data=plan_details
-            )
-
-            return create_result(
-                status="success", 
-                response_data=plan_details,
-                artifacts=[artifact]
-            )
-        except Exception as e:
-            logger.error(f"Error en skill '{self._skill_generate_training_plan.__name__}': {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
+    async def _skill_generate_training_plan(self, params: GenerateTrainingPlanInput) -> GenerateTrainingPlanOutput:
+    """
+    Skill para generar un plan de entrenamiento usando modelos Pydantic.
+    """
+    logger.info(f"Skill '{self._skill_generate_training_plan.__name__}' llamada con objetivos: {params.goals}")
+    try:
+        # Llamar a la lógica interna usando los campos del modelo
+        plan_details = await self._generate_training_plan_logic(
+            user_profile={},  # Aquí deberías pasar el perfil de usuario si lo tienes
+            current_goals=params.goals,
+            current_preferences=params.preferences or {},
+            training_history=params.training_history or {},
+            duration_weeks=params.duration_weeks or 8
+        )
+        return GenerateTrainingPlanOutput(**plan_details)
+    except Exception as e:
+        logger.error(f"Error en skill '{self._skill_generate_training_plan.__name__}': {e}", exc_info=True)
+        # Devuelve una salida mínima en caso de error
+        return GenerateTrainingPlanOutput(
+            plan_name="Error",
+            program_type="GENERAL",
+            duration_weeks=params.duration_weeks or 8,
+            description=f"Error al generar el plan: {str(e)}",
+            phases=[]
+        )
 
     async def _generate_training_plan_logic(
         self, 
