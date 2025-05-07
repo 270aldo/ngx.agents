@@ -311,39 +311,30 @@ class PrecisionNutritionArchitect(ADKAgent):
                 nutritional_priorities=["Mantener una dieta equilibrada", "Consultar con un profesional"]
             )
 
-    async def _skill_plan_chrononutrition(self, input_text: str, **kwargs) -> Dict[str, Any]:
+    async def _skill_plan_chrononutrition(self, params: PlanChrononutritionInput) -> PlanChrononutritionOutput:
         """
-        Planifica estrategias de crononutrición personalizadas basadas en la entrada del usuario y su perfil.
-        
+        Planifica estrategias de crononutrición personalizadas según el esquema de entrada.
         Args:
-            input_text: Texto de entrada del usuario
-            **kwargs: Argumentos adicionales como user_id, session_id, user_profile, etc.
-            
+            params: PlanChrononutritionInput
         Returns:
-            Dict[str, Any]: Resultado del plan de crononutrición
+            PlanChrononutritionOutput
         """
-        user_id = kwargs.get('user_id')
-        session_id = kwargs.get('session_id')
-        user_profile = kwargs.get('user_profile')
-        logger.info(f"Skill: Planificando crononutrición para '{input_text[:30]}...' (user_id={user_id}, session_id={session_id})")
-
-        if user_profile is None:
-            logger.debug("User profile no proporcionado directamente para crononutrición. Intentando obtener del contexto.")
-            full_context = await self._get_context(user_id, session_id)
-            user_profile = full_context.get("client_profile", {})
-            if not user_profile:
-                logger.warning("User profile sigue vacío después de obtener del contexto para crononutrición. Procediendo con perfil vacío.")
-            else:
-                logger.debug(f"User profile obtenido del contexto para crononutrición: {bool(user_profile)}")
-        else:
-            logger.debug(f"User profile proporcionado directamente para crononutrición: {bool(user_profile)}")
-
         try:
-            chronoplan = await self._generate_chrononutrition_plan(input_text, user_profile or {})
-            return create_result(status="success", response_data=chronoplan, artifacts=[self.create_artifact("chrononutrition_plan", chronoplan)])
+            chronoplan_dict = await self._generate_chrononutrition_plan(
+                params.input_text,
+                params.user_profile or {}
+            )
+            return PlanChrononutritionOutput(**chronoplan_dict)
         except Exception as e:
             logger.error(f"Error en _skill_plan_chrononutrition: {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
+            return PlanChrononutritionOutput(
+                time_windows=[],
+                fasting_period=None,
+                eating_period=None,
+                pre_workout_nutrition=None,
+                post_workout_nutrition=None,
+                general_recommendations="Error al generar el plan de crononutrición. Consulte a un profesional."
+            )
             
     async def _generate_biomarker_analysis(self, user_input: str, biomarkers: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -445,40 +436,6 @@ class PrecisionNutritionArchitect(ADKAgent):
                 "notes": f"Error al generar análisis: {str(e)}"
             }
 
-    async def _skill_plan_chrononutrition(self, input_text: str, **kwargs) -> Dict[str, Any]:
-        """
-        Planifica estrategias de crononutrición personalizadas basadas en la entrada del usuario y su perfil.
-        
-        Args:
-            input_text: Texto de entrada del usuario
-            **kwargs: Argumentos adicionales como user_id, session_id, user_profile, etc.
-            
-        Returns:
-            Dict[str, Any]: Resultado del plan de crononutrición
-        """
-        user_id = kwargs.get('user_id')
-        session_id = kwargs.get('session_id')
-        user_profile = kwargs.get('user_profile')
-        logger.info(f"Skill: Planificando crononutrición para '{input_text[:30]}...' (user_id={user_id}, session_id={session_id})")
-
-        if user_profile is None:
-            logger.debug("User profile no proporcionado directamente para crononutrición. Intentando obtener del contexto.")
-            full_context = await self._get_context(user_id, session_id)
-            user_profile = full_context.get("client_profile", {})
-            if not user_profile:
-                logger.warning("User profile sigue vacío después de obtener del contexto para crononutrición. Procediendo con perfil vacío.")
-            else:
-                logger.debug(f"User profile obtenido del contexto para crononutrición: {bool(user_profile)}")
-        else:
-            logger.debug(f"User profile proporcionado directamente para crononutrición: {bool(user_profile)}")
-
-        try:
-            chronoplan = await self._generate_chrononutrition_plan(input_text, user_profile or {})
-            return create_result(status="success", response_data=chronoplan, artifacts=[self.create_artifact("chrononutrition_plan", chronoplan)])
-        except Exception as e:
-            logger.error(f"Error en _skill_plan_chrononutrition: {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
-            
     async def _generate_chrononutrition_plan(self, user_input: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
         """
         Genera un plan de crononutrición optimizado basado en la entrada del usuario y su perfil.
