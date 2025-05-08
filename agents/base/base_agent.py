@@ -60,6 +60,10 @@ class BaseAgent(GoogleAgent):
         self.capabilities = capabilities or []
         self.version = version
         self.created_at = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Extraer 'model' e 'instruction' de kwargs si están presentes
+        self.model = kwargs.get('model', None) # Asignar un valor por defecto si no está
+        self.instruction = kwargs.get('instruction', None) # Asignar un valor por defecto si no está
         
         # Estado interno del agente
         self._state = {}

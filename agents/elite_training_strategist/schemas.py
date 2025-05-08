@@ -11,10 +11,12 @@ class GenerateTrainingPlanInput(BaseModel):
 class GenerateTrainingPlanOutput(BaseModel):
     """Salida de la generación de un plan de entrenamiento."""
     plan_name: str = Field(..., description="Nombre del plan de entrenamiento")
-    program_type: str = Field(..., description="Tipo de programa (PRIME, LONGEVITY, GENERAL)")
+    program_type: str = Field(..., description="Tipo de programa, ej: PRIME, STRENGTH")
     duration_weeks: int = Field(..., description="Duración del plan en semanas")
     description: str = Field(..., description="Descripción general del plan")
     phases: List[Dict[str, Any]] = Field(..., description="Fases del plan de entrenamiento")
+    artifacts: Optional[List[Dict[str, Any]]] = Field(None, description="Artefactos generados, como archivos markdown")
+    response: Optional[str] = Field(None, description="Respuesta textual principal del plan")
 
 class AdaptTrainingProgramInput(BaseModel):
     """Entrada para adaptar un programa de entrenamiento existente."""

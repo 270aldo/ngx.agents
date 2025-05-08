@@ -14,7 +14,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from agents.base.adk_agent import ADKAgent, Skill, create_result
+from agents.base.adk_agent import ADKAgent 
+from adk.agent import Skill 
+from core.contracts import create_result 
+
 from agents.elite_training_strategist.schemas import (
     GenerateTrainingPlanInput,
     GenerateTrainingPlanOutput,
@@ -210,35 +213,35 @@ class EliteTrainingStrategist(ADKAgent):
             "generate_training_plan": Skill(
                 name="generate_training_plan",
                 description="Genera un plan de entrenamiento completo basado en el perfil y objetivos del usuario.",
-                method=self._skill_generate_training_plan,
+                handler=self._skill_generate_training_plan,
                 input_schema=GenerateTrainingPlanInput,
                 output_schema=GenerateTrainingPlanOutput,
             ),
             "adapt_training_program": Skill(
                 name="adapt_training_program",
                 description="Adapta un programa de entrenamiento existente basado en nuevos inputs o feedback.",
-                method=self._skill_adapt_training_program,
+                handler=self._skill_adapt_training_program,
                 input_schema=AdaptTrainingProgramInput,
                 output_schema=AdaptTrainingProgramOutput,
             ),
             "analyze_performance_data": Skill(
                 name="analyze_performance_data",
                 description="Analiza datos de rendimiento para proporcionar insights y recomendaciones.",
-                method=self._skill_analyze_performance_data,
+                handler=self._skill_analyze_performance_data,
                 input_schema=AnalyzePerformanceDataInput,
                 output_schema=AnalyzePerformanceDataOutput,
             ),
             "set_training_intensity_volume": Skill(
                 name="set_training_intensity_volume",
                 description="Establece o ajusta la intensidad y volumen de entrenamiento basado en la periodización y estado del usuario.",
-                method=self._skill_set_training_intensity_volume,
+                handler=self._skill_set_training_intensity_volume,
                 input_schema=SetTrainingIntensityVolumeInput,
                 output_schema=SetTrainingIntensityVolumeOutput,
             ),
             "prescribe_exercise_routines": Skill(
                 name="prescribe_exercise_routines",
                 description="Prescribe rutinas de ejercicios específicas, incluyendo variaciones y progresiones.",
-                method=self._skill_prescribe_exercise_routines,
+                handler=self._skill_prescribe_exercise_routines,
                 input_schema=PrescribeExerciseRoutinesInput,
                 output_schema=PrescribeExerciseRoutinesOutput,
             ),
@@ -246,30 +249,30 @@ class EliteTrainingStrategist(ADKAgent):
         logger.info(f"Agente {self.name} inicializado con {len(self.skills)} skills: {list(self.skills.keys())}")
 
     async def _skill_generate_training_plan(self, params: GenerateTrainingPlanInput) -> GenerateTrainingPlanOutput:
-    """
-    Skill para generar un plan de entrenamiento usando modelos Pydantic.
-    """
-    logger.info(f"Skill '{self._skill_generate_training_plan.__name__}' llamada con objetivos: {params.goals}")
-    try:
-        # Llamar a la lógica interna usando los campos del modelo
-        plan_details = await self._generate_training_plan_logic(
-            user_profile={},  # Aquí deberías pasar el perfil de usuario si lo tienes
-            current_goals=params.goals,
-            current_preferences=params.preferences or {},
-            training_history=params.training_history or {},
-            duration_weeks=params.duration_weeks or 8
-        )
-        return GenerateTrainingPlanOutput(**plan_details)
-    except Exception as e:
-        logger.error(f"Error en skill '{self._skill_generate_training_plan.__name__}': {e}", exc_info=True)
-        # Devuelve una salida mínima en caso de error
-        return GenerateTrainingPlanOutput(
-            plan_name="Error",
-            program_type="GENERAL",
-            duration_weeks=params.duration_weeks or 8,
-            description=f"Error al generar el plan: {str(e)}",
-            phases=[]
-        )
+        """
+        Skill para generar un plan de entrenamiento usando modelos Pydantic.
+        """
+        logger.info(f"Skill '{self._skill_generate_training_plan.__name__}' llamada con objetivos: {params.goals}")
+        try:
+            # Llamar a la lógica interna usando los campos del modelo
+            plan_details = await self._generate_training_plan_logic(
+                user_profile={},  # Aquí deberías pasar el perfil de usuario si lo tienes
+                current_goals=params.goals,
+                current_preferences=params.preferences or {},
+                training_history=params.training_history or {},
+                duration_weeks=params.duration_weeks or 8
+            )
+            return GenerateTrainingPlanOutput(**plan_details)
+        except Exception as e:
+            logger.error(f"Error en skill '{self._skill_generate_training_plan.__name__}': {e}", exc_info=True)
+            # Devuelve una salida mínima en caso de error
+            return GenerateTrainingPlanOutput(
+                plan_name="Error",
+                program_type="GENERAL",
+                duration_weeks=params.duration_weeks or 8,
+                description=f"Error al generar el plan: {str(e)}",
+                phases=[]
+            )
 
     async def _generate_training_plan_logic(
         self, 
@@ -361,51 +364,53 @@ class EliteTrainingStrategist(ADKAgent):
             logger.error(f"La salida de Gemini para el plan de entrenamiento no tiene la estructura esperada. Salida: {generated_plan}")
             return {"error": "Invalid plan structure from LLM", "details": generated_plan}
 
+        # Crear un artefacto para el plan generado
+        plan_text_content = generated_plan.get("response", f"Plan de entrenamiento {generated_plan['program_type']} de {generated_plan['duration_weeks']} semanas")
+        artifact = TrainingPlanArtifact(
+            label=f"Plan de Entrenamiento ({generated_plan['program_type']}) - {generated_plan['duration_weeks']} Semanas",
+            content_type="text/markdown",
+            data={
+                "content": plan_text_content,
+                "user_id": user_profile.get("user_id", "unknown_user"),
+                "session_id": user_profile.get("session_id", "unknown_session"),
+                "program_type": generated_plan['program_type'],
+                "duration_weeks": generated_plan['duration_weeks']
+            }
+        )
+        
+        # Asegurar que generated_plan tiene una lista de artifacts
+        if "artifacts" not in generated_plan or generated_plan["artifacts"] is None:
+            generated_plan["artifacts"] = []
+        
+        # Añadir el artefacto creado a la lista de artifacts
+        generated_plan["artifacts"].append(artifact.model_dump())
+        
         return generated_plan
 
-    async def _skill_adapt_training_program(self, input_text: str, **kwargs) -> Dict[str, Any]:
+    async def _skill_adapt_training_program(self, params: AdaptTrainingProgramInput) -> AdaptTrainingProgramOutput:
         """
         Skill para adaptar un programa de entrenamiento existente.
         """
-        logger.info(f"Skill '{self._skill_adapt_training_program.__name__}' llamada con entrada: '{input_text[:50]}...'")
-        user_id = kwargs.get("user_id")
-        session_id = kwargs.get("session_id")
-        
+        logger.info(f"Skill '{self._skill_adapt_training_program.__name__}' llamada con existing_plan_id: {params.existing_plan_id}")
         try:
-            # Obtener client_profile del contexto
-            full_context = await self._get_context(user_id, session_id)
-            client_profile_from_context = full_context.get("client_profile", {})
-
-            # Obtener parámetros relevantes de kwargs
-            existing_plan_id = kwargs.get("existing_plan_id", "N/A")
-            adaptation_reason = kwargs.get("adaptation_reason", input_text if input_text else "No especificado")
-            feedback = kwargs.get("feedback", {})
-            new_goals = kwargs.get("new_goals", [])
-
-            # Llamar a la lógica interna
-            adapted_plan_details = await self._adapt_training_program_logic(
-                user_profile=client_profile_from_context,
-                existing_plan_id=existing_plan_id,
-                adaptation_reason=adaptation_reason,
-                feedback=feedback,
-                new_goals=new_goals
+            details = await self._adapt_training_program_logic(
+                user_profile={},
+                existing_plan_id=params.existing_plan_id,
+                adaptation_reason=params.adaptation_reason,
+                feedback=params.feedback or {},
+                new_goals=params.new_goals or []
             )
-
-            # Crear artefacto
-            artifact = self.create_artifact(
-                label="AdaptedTrainingProgram",
-                content_type="application/json",
-                data=adapted_plan_details
-            )
-
-            return create_result(
-                status="success",
-                response_data=adapted_plan_details,
-                artifacts=[artifact]
-            )
+            return AdaptTrainingProgramOutput(**details)
         except Exception as e:
             logger.error(f"Error en skill '{self._skill_adapt_training_program.__name__}': {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
+            return AdaptTrainingProgramOutput(
+                adapted_plan_name="Error",
+                program_type="GENERAL",
+                adaptation_summary=str(e),
+                duration_weeks=0,
+                description=f"Error al adaptar el plan: {e}",
+                phases=[]
+            )
 
     async def _adapt_training_program_logic(
         self, 
@@ -474,48 +479,26 @@ class EliteTrainingStrategist(ADKAgent):
             
         return adapted_plan
 
-    async def _skill_analyze_performance_data(self, input_text: str, **kwargs) -> Dict[str, Any]:
+    async def _skill_analyze_performance_data(self, params: AnalyzePerformanceDataInput) -> AnalyzePerformanceDataOutput:
         """
         Skill para analizar datos de rendimiento.
         """
-        logger.info(f"Skill '{self._skill_analyze_performance_data.__name__}' llamada con entrada: '{input_text[:50]}...'")
-        user_id = kwargs.get("user_id")
-        session_id = kwargs.get("session_id")
-        
+        logger.info(f"Skill '{self._skill_analyze_performance_data.__name__}' llamada con performance_data keys: {list(params.performance_data.keys())}")
         try:
-            # Obtener client_profile del contexto
-            full_context = await self._get_context(user_id, session_id)
-            client_profile_from_context = full_context.get("client_profile", {})
-
-            # Obtener parámetros relevantes de kwargs
-            performance_data = kwargs.get("performance_data", {})
-            metrics_to_focus = kwargs.get("metrics_to_focus", [])
-            comparison_period = kwargs.get("comparison_period", {})
-
-            # Llamar a la lógica interna
-            analysis_results = await self._analyze_performance_data_logic(
-                user_profile=client_profile_from_context,
-                performance_data=performance_data,
-                metrics_to_focus=metrics_to_focus,
-                comparison_period=comparison_period,
-                user_query=input_text
+            details = await self._analyze_performance_data_logic(
+                user_profile={},
+                performance_data=params.performance_data,
+                metrics_to_focus=params.metrics_to_focus or [],
+                comparison_period=params.comparison_period or {}
             )
-
-            # Crear artefacto
-            artifact = self.create_artifact(
-                label="PerformanceAnalysis",
-                content_type="application/json",
-                data=analysis_results
-            )
-
-            return create_result(
-                status="success",
-                response_data=analysis_results,
-                artifacts=[artifact]
-            )
+            return AnalyzePerformanceDataOutput(**details)
         except Exception as e:
             logger.error(f"Error en skill '{self._skill_analyze_performance_data.__name__}': {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
+            return AnalyzePerformanceDataOutput(
+                analysis_summary=f"Error: {e}",
+                key_observations=[],
+                recommendations=[]
+            )
 
     async def _analyze_performance_data_logic(
         self, 
@@ -531,7 +514,7 @@ class EliteTrainingStrategist(ADKAgent):
         program_type = self._get_program_type_from_profile(user_profile)
 
         prompt_parts = [
-            f"Eres un analista de rendimiento deportivo de élite. Analiza los siguientes datos para un programa tipo '{program_type}'.",
+            f"Eres un analista de rendimiento deportivo de élite. Analiza los siguientes datos para un programa '{program_type}'.",
             f"Datos de Rendimiento Proporcionados: {json.dumps(performance_data)}",
         ]
 
@@ -554,7 +537,7 @@ class EliteTrainingStrategist(ADKAgent):
         prompt_parts.append("\nProporciona un análisis detallado, identifica tendencias, fortalezas, debilidades y recomendaciones accionables.")
         prompt_parts.append("Formato de Salida Esperado: JSON con 'analysis_summary', 'key_observations' (lista), 'recommendations' (lista).")
         prompt_parts.append(
-             "\nEjemplo de la estructura JSON de salida deseada (AnalyzePerformanceDataOutput):\n"
+            "\nEjemplo de la estructura JSON de salida deseada (AnalyzePerformanceDataOutput):\n"
             "{\n"
             "  \"analysis_summary\": \"Se observa una mejora del 10% en el máximo de sentadilla en el último mes, pero un estancamiento en los tiempos de carrera 5k.\",\n"
             "  \"key_observations\": [\n"
@@ -584,49 +567,28 @@ class EliteTrainingStrategist(ADKAgent):
 
         return analysis
 
-    async def _skill_set_training_intensity_volume(self, input_text: str, **kwargs) -> Dict[str, Any]:
+    async def _skill_set_training_intensity_volume(self, params: SetTrainingIntensityVolumeInput) -> SetTrainingIntensityVolumeOutput:
         """
         Skill para establecer o ajustar la intensidad y volumen del entrenamiento.
         """
-        logger.info(f"Skill '{self._skill_set_training_intensity_volume.__name__}' llamada con entrada: '{input_text[:50]}...'")
-        user_id = kwargs.get("user_id")
-        session_id = kwargs.get("session_id")
-        
+        logger.info(f"Skill '{self._skill_set_training_intensity_volume.__name__}' llamada con current_phase: {params.current_phase}")
         try:
-            # Obtener client_profile del contexto
-            full_context = await self._get_context(user_id, session_id)
-            client_profile_from_context = full_context.get("client_profile", {})
-
-            # Obtener parámetros relevantes de kwargs
-            current_phase = kwargs.get("current_phase", "No especificada")
-            athlete_feedback = kwargs.get("athlete_feedback", {})
-            performance_metrics = kwargs.get("performance_metrics", {})
-            goal_adjustment_reason = kwargs.get("goal_adjustment_reason", input_text if input_text else "Ajuste rutinario")
-
-            # Llamar a la lógica interna
-            intensity_volume_settings = await self._set_training_intensity_volume_logic(
-                user_profile=client_profile_from_context,
-                current_phase=current_phase,
-                athlete_feedback=athlete_feedback,
-                performance_metrics=performance_metrics,
-                goal_adjustment_reason=goal_adjustment_reason
+            details = await self._set_training_intensity_volume_logic(
+                user_profile={},
+                current_phase=params.current_phase,
+                athlete_feedback=params.athlete_feedback,
+                performance_metrics=params.performance_metrics,
+                goal_adjustment_reason=params.goal_adjustment_reason or ""
             )
-
-            # Crear artefacto
-            artifact = self.create_artifact(
-                label="TrainingIntensityVolumeSettings",
-                content_type="application/json",
-                data=intensity_volume_settings
-            )
-
-            return create_result(
-                status="success",
-                response_data=intensity_volume_settings,
-                artifacts=[artifact]
-            )
+            return SetTrainingIntensityVolumeOutput(**details)
         except Exception as e:
             logger.error(f"Error en skill '{self._skill_set_training_intensity_volume.__name__}': {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
+            return SetTrainingIntensityVolumeOutput(
+                adjustment_summary=f"Error: {e}",
+                recommended_intensity={},
+                recommended_volume={},
+                notes=None
+            )
 
     async def _set_training_intensity_volume_logic(
         self, 
@@ -695,49 +657,31 @@ class EliteTrainingStrategist(ADKAgent):
 
         return settings
 
-    async def _skill_prescribe_exercise_routines(self, input_text: str, **kwargs) -> Dict[str, Any]:
+    async def _skill_prescribe_exercise_routines(self, params: PrescribeExerciseRoutinesInput) -> PrescribeExerciseRoutinesOutput:
         """
         Skill para prescribir rutinas de ejercicios específicas.
         """
-        logger.info(f"Skill '{self._skill_prescribe_exercise_routines.__name__}' llamada con entrada: '{input_text[:50]}...'")
-        user_id = kwargs.get("user_id")
-        session_id = kwargs.get("session_id")
-
+        logger.info(f"Skill '{self._skill_prescribe_exercise_routines.__name__}' llamada con focus_area: {params.focus_area}")
         try:
-            # Obtener client_profile del contexto
-            full_context = await self._get_context(user_id, session_id)
-            client_profile_from_context = full_context.get("client_profile", {})
-
-            # Obtener parámetros relevantes de kwargs
-            focus_area = kwargs.get("focus_area", input_text if input_text else "Entrenamiento general de fuerza")
-            exercise_type = kwargs.get("exercise_type", "compound")
-            equipment_available = kwargs.get("equipment_available", ["full_gym"])
-            experience_level = kwargs.get("experience_level", client_profile_from_context.get("experience_level", "intermediate"))
-
-            # Llamar a la lógica interna
-            routines = await self._prescribe_exercise_routines_logic(
-                user_profile=client_profile_from_context,
-                focus_area=focus_area,
-                exercise_type=exercise_type,
-                equipment_available=equipment_available,
-                experience_level=experience_level
+            details = await self._prescribe_exercise_routines_logic(
+                user_profile={},
+                focus_area=params.focus_area,
+                exercise_type=params.exercise_type,
+                equipment_available=params.equipment_available,
+                experience_level=params.experience_level
             )
-
-            # Crear artefacto
-            artifact = self.create_artifact(
-                label="ExerciseRoutine",
-                content_type="application/json",
-                data=routines
-            )
-
-            return create_result(
-                status="success",
-                response_data=routines,
-                artifacts=[artifact]
-            )
+            return PrescribeExerciseRoutinesOutput(**details)
         except Exception as e:
             logger.error(f"Error en skill '{self._skill_prescribe_exercise_routines.__name__}': {e}", exc_info=True)
-            return create_result(status="error", error_message=str(e))
+            return PrescribeExerciseRoutinesOutput(
+                routine_name="Error",
+                focus_area=params.focus_area,
+                exercise_type=params.exercise_type,
+                estimated_duration_minutes=0,
+                exercises=[],
+                warm_up=None,
+                cool_down=None
+            )
 
     async def _prescribe_exercise_routines_logic(
         self, 
