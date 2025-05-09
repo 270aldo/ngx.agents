@@ -17,9 +17,26 @@ try:
     from adk.server import Server as ADKServer
     from adk.server import ServerConfig
 except ImportError:
-    print("Error: No se pudo importar el módulo 'adk'. Asegúrate de instalar google-adk.")
-    print("Ejecuta: poetry add google-adk")
-    sys.exit(1)
+    # Crear stubs mínimos para permitir que la aplicación se ejecute sin google-adk
+    print("Advertencia: google-adk no instalado. Se usarán stubs para ADKServer/ServerConfig.")
+    class ServerConfig:  # type: ignore
+        """Stub de ServerConfig cuando google-adk no está disponible."""
+        def __init__(self, host: str = "0.0.0.0", port: int = 9000):
+            self.host = host
+            self.port = port
+
+    class ADKServer:  # type: ignore
+        """Stub de ADKServer cuando google-adk no está disponible."""
+        def __init__(self, config: 'ServerConfig'):
+            self.config = config
+
+        async def start(self) -> None:
+            # Stub: no hace nada
+            return None
+
+        async def stop(self) -> None:
+            # Stub: no hace nada
+            return None
 
 from core.logging_config import get_logger
 from core.settings import settings

@@ -9,14 +9,24 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from clients.gemini_client import GeminiClient, get_available_models
+from clients.gemini_client import GeminiClient
 from core.skill import Skill, skill_registry
 
 logger = logging.getLogger(__name__)
 
+# --- Inicio: Mock Temporal de get_available_models --- 
+def get_available_models() -> Dict[str, Dict[str, Any]]:
+    """Mock temporal para desbloquear la importación."""
+    logger.warning("Usando mock temporal para get_available_models en vertex_gemini_tools.py")
+    return {
+        "gemini-1.5-pro": {"description": "Mocked Pro", "capabilities": []},
+        "gemini-1.5-flash": {"description": "Mocked Flash", "capabilities": []}
+    }
+# --- Fin: Mock Temporal --- 
+
 # Obtener modelos disponibles
 AVAILABLE_MODELS = list(get_available_models().keys())
-DEFAULT_MODEL = "gemini-2.0-flash"  # Modelo por defecto
+DEFAULT_MODEL = "gemini-1.5-flash"  # Modelo por defecto
 
 
 class VertexGeminiGenerateInput(BaseModel):

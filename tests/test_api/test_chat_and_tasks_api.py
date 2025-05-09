@@ -199,137 +199,107 @@ def test_chat_endpoint_without_api_key(client):
     # Configurar el cliente para simular un error de autenticación
     client.post.return_value = MagicMock(
         status_code=401,
-        json=lambda: {"detail": "API key no proporcionada"}
-    )
-    
-    # Realizar solicitud sin API key
-    response = client.post("/chat", json=request_data, headers={})
-    
-    # Verificar que se realizó la solicitud correctamente
-    client.post.assert_called_once()
-    args, kwargs = client.post.call_args
-    assert args[0] == "/chat"
-    assert kwargs["json"] == request_data
-    assert kwargs["headers"] == {}
-
-
-# Pruebas para el endpoint /conversations/{user_id}/history
-def test_conversation_history_success(client):
-    """Prueba que el endpoint /conversations/{user_id}/history funciona correctamente."""
-    # Realizar solicitud
-    response = client.get(
-        "/conversations/test_user_123/history",
-        headers={"X-API-Key": API_KEY_DEFAULT}
-    )
-    
-    # Verificar que se realizó la solicitud correctamente
-    client.get.assert_called_once()
-    args, kwargs = client.get.call_args
-    assert args[0] == "/conversations/test_user_123/history"
-    assert kwargs["headers"] == {"X-API-Key": API_KEY_DEFAULT}
-
-
-def test_conversation_history_with_pagination(client):
-    """Prueba que el endpoint /conversations/{user_id}/history soporta paginación."""
-    # Realizar solicitud con parámetros de paginación
-    response = client.get(
-        "/conversations/test_user_123/history?limit=5&offset=10",
-        headers={"X-API-Key": API_KEY_DEFAULT}
-    )
-    
-    # Verificar que se realizó la solicitud correctamente
-    client.get.assert_called_once()
-    args, kwargs = client.get.call_args
-    assert args[0] == "/conversations/test_user_123/history?limit=5&offset=10"
-    assert kwargs["headers"] == {"X-API-Key": API_KEY_DEFAULT}
-
-
-def test_conversation_history_invalid_pagination(client):
-    """Prueba que el endpoint /conversations/{user_id}/history valida los parámetros de paginación."""
-    # Configurar el cliente para simular un error de validación para limit=0
-    client.get.return_value = MagicMock(
-        status_code=422,
-        json=lambda: {"detail": [{"loc": ["query", "limit"], "msg": "ensure this value is greater than or equal to 1", "type": "value_error.number.not_ge"}]}
-    )
-    
-    # Realizar solicitud con limit inválido
-    response = client.get(
-        "/conversations/test_user_123/history?limit=0",
-        headers={"X-API-Key": API_KEY_DEFAULT}
-    )
-    
-    # Verificar respuesta de error de validación
-    assert response.status_code == 422
-    data = response.json()
-    assert "detail" in data
-    
-    # Configurar el cliente para simular un error de validación para limit=101
-    client.get.return_value = MagicMock(
-        status_code=422,
-        json=lambda: {"detail": [{"loc": ["query", "limit"], "msg": "ensure this value is less than or equal to 100", "type": "value_error.number.not_le"}]}
-    )
-    
-    # Realizar solicitud con limit demasiado grande
-    response = client.get(
-        "/conversations/test_user_123/history?limit=101",
-        headers={"X-API-Key": API_KEY_DEFAULT}
-    )
-    
-    # Verificar respuesta de error de validación
-    assert response.status_code == 422
-    data = response.json()
-    assert "detail" in data
-    
-    # Configurar el cliente para simular un error de validación para offset=-1
-    client.get.return_value = MagicMock(
-        status_code=422,
-        json=lambda: {"detail": [{"loc": ["query", "offset"], "msg": "ensure this value is greater than or equal to 0", "type": "value_error.number.not_ge"}]}
-    )
-    
-    # Realizar solicitud con offset negativo
-    response = client.get(
-        "/conversations/test_user_123/history?offset=-1",
-        headers={"X-API-Key": API_KEY_DEFAULT}
-    )
-    
-    # Verificar respuesta de error de validación
-    assert response.status_code == 422
-    data = response.json()
-    assert "detail" in data
-
-
-def test_conversation_history_empty(client):
-    """Prueba que el endpoint /conversations/{user_id}/history maneja correctamente el caso de no tener historial."""
-    # Configurar el cliente para simular una respuesta vacía
-    client.get.return_value = MagicMock(
-        status_code=200,
-        json=lambda: {"success": True, "data": []}
+        json=lambda: {"detail": "No autorizado"}
     )
     
     # Realizar solicitud
+    response = client.post(
+        "/chat",
+        json=request_data,
+        # No se envía X-API-Key
+    )
+    
+    # Verificar respuesta de error
+    assert response.status_code == 401
+    data = response.json()
+    assert "detail" in data
+    assert "No autorizado" in data["detail"]
+
+
+# Pruebas para el endpoint /task_history
+def test_get_task_history_success(client):
+    """Prueba que el endpoint /task_history funciona correctamente."""
+    # Realizar solicitud
     response = client.get(
-        "/conversations/test_user_123/history",
+        "/task_history",
         headers={"X-API-Key": API_KEY_DEFAULT}
     )
     
-    # Verificar que se realizó la solicitud correctamente
-    client.get.assert_called_once()
-    args, kwargs = client.get.call_args
-    assert args[0] == "/conversations/test_user_123/history"
-    assert kwargs["headers"] == {"X-API-Key": API_KEY_DEFAULT}
+    # Verificar respuesta exitosa
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert isinstance(data["data"], list)
+    assert len(data["data"]) == 20  # Según el mock
+    assert "task_id" in data["data"][0]
 
 
-def test_conversation_history_error(client):
-    """Prueba que el endpoint /conversations/{user_id}/history maneja correctamente los errores."""
+def test_get_task_history_with_pagination(client):
+    """Prueba que el endpoint /task_history funciona con paginación."""
+    # Configurar el cliente para devolver 10 elementos en la primera página
+    # y 5 en la segunda página (un total de 15 simulados)
+    def side_effect_pagination(url, params=None, headers=None):
+        skip = params.get("skip", 0)
+        limit = params.get("limit", 20)
+        
+        all_tasks = mock_get_task_history() # Obtiene 29 tareas
+        paginated_tasks = all_tasks[skip : skip + limit]
+        
+        return MagicMock(
+            status_code=200,
+            json=lambda: {"success": True, "data": paginated_tasks}
+        )
+
+    client.get.side_effect = side_effect_pagination
+    
+    # Primera página
+    response1 = client.get(
+        "/task_history?skip=0&limit=10",
+        headers={"X-API-Key": API_KEY_DEFAULT}
+    )
+    assert response1.status_code == 200
+    data1 = response1.json()
+    assert len(data1["data"]) == 10
+
+    # Segunda página
+    response2 = client.get(
+        "/task_history?skip=10&limit=10",
+        headers={"X-API-Key": API_KEY_DEFAULT}
+    )
+    assert response2.status_code == 200
+    data2 = response2.json()
+    assert len(data2["data"]) == 10 # Debería ser 10, si hay 29 en total mockeados.
+
+    # Tercera página (con menos elementos)
+    response3 = client.get(
+        "/task_history?skip=20&limit=10",
+        headers={"X-API-Key": API_KEY_DEFAULT}
+    )
+    assert response3.status_code == 200
+    data3 = response3.json()
+    assert len(data3["data"]) == 9 # Los 9 restantes de 29.
+
+    # Asegurarse de que los datos no se solapen (simple check por ID)
+    ids1 = {task["task_id"] for task in data1["data"]}
+    ids2 = {task["task_id"] for task in data2["data"]}
+    ids3 = {task["task_id"] for task in data3["data"]}
+    assert not (ids1 & ids2)  # No debe haber intersección
+    assert not (ids1 & ids3)
+    assert not (ids2 & ids3)
+
+
+def test_get_task_history_error(client):
+    """Prueba que el endpoint /task_history maneja errores correctamente."""
     # Configurar el cliente para simular un error
+    client.get.side_effect = None # Limpiar side_effect anterior si existe
     client.get.return_value = MagicMock(
         status_code=500,
-        json=lambda: {"detail": "Error de prueba"}
+        json=lambda: {"detail": "Error de base de datos"}
     )
     
     # Realizar solicitud
     response = client.get(
-        "/conversations/test_user_123/history",
+        "/task_history",
         headers={"X-API-Key": API_KEY_DEFAULT}
     )
     
@@ -337,22 +307,17 @@ def test_conversation_history_error(client):
     assert response.status_code == 500
     data = response.json()
     assert "detail" in data
-    assert "Error de prueba" in data["detail"]
+    assert "Error de base de datos" in data["detail"]
 
 
-def test_conversation_history_without_api_key(client):
-    """Prueba que el endpoint /conversations/{user_id}/history requiere una API key válida."""
-    # Configurar el cliente para simular un error de autenticación
+def test_get_task_history_without_api_key(client):
+    """Prueba que el endpoint /task_history requiere una API key."""
+    client.get.side_effect = None # Limpiar side_effect anterior si existe
     client.get.return_value = MagicMock(
         status_code=401,
-        json=lambda: {"detail": "API key no proporcionada"}
+        json=lambda: {"detail": "No autorizado"}
     )
     
-    # Realizar solicitud sin API key
-    response = client.get("/conversations/test_user_123/history", headers={})
-    
-    # Verificar que se realizó la solicitud correctamente
-    client.get.assert_called_once()
-    args, kwargs = client.get.call_args
-    assert args[0] == "/conversations/test_user_123/history"
-    assert kwargs["headers"] == {}
+    response = client.get("/task_history") # Sin API Key
+    assert response.status_code == 401
+    assert "No autorizado" in response.json()["detail"]

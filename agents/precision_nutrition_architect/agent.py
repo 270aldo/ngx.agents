@@ -17,11 +17,19 @@ from core.state_manager import StateManager
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result
 
+# Importar Skill desde adk.agent
+try:
+    from adk.agent import Skill
+except ImportError:
+    # Stub para Skill si no está disponible
+    from adk.agent import Skill
+
 # Importar esquemas para las skills
 from agents.precision_nutrition_architect.schemas import (
     CreateMealPlanInput, CreateMealPlanOutput,
     RecommendSupplementsInput, RecommendSupplementsOutput,
     AnalyzeBiomarkersInput, AnalyzeBiomarkersOutput,
+    BiomarkerAnalysis,  # Asegurar que el modelo BiomarkerAnalysis está importado
     PlanChrononutritionInput, PlanChrononutritionOutput,
     MealPlanArtifact, SupplementRecommendationArtifact,
     BiomarkerAnalysisArtifact, ChrononutritionPlanArtifact
@@ -118,60 +126,36 @@ class PrecisionNutritionArchitect(ADKAgent):
         self.request_counter = request_counter
         self.response_time_metric = response_time
         
-        # Definir skills directamente
+        # Definir skills usando la clase Skill para compatibilidad con ADK y A2A
         self.skills = {
-            "create_meal_plan": {
-                "skill_id": "create_meal_plan",
-                "name": "Creación de Plan de Comidas",
-                "description": "Crea un plan de comidas personalizado basado en el perfil, preferencias y objetivos del usuario.",
-                "method": self._skill_create_meal_plan,
-                "input_schema": CreateMealPlanInput,
-                "output_schema": CreateMealPlanOutput,
-                "examples": [
-                    "Crea un plan de comidas para un atleta de resistencia",
-                    "Necesito un plan de alimentación para perder peso",
-                    "Diseña un menú semanal para una dieta cetogénica"
-                ],
-            },
-            "recommend_supplements": {
-                "skill_id": "recommend_supplements",
-                "name": "Recomendación de Suplementos",
-                "description": "Recomienda suplementos basados en el perfil, biomarcadores y objetivos del usuario.",
-                "method": self._skill_recommend_supplements,
-                "input_schema": RecommendSupplementsInput,
-                "output_schema": RecommendSupplementsOutput,
-                "examples": [
-                    "Qué suplementos debería tomar para mejorar mi recuperación",
-                    "Recomienda suplementos para optimizar mi rendimiento cognitivo",
-                    "Necesito suplementos para corregir mi deficiencia de hierro"
-                ],
-            },
-            "analyze_biomarkers": {
-                "skill_id": "analyze_biomarkers",
-                "name": "Análisis de Biomarcadores",
-                "description": "Analiza biomarcadores y genera recomendaciones nutricionales personalizadas.",
-                "method": self._skill_analyze_biomarkers,
-                "input_schema": AnalyzeBiomarkersInput,
-                "output_schema": AnalyzeBiomarkersOutput,
-                "examples": [
-                    "Analiza mis niveles de vitamina D y B12",
-                    "Qué significan mis valores de glucosa en ayunas",
-                    "Interpreta mis resultados de perfil lipídico"
-                ],
-            },
-            "plan_chrononutrition": {
-                "skill_id": "plan_chrononutrition",
-                "name": "Planificación de Crononutrición",
-                "description": "Planifica el timing nutricional para optimizar el rendimiento y la recuperación.",
-                "method": self._skill_plan_chrononutrition,
-                "input_schema": PlanChrononutritionInput,
-                "output_schema": PlanChrononutritionOutput,
-                "examples": [
-                    "Cuál es el mejor momento para comer carbohidratos",
-                    "Diseña un plan de alimentación con ventana de ayuno intermitente",
-                    "Optimiza mi nutrición alrededor de mis entrenamientos"
-                ],
-            },
+            "create_meal_plan": Skill(
+                name="Creación de Plan de Comidas",
+                description="Crea un plan de comidas personalizado basado en el perfil, preferencias y objetivos del usuario.",
+                handler=self._skill_create_meal_plan,
+                input_schema=CreateMealPlanInput,
+                output_schema=CreateMealPlanOutput
+            ),
+            "recommend_supplements": Skill(
+                name="Recomendación de Suplementos",
+                description="Recomienda suplementos basados en el perfil, biomarcadores y objetivos del usuario.",
+                handler=self._skill_recommend_supplements,
+                input_schema=RecommendSupplementsInput,
+                output_schema=RecommendSupplementsOutput
+            ),
+            "analyze_biomarkers": Skill(
+                name="Análisis de Biomarcadores",
+                description="Analiza biomarcadores y genera recomendaciones nutricionales personalizadas.",
+                handler=self._skill_analyze_biomarkers,
+                input_schema=AnalyzeBiomarkersInput,
+                output_schema=AnalyzeBiomarkersOutput
+            ),
+            "plan_chrononutrition": Skill(
+                name="Planificación de Crononutrición",
+                description="Planifica el timing nutricional para optimizar el rendimiento y la recuperación.",
+                handler=self._skill_plan_chrononutrition,
+                input_schema=PlanChrononutritionInput,
+                output_schema=PlanChrononutritionOutput
+            ),
         }
 
         # Inicializar agente base
@@ -183,8 +167,7 @@ class PrecisionNutritionArchitect(ADKAgent):
             toolkit=toolkit,
             state_manager=state_manager,
             version="1.2.0",
-            system_instructions=self.system_instructions,
-            skills=self.skills,
+            instruction=self.system_instructions,  # Pasar system_instructions como instruction
             model=model,
             **kwargs
         )
@@ -387,20 +370,24 @@ class PrecisionNutritionArchitect(ADKAgent):
         
         try:
             logger.debug(f"Generando prompt para análisis de biomarcadores: {prompt[:500]}...") # Loguea una parte del prompt
-            analysis = await self.gemini_client.generate_structured_output(prompt)
+            response_text = await self.gemini_client.generate_text(prompt)
             
-            # Si la respuesta no es un diccionario, intentar convertirla
-            if not isinstance(analysis, dict):
-                try:
-                    analysis = json.loads(analysis) if isinstance(analysis, str) else { 
-                        "error": "Respuesta no estructurada de Gemini", 
-                        "raw_response": str(analysis)[:500] # Truncar para evitar logs demasiado grandes
-                    }
-                except json.JSONDecodeError:
-                    analysis = { 
-                        "error": "Respuesta string no JSON de Gemini", 
-                        "raw_response": str(analysis)[:500] # Truncar para evitar logs demasiado grandes
-                    }
+            # Intentar extraer el JSON de la respuesta
+            try:
+                # Buscar un objeto JSON en la respuesta
+                import re
+                json_match = re.search(r'({.*})', response_text, re.DOTALL)
+                if json_match:
+                    analysis = json.loads(json_match.group(1))
+                else:
+                    # Si no se encuentra un objeto JSON, intentar parsear toda la respuesta
+                    analysis = json.loads(response_text)
+            except Exception as json_error:
+                logger.error(f"Error al parsear JSON de la respuesta: {json_error}")
+                analysis = { 
+                    "error": "Error al parsear JSON de la respuesta", 
+                    "raw_response": str(response_text)[:500] # Truncar para evitar logs demasiado grandes
+                }
             
             # Formatear la respuesta según el esquema esperado
             formatted_analysis = {
@@ -484,20 +471,24 @@ class PrecisionNutritionArchitect(ADKAgent):
         
         try:
             logger.debug(f"Generando prompt para plan de crononutrición: {prompt[:500]}...") # Loguea una parte del prompt
-            chronoplan = await self.gemini_client.generate_structured_output(prompt)
+            response_text = await self.gemini_client.generate_text(prompt)
             
-            # Si la respuesta no es un diccionario, intentar convertirla
-            if not isinstance(chronoplan, dict):
-                try:
-                    chronoplan = json.loads(chronoplan) if isinstance(chronoplan, str) else { 
-                        "error": "Respuesta no estructurada de Gemini", 
-                        "raw_response": str(chronoplan)[:500] # Truncar para evitar logs demasiado grandes
-                    }
-                except json.JSONDecodeError:
-                    chronoplan = { 
-                        "error": "Respuesta string no JSON de Gemini", 
-                        "raw_response": str(chronoplan)[:500] # Truncar para evitar logs demasiado grandes
-                    }
+            # Intentar extraer el JSON de la respuesta
+            try:
+                # Buscar un objeto JSON en la respuesta
+                import re
+                json_match = re.search(r'({.*})', response_text, re.DOTALL)
+                if json_match:
+                    chronoplan = json.loads(json_match.group(1))
+                else:
+                    # Si no se encuentra un objeto JSON, intentar parsear toda la respuesta
+                    chronoplan = json.loads(response_text)
+            except Exception as json_error:
+                logger.error(f"Error al parsear JSON de la respuesta: {json_error}")
+                chronoplan = { 
+                    "error": "Error al parsear JSON de la respuesta", 
+                    "raw_response": str(response_text)[:500] # Truncar para evitar logs demasiado grandes
+                }
             
             # Formatear la respuesta según el esquema esperado
             formatted_plan = {
@@ -593,28 +584,35 @@ class PrecisionNutritionArchitect(ADKAgent):
             """
 
         try:
-            # Generar el plan nutricional
-            response = await self.gemini_client.generate_structured_output(prompt)
+            # Generar el plan nutricional usando generate_text
+            response_text = await self.gemini_client.generate_text(prompt)
 
-            # Si la respuesta no es un diccionario, intentar convertirla
-            if not isinstance(response, dict):
-                try:
-                    response = json.loads(response)
-                except:
-                    # Si no se puede convertir, crear un diccionario básico
-                    response = {
-                        "objective": "Plan nutricional personalizado",
-                        "macronutrients": {
-                            "protein": "25-30%",
-                            "carbs": "40-50%",
-                            "fats": "20-30%",
+            # Intentar extraer el JSON de la respuesta
+            try:
+                # Buscar un objeto JSON en la respuesta
+                import re
+                json_match = re.search(r'({.*})', response_text, re.DOTALL)
+                if json_match:
+                    response = json.loads(json_match.group(1))
+                else:
+                    # Si no se encuentra un objeto JSON, intentar parsear toda la respuesta
+                    response = json.loads(response_text)
+            except Exception as json_error:
+                logger.error(f"Error al parsear JSON de la respuesta: {json_error}")
+                # Si no se puede convertir, crear un diccionario básico
+                response = {
+                    "objective": "Plan nutricional personalizado",
+                    "macronutrients": {
+                        "protein": "25-30%",
+                        "carbs": "40-50%",
+                        "fats": "20-30%",
+                    },
+                    "calories": "Estimación personalizada pendiente",
+                    "meals": [
+                        {
+                            "name": "Desayuno",
+                            "examples": ["Ejemplo de desayuno balanceado"],
                         },
-                        "calories": "Estimación personalizada pendiente",
-                        "meals": [
-                            {
-                                "name": "Desayuno",
-                                "examples": ["Ejemplo de desayuno balanceado"],
-                            },
                             {
                                 "name": "Almuerzo",
                                 "examples": ["Ejemplo de almuerzo balanceado"],
@@ -733,28 +731,35 @@ class PrecisionNutritionArchitect(ADKAgent):
             """
 
         try:
-            # Generar recomendaciones de suplementación
-            response = await self.gemini_client.generate_structured_output(prompt)
+            # Generar recomendaciones de suplementación usando generate_text
+            response_text = await self.gemini_client.generate_text(prompt)
 
-            # Si la respuesta no es un diccionario, intentar convertirla
-            if not isinstance(response, dict):
-                try:
-                    response = json.loads(response)
-                except:
-                    # Si no se puede convertir, crear un diccionario básico
-                    response = {
-                        "supplements": [
-                            {
-                                "name": "Ejemplo de suplemento",
-                                "dosage": "Dosis recomendada",
-                                "timing": "Momento óptimo de consumo",
-                                "benefits": ["Beneficios esperados"],
-                                "precautions": ["Precauciones a considerar"],
-                                "natural_alternatives": ["Alternativas naturales"],
-                            }
-                        ],
-                        "general_recommendations": "Estas recomendaciones son generales y deben ser validadas por un profesional de la salud.",
-                    }
+            # Intentar extraer el JSON de la respuesta
+            try:
+                # Buscar un objeto JSON en la respuesta
+                import re
+                json_match = re.search(r'({.*})', response_text, re.DOTALL)
+                if json_match:
+                    response = json.loads(json_match.group(1))
+                else:
+                    # Si no se encuentra un objeto JSON, intentar parsear toda la respuesta
+                    response = json.loads(response_text)
+            except Exception as json_error:
+                logger.error(f"Error al parsear JSON de la respuesta: {json_error}")
+                # Si no se puede convertir, crear un diccionario básico
+                response = {
+                    "supplements": [
+                        {
+                            "name": "Ejemplo de suplemento",
+                            "dosage": "Dosis recomendada",
+                            "timing": "Momento óptimo de consumo",
+                            "benefits": ["Beneficios esperados"],
+                            "precautions": ["Precauciones a considerar"],
+                            "natural_alternatives": ["Alternativas naturales"],
+                        }
+                    ],
+                    "general_recommendations": "Estas recomendaciones son generales y deben ser validadas por un profesional de la salud.",
+                }
             
             # Formatear la respuesta según el esquema esperado
             formatted_response = {
@@ -800,6 +805,11 @@ class PrecisionNutritionArchitect(ADKAgent):
     # ---- Métodos de Lógica Interna (potencialmente privados) ----
 
     # Estas funciones son llamadas por las skills registradas
+    # La siguiente función _extract_profile_details está comentada porque
+    # se hereda de ADKAgent. La dejamos aquí como referencia de la firma esperada
+    # en la clase base, pero no debe ser descomentada a menos que se quiera
+    # sobreescribir específicamente la implementación de ADKAgent.
+    # 
     # def _extract_profile_details(self, user_profile: Dict[str, Any]) -> str:
     #     """Extrae detalles relevantes del perfil del usuario."""
     #     details = []

@@ -36,16 +36,21 @@ class Settings(BaseSettings):
     # Configuración de A2A
     a2a_server_url: AnyUrl = Field(default="http://localhost:9000", json_schema_extra={"env": "A2A_SERVER_URL"})
     
-    # Configuración de JWT
-    jwt_secret: str = Field(..., json_schema_extra={"env": "JWT_SECRET"})
-    jwt_algorithm: str = Field(default="HS256", json_schema_extra={"env": "JWT_ALGORITHM"})
-    jwt_expiration_minutes: int = Field(default=60, json_schema_extra={"env": "JWT_EXPIRATION_MINUTES"})
+    # Configuración de JWT (Eliminadas ya que Supabase maneja los tokens)
+    # jwt_secret: str = Field(..., json_schema_extra={"env": "JWT_SECRET"})
+    # jwt_algorithm: str = Field(default="HS256", json_schema_extra={"env": "JWT_ALGORITHM"})
+    # jwt_expiration_minutes: int = Field(default=60, json_schema_extra={"env": "JWT_EXPIRATION_MINUTES"})
     
     # Configuración del entorno
     env: str = Field(default="dev", json_schema_extra={"env": "ENV"})
     
     # Configuración de logging
     log_level: str = Field(default="INFO", json_schema_extra={"env": "LOG_LEVEL"})
+
+    # Configuraciones específicas para pruebas (cargadas desde .env.test)
+    test_user_email: Optional[str] = Field(default=None, json_schema_extra={"env": "TEST_USER_EMAIL"})
+    test_user_id: Optional[str] = Field(default=None, json_schema_extra={"env": "TEST_USER_ID"})
+    valid_test_token: Optional[str] = Field(default=None, json_schema_extra={"env": "VALID_TEST_TOKEN"})
 
 
 # Instancia global de la configuración

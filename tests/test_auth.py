@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
 
 # Importar directamente desde el proyecto
-from middleware.auth import get_api_key, APIKeyMiddleware, api_key_header
+from app.middleware.auth import get_api_key, APIKeyMiddleware, api_key_header
 from clients.supabase_client import SupabaseClient
 
 # Constantes para pruebas
@@ -24,7 +24,7 @@ class MockSupabaseClient:
 # Patch para SupabaseClient
 @pytest.fixture(autouse=True)
 def mock_supabase_client():
-    with patch("middleware.auth.SupabaseClient", return_value=MockSupabaseClient()):
+    with patch("app.middleware.auth.SupabaseClient", return_value=MockSupabaseClient()):
         yield
 
 # Crear una aplicación FastAPI de prueba
@@ -58,7 +58,7 @@ def mock_api_key_header():
     async def mock_header(request):
         return request.headers.get("X-API-Key")
     
-    with patch("middleware.auth.api_key_header", new=AsyncMock(side_effect=mock_header)):
+    with patch("app.middleware.auth.api_key_header", new=AsyncMock(side_effect=mock_header)):
         yield
 
 def test_protected_route_with_valid_api_key():

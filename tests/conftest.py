@@ -9,25 +9,50 @@ import sys
 import json
 import asyncio
 import importlib.util
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, Generator, AsyncGenerator
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
-from jose import jwt
 
 # Añadir el directorio raíz del proyecto al sys.path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, project_root)
+if project_root not in sys.path: # Evitar duplicados
+    sys.path.insert(0, project_root)
 
 # Cargar variables de entorno desde .env.test si existe
 env_test_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env.test'))
+
 if os.path.exists(env_test_path):
     from dotenv import load_dotenv
-    load_dotenv(env_test_path)
+    print(f"DEBUG [conftest.py]: Loading .env.test from {env_test_path}")
+    # override=True asegura que las variables de .env.test tienen precedencia
+    load_dotenv(env_test_path, override=True)
+
+    # Forzar la recarga de core.settings si ya fue importado.
+    # Esto es crucial si otro módulo importó core.settings antes de que .env.test se cargara.
+    if "core.settings" in sys.modules:
+        print("DEBUG [conftest.py]: Reloading core.settings module to pick up .env.test variables.")
+        import importlib
+        # Es importante recargar el módulo que define 'settings'
+        core_settings_module = sys.modules["core.settings"]
+        importlib.reload(core_settings_module)
+        # Después de recargar, cualquier importación de 'from core.settings import settings'
+        # debería obtener la instancia 'settings' recién creada con los valores de .env.test.
+else:
+    print(f"DEBUG [conftest.py]: .env.test not found at {env_test_path}. Test-specific settings might be missing.")
+
+# Importar la app real de FastAPI para usarla en los clientes de prueba
+try:
+    from app.main import app as actual_fastapi_app
+except ImportError as e:
+    # Esta es una condición crítica para las pruebas de API.
+    # Si no podemos importar la app, las pruebas de API no pueden ejecutarse correctamente.
+    print(f"ERROR CRÍTICO EN TEST SETUP: No se pudo importar app.main.app: {e}")
+    raise ImportError(f"No se pudo importar app.main.app, necesario para pruebas de API: {e}")
 
 # Importar configuración de prueba
 from core.test_settings import MockTestSettings
@@ -36,13 +61,13 @@ from core.test_settings import MockTestSettings
 test_settings_instance = MockTestSettings(
     supabase_url="http://localhost:54321",
     supabase_anon_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test",
-    jwt_secret="test_secret_key",
     testing=True
 )
 
 # Importar módulos necesarios
-from core.auth import create_access_token
 from core.state_manager import StateManager
+from gotrue.errors import AuthApiError as AuthException
+from gotrue.types import User, Session
 
 # Registrar los mocks
 pytest_plugins = [
@@ -53,29 +78,6 @@ pytest_plugins = [
 RUNNING_AGENT_TESTS = any('test_agent' in arg for arg in sys.argv) or any('agents/' in arg for arg in sys.argv)
 RUNNING_UNIT_TESTS = any('test_unit' in arg for arg in sys.argv) or any('unit/' in arg for arg in sys.argv) or any('-m unit' in arg for arg in sys.argv)
 RUNNING_INTEGRATION_TESTS = any('test_integration' in arg for arg in sys.argv) or any('integration/' in arg for arg in sys.argv) or any('-m integration' in arg for arg in sys.argv)
-
-# Importar app solo si estamos ejecutando pruebas de integración
-if RUNNING_INTEGRATION_TESTS and not RUNNING_UNIT_TESTS and not RUNNING_AGENT_TESTS:
-    try:
-        from app.main import app
-    except ImportError as e:
-        print(f"Advertencia: No se pudo importar app.main: {e}")
-        # Proporcionar un mock básico para app
-        class app:
-            def __init__(self):
-                pass
-else:
-    # Mock de FastAPI para pruebas de agentes y unitarias
-    class app:
-        def __init__(self):
-            pass
-        
-        @staticmethod
-        def get_test_client():
-            """Retorna un cliente de prueba simulado."""
-            return None
-
-
 
 # Función para aplicar mocks a módulos
 @pytest.fixture(autouse=True)
@@ -95,13 +97,13 @@ def mock_external_dependencies(monkeypatch):
         sys.modules["google.generativeai"] = importlib.import_module("tests.mocks.google.generativeai")
         
         # Mock supabase
-        sys.modules["supabase"] = importlib.import_module("tests.mocks.supabase")
+        # sys.modules["supabase"] = importlib.import_module("tests.mocks.supabase")
         
         # Parchear el módulo sys.modules para que core.settings devuelva nuestra configuración de prueba
-        class MockSettings:
-            settings = test_settings_instance
-        
-        sys.modules["core.settings"] = MockSettings
+        # class MockSettings:
+        #     settings = test_settings_instance
+        # 
+        # sys.modules["core.settings"] = MockSettings
     
     yield
 
@@ -132,34 +134,36 @@ def pytest_configure(config):
 def test_settings() -> Dict[str, Any]:
     """Proporciona configuraciones para las pruebas."""
     return {
-        "jwt_secret": "test_secret_key_for_testing_purposes_only",
-        "jwt_algorithm": "HS256",
-        "jwt_expiration_minutes": 60,
         "test_user_id": "00000000-0000-0000-0000-000000000000",
+        "test_user_email": "testuser@example.com",
+        "valid_test_token": "valid_supabase_test_token_user_00000000-0000-0000-0000-000000000000"
     }
 
 
 @pytest.fixture
-def test_client() -> Generator[TestClient, None, None]:
+def test_client(mock_supabase_client) -> Generator[TestClient, None, None]: 
     """Proporciona un cliente de prueba para la API."""
-    with TestClient(app) as client:
+    from clients.supabase_client import SupabaseClient as RealSupabaseClient
+    actual_fastapi_app.dependency_overrides[RealSupabaseClient] = lambda: mock_supabase_client
+    with TestClient(actual_fastapi_app) as client:
         yield client
+    actual_fastapi_app.dependency_overrides = {} # Limpiar overrides
 
 
 @pytest.fixture
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
+async def async_client(mock_supabase_client) -> AsyncGenerator[AsyncClient, None]: 
     """Proporciona un cliente asíncrono para la API."""
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    from clients.supabase_client import SupabaseClient as RealSupabaseClient
+    actual_fastapi_app.dependency_overrides[RealSupabaseClient] = lambda: mock_supabase_client
+    async with AsyncClient(app=actual_fastapi_app, base_url="http://test") as client:
         yield client
+    actual_fastapi_app.dependency_overrides = {} # Limpiar overrides
 
 
 @pytest.fixture
 def test_token(test_settings: Dict[str, Any]) -> str:
     """Genera un token JWT válido para las pruebas."""
-    return create_access_token(
-        user_id=test_settings["test_user_id"],
-        expires_delta=timedelta(minutes=test_settings["jwt_expiration_minutes"])
-    )
+    return test_settings["valid_test_token"]
 
 
 @pytest.fixture
@@ -169,18 +173,48 @@ def auth_headers(test_token: str) -> Dict[str, str]:
 
 
 @pytest.fixture
-def mock_supabase_client(monkeypatch) -> Any:
+def mock_supabase_client(test_settings: Dict[str, Any]):
     """Proporciona un cliente de Supabase mockeado para las pruebas."""
-    from tests.mocks.supabase import Client
-    
-    # Reemplazar la clase SupabaseClient con el mock
-    from clients.supabase_client import SupabaseClient
-    monkeypatch.setattr("core.state_manager.SupabaseClient", Client)
-    
-    return Client()
+    mock_client = MagicMock()
+    mock_auth = MagicMock()
 
+    # --- Mock para auth.get_user --- 
+    async def mock_get_user(token: str):
+        if token == test_settings["valid_test_token"]:
+            mock_user = User(id=test_settings["test_user_id"], email=test_settings["test_user_email"], app_metadata={}, user_metadata={}, aud="authenticated", created_at=datetime.now())
+            return mock_user
+        raise AuthException("Invalid token for mock")
+    mock_auth.get_user = AsyncMock(side_effect=mock_get_user)
+
+    # --- Mock para auth.sign_in_with_password --- 
+    async def mock_sign_in(credentials: dict): 
+        email_val = credentials.get("email")
+        password_val = credentials.get("password")
+        if email_val == test_settings["test_user_email"] and password_val == "correct_password":
+            mock_user_session_data = User(id=test_settings["test_user_id"], email=test_settings["test_user_email"], app_metadata={}, user_metadata={}, aud="authenticated", created_at=datetime.now())
+            mock_session_obj = Session(access_token=test_settings["valid_test_token"], token_type="bearer", user=mock_user_session_data, refresh_token="dummy_refresh_token")
+            return mock_session_obj
+        raise AuthException("Invalid credentials for mock sign_in")
+    mock_auth.sign_in_with_password = AsyncMock(side_effect=mock_sign_in)
+
+    # --- Mock para auth.sign_up --- 
+    async def mock_sign_up(credentials: dict):
+        email = credentials.get("email")
+        if email == "newuser@example.com":
+            mock_user_signup = User(id="11111111-1111-1111-1111-111111111111", email=email, app_metadata={}, user_metadata={}, aud="authenticated", created_at=datetime.now())
+            return mock_user_signup
+        elif email == test_settings["test_user_email"]:
+             raise AuthException("User already registered")
+        raise AuthException("Mock sign_up error")
+    mock_auth.sign_up = AsyncMock(side_effect=mock_sign_up)
+
+    mock_client.auth = mock_auth
+    
+    return mock_client
 
 @pytest.fixture
 def state_manager(mock_supabase_client) -> StateManager:
     """Proporciona un StateManager para las pruebas."""
-    return StateManager(supabase_client=mock_supabase_client)
+    sm = StateManager() 
+    sm.client = mock_supabase_client 
+    return sm

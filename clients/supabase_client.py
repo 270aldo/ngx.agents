@@ -61,15 +61,15 @@ class SupabaseClient(BaseClient):
         
         Configura las credenciales y prepara el cliente para su uso.
         """
-        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-            raise ValueError("SUPABASE_URL y SUPABASE_KEY deben estar configuradas en las variables de entorno")
+        if not settings.SUPABASE_URL or not settings.SUPABASE_ANON_KEY:
+            raise ValueError("SUPABASE_URL y SUPABASE_ANON_KEY deben estar configuradas en las variables de entorno")
         
         # Inicializar cliente de Supabase
         # La biblioteca de Supabase no es asíncrona, pero usamos run_in_executor para no bloquear
         loop = asyncio.get_event_loop()
         self.client = await loop.run_in_executor(
             None,
-            lambda: create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            lambda: create_client(settings.SUPABASE_URL, settings.SUPABASE_ANON_KEY)
         )
         
         logger.info(f"Cliente Supabase inicializado para URL: {settings.SUPABASE_URL}")

@@ -24,6 +24,13 @@ from core.state_manager import StateManager
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result
 
+# Importar Skill desde adk.agent
+try:
+    from adk.agent import Skill
+except ImportError:
+    # Stub para Skill si no está disponible
+    from adk.agent import Skill
+
 # Importar esquemas para las skills
 from agents.motivation_behavior_coach.schemas import (
     HabitFormationInput, HabitFormationOutput,
@@ -65,10 +72,10 @@ class MotivationBehaviorCoach(ADKAgent):
         Args:
             toolkit: Toolkit de ADK para registro de habilidades
             state_manager: Gestor de estado para persistencia
-            system_instructions: Instrucciones del sistema para el modelo
-            gemini_client: Cliente de Gemini para generar respuestas
+            system_instructions: Instrucciones del sistema
+            gemini_client: Cliente de Gemini para generación de texto
             model: Modelo de Gemini a utilizar
-            **kwargs: Argumentos adicionales
+            **kwargs: Argumentos adicionales para la clase base
         """
         # Definir instrucciones del sistema
         self.system_instructions = system_instructions or """
@@ -94,68 +101,43 @@ class MotivationBehaviorCoach(ADKAgent):
         # Inicializar StateManager si no se proporciona
         self.state_manager = state_manager or StateManager()
         
-        # Definir skills directamente
+        # Definir skills usando la clase Skill para compatibilidad con ADK y A2A
         self.skills = {
-            "habit_formation": {
-                "name": "Formación de Hábitos",
-                "description": "Técnicas para establecer y mantener hábitos saludables basadas en ciencia del comportamiento",
-                "method": self._skill_habit_formation,
-                "input_schema": HabitFormationInput,
-                "output_schema": HabitFormationOutput,
-                "examples": [
-                    "Quiero establecer el hábito de hacer ejercicio regularmente",
-                    "Cómo puedo mantener el hábito de meditar diariamente",
-                    "Necesito crear una rutina matutina efectiva"
-                ]
-            },
-            "motivation_strategies": {
-                "name": "Estrategias de Motivación",
-                "description": "Estrategias basadas en evidencia para mantener la motivación a largo plazo y superar barreras psicológicas",
-                "method": self._skill_motivation_strategies,
-                "input_schema": MotivationStrategiesInput,
-                "output_schema": MotivationStrategiesOutput,
-                "examples": [
-                    "Me cuesta mantenerme motivado para seguir mi dieta",
-                    "Cómo mantener la motivación cuando no veo resultados rápidos",
-                    "Estrategias para no abandonar mis metas"
-                ]
-            },
-            "behavior_change": {
-                "name": "Cambio de Comportamiento",
-                "description": "Métodos para lograr cambios de comportamiento duraderos basados en modelos psicológicos validados",
-                "method": self._skill_behavior_change,
-                "input_schema": BehaviorChangeInput,
-                "output_schema": BehaviorChangeOutput,
-                "examples": [
-                    "Quiero dejar de procrastinar",
-                    "Cómo puedo cambiar mi relación con la comida",
-                    "Necesito superar mi adicción al teléfono"
-                ]
-            },
-            "goal_setting": {
-                "name": "Establecimiento de Metas",
-                "description": "Técnicas para establecer metas efectivas usando el marco SMART y otros modelos validados",
-                "method": self._skill_goal_setting,
-                "input_schema": GoalSettingInput,
-                "output_schema": GoalSettingOutput,
-                "examples": [
-                    "Quiero establecer una meta de fitness para los próximos 6 meses",
-                    "Cómo puedo establecer metas profesionales efectivas",
-                    "Necesito un plan para alcanzar mi meta de pérdida de peso"
-                ]
-            },
-            "obstacle_management": {
-                "name": "Gestión de Obstáculos",
-                "description": "Estrategias para identificar, anticipar y superar obstáculos en el camino hacia los objetivos",
-                "method": self._skill_obstacle_management,
-                "input_schema": ObstacleManagementInput,
-                "output_schema": ObstacleManagementOutput,
-                "examples": [
-                    "Siempre abandono mis metas cuando encuentro dificultades",
-                    "Cómo puedo manejar las distracciones al trabajar",
-                    "Qué hacer cuando pierdo la motivación"
-                ]
-            }
+            "habit_formation": Skill(
+                name="Formación de Hábitos",
+                description="Técnicas para establecer y mantener hábitos saludables basadas en ciencia del comportamiento",
+                handler=self._skill_habit_formation,
+                input_schema=HabitFormationInput,
+                output_schema=HabitFormationOutput
+            ),
+            "motivation_strategies": Skill(
+                name="Estrategias de Motivación",
+                description="Estrategias basadas en evidencia para mantener la motivación a largo plazo y superar barreras psicológicas",
+                handler=self._skill_motivation_strategies,
+                input_schema=MotivationStrategiesInput,
+                output_schema=MotivationStrategiesOutput
+            ),
+            "behavior_change": Skill(
+                name="Cambio de Comportamiento",
+                description="Métodos para lograr cambios de comportamiento duraderos basados en modelos psicológicos validados",
+                handler=self._skill_behavior_change,
+                input_schema=BehaviorChangeInput,
+                output_schema=BehaviorChangeOutput
+            ),
+            "goal_setting": Skill(
+                name="Establecimiento de Metas",
+                description="Técnicas para establecer metas efectivas usando el marco SMART y otros modelos validados",
+                handler=self._skill_goal_setting,
+                input_schema=GoalSettingInput,
+                output_schema=GoalSettingOutput
+            ),
+            "obstacle_management": Skill(
+                name="Gestión de Obstáculos",
+                description="Estrategias para identificar, anticipar y superar obstáculos en el camino hacia los objetivos",
+                handler=self._skill_obstacle_management,
+                input_schema=ObstacleManagementInput,
+                output_schema=ObstacleManagementOutput
+            )
         }
         
         # Inicializar la clase base ADKAgent
@@ -172,7 +154,6 @@ class MotivationBehaviorCoach(ADKAgent):
             model=model,
             **kwargs
         )
-        """
     
     async def _get_context(self, user_id: str, session_id: str) -> Dict[str, Any]:
         """
@@ -630,129 +611,21 @@ class MotivationBehaviorCoach(ADKAgent):
         
         return prompt
     
-    async def _skill_habit_formation(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def _skill_habit_formation(self, params: HabitFormationInput) -> HabitFormationOutput:
         """
-        Skill para la formación de hábitos.
-        
-        Genera un plan estructurado para formar un nuevo hábito basado en la ciencia del comportamiento.
-        
-        Args:
-            task: Tarea con los parámetros de entrada
-                - user_input: Texto de entrada del usuario
-                - user_id: ID del usuario (opcional)
-                - session_id: ID de la sesión (opcional)
-                - user_profile: Perfil del usuario (opcional)
-                
-        Returns:
-            Dict[str, Any]: Resultado con el plan de hábitos
+        Skill para generar un plan de hábitos estructurado usando Pydantic.
         """
+        logger.info(f"Skill 'habit_formation' llamada con user_input: {params.user_input[:30]}")
         try:
-            # Validar la entrada con Pydantic
-            input_data = HabitFormationInput(**task)
-            
-            # Generar el plan de hábitos
-            habit_plan_data = await self._generate_habit_plan(
-                input_data.user_input, 
-                input_data.user_profile
-            )
-            
-            # Convertir la respuesta al formato esperado
-            habit_steps = []
-            for step in habit_plan_data.get("steps", []):
-                if isinstance(step, str):
-                    # Si es una cadena, extraer la descripción y crear un objeto HabitStep
-                    habit_steps.append(HabitStep(
-                        description=step,
-                        timeframe="2-4 semanas",
-                        difficulty="Moderado"
-                    ))
-                elif isinstance(step, dict):
-                    # Si ya es un diccionario, usarlo directamente
-                    habit_steps.append(HabitStep(**step))
-            
-            # Crear el plan de hábitos
-            triggers = habit_plan_data.get("triggers", ["Después de una actividad existente"])
-            trigger = triggers[0] if isinstance(triggers, list) and triggers else "Señal personalizada"
-            
-            steps = habit_plan_data.get("steps", ["Acción a realizar"])
-            routine = steps[0] if isinstance(steps, list) and steps else "Rutina personalizada"
-            
-            rewards = habit_plan_data.get("rewards", ["Recompensa inmediata"])
-            reward = rewards[0] if isinstance(rewards, list) and rewards else "Recompensa personalizada"
-            
-            tracking = habit_plan_data.get("tracking", {})
-            tracking_method = tracking.get("method", "Registro diario") if isinstance(tracking, dict) else "Registro diario"
-            
-            habit_name = habit_plan_data.get("habit", "Hábito personalizado")
-            implementation_intention = f"Cuando {trigger}, haré {habit_name}"
-            
-            habit_plan = HabitPlan(
-                habit_name=habit_name,
-                cue=trigger,
-                routine=routine,
-                reward=reward,
-                implementation_intention=implementation_intention,
-                steps=habit_steps,
-                tracking_method=tracking_method
-            )
-            
-            # Crear la salida
-            output_data = HabitFormationOutput(
-                habit_plan=habit_plan,
-                tips=[
-                    "Comienza con un hábito pequeño y fácil de mantener",
-                    "Asocia el nuevo hábito con uno existente",
-                    "Celebra cada pequeño éxito para reforzar el comportamiento",
-                    "Utiliza recordatorios visuales en tu entorno",
-                    "Comparte tu compromiso con alguien para aumentar la responsabilidad"
-                ],
-                obstacles=[
-                    {"obstacle": "Falta de tiempo", "strategy": "Programa el hábito en tu calendario como una cita importante"},
-                    {"obstacle": "Olvido", "strategy": "Coloca recordatorios visuales en lugares estratégicos"},
-                    {"obstacle": "Falta de motivación", "strategy": "Conecta el hábito con tus valores más profundos"}
-                ],
-                consistency_strategies=[
-                    "Nunca falles dos días seguidos",
-                    "Prepara tu entorno para facilitar el hábito",
-                    "Lleva un registro visible de tu progreso",
-                    "Únete a un grupo o comunidad con objetivos similares",
-                    "Recompénsate por hitos alcanzados (7 días, 30 días, etc.)"
-                ]
-            )
-            
-            # Crear el artefacto
-            obstacles_dict = [{o["obstacle"]: o["strategy"]} for o in output_data.obstacles]
-            
-            artifact = HabitPlanArtifact(
-                habit_plan=habit_plan,
-                tips=output_data.tips,
-                obstacles=obstacles_dict
-            )
-            
-            # Crear y devolver el resultado
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="habit_formation",
-                status="success",
-                output=output_data.dict(),
-                artifacts=[
-                    {
-                        "type": "habit_plan",
-                        "label": f"Plan de hábito: {habit_plan.habit_name}",
-                        "data": artifact.dict()
-                    }
-                ]
-            )
+            plan_data = await self._generate_habit_plan(params.user_input, params.user_profile or {})
+            return HabitFormationOutput(**{"habit_plan": plan_data, "tips": plan_data.get("tips", []), "obstacles": plan_data.get("obstacles", []), "consistency_strategies": plan_data.get("consistency_strategies", [])})
         except Exception as e:
-            logger.error(f"Error en _skill_habit_formation: {str(e)}")
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="habit_formation",
-                status="error",
-                error=str(e),
-                output={
-                    "error": f"Error al generar el plan de hábitos: {str(e)}"
-                }
+            logger.error(f"Error en skill 'habit_formation': {e}", exc_info=True)
+            return HabitFormationOutput(
+                habit_plan=plan_data if 'plan_data' in locals() else None,
+                tips=[],
+                obstacles=[],
+                consistency_strategies=[]
             )
     
     async def _generate_habit_plan(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -833,30 +706,23 @@ class MotivationBehaviorCoach(ADKAgent):
                 "rewards": ["Recompensa inmediata después de completar el hábito"]
             }
     
-    async def _skill_goal_setting(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def _skill_goal_setting(self, params: GoalSettingInput) -> GoalSettingOutput:
         """
         Skill para el establecimiento de metas.
         
         Genera un plan estructurado para establecer y alcanzar metas siguiendo el formato SMART.
         
         Args:
-            task: Tarea con los parámetros de entrada
-                - user_input: Texto de entrada del usuario
-                - user_id: ID del usuario (opcional)
-                - session_id: ID de la sesión (opcional)
-                - user_profile: Perfil del usuario (opcional)
+            params: Parámetros de entrada para la skill
                 
         Returns:
-            Dict[str, Any]: Resultado con el plan de metas
+            GoalSettingOutput: Plan de metas generado
         """
         try:
-            # Validar la entrada con Pydantic
-            input_data = GoalSettingInput(**task)
-            
-            # Generar el plan de metas
+            # Generar el plan de metas usando el input de Pydantic
             goal_plan_data = await self._generate_goal_plan(
-                input_data.user_input, 
-                input_data.user_profile
+                params.user_input, 
+                params.user_profile
             )
             
             # Convertir la respuesta al formato esperado
@@ -931,40 +797,44 @@ class MotivationBehaviorCoach(ADKAgent):
                 tracking=tracking
             )
             
-            # Crear la salida
-            output_data = GoalSettingOutput(
+            # Devolver directamente el objeto GoalSettingOutput
+            return GoalSettingOutput(
                 goal_plan=goal_plan
-            )
-            
-            # Crear el artefacto
-            artifact = GoalPlanArtifact(
-                goal_plan=goal_plan
-            )
-            
-            # Crear y devolver el resultado
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="goal_setting",
-                status="success",
-                output=output_data.dict(),
-                artifacts=[
-                    {
-                        "type": "goal_plan",
-                        "label": f"Plan de meta: {smart_goal.specific}",
-                        "data": artifact.dict()
-                    }
-                ]
             )
         except Exception as e:
             logger.error(f"Error en _skill_goal_setting: {str(e)}")
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="goal_setting",
-                status="error",
-                error=str(e),
-                output={
-                    "error": f"Error al generar el plan de metas: {str(e)}"
-                }
+            # Devolver un objeto GoalSettingOutput con valores predeterminados en caso de error
+            return GoalSettingOutput(
+                goal_plan=GoalPlan(
+                    main_goal=SmartGoal(
+                        specific="No se pudo generar un objetivo específico debido a un error",
+                        measurable="N/A",
+                        achievable="N/A",
+                        relevant="N/A",
+                        time_bound="N/A"
+                    ),
+                    purpose=f"Error: {str(e)}",
+                    milestones=[Milestone(
+                        description="No disponible debido a un error",
+                        target_date="N/A",
+                        metrics="N/A"
+                    )],
+                    timeline=Timeline(
+                        start_date="Hoy",
+                        end_date="No definido",
+                        key_dates=[]
+                    ),
+                    resources=["Consulta a un profesional"],
+                    obstacles=[Obstacle(
+                        description="Error en la generación del plan",
+                        strategy="Intenta nuevamente con más detalles"
+                    )],
+                    tracking=TrackingSystem(
+                        frequency="N/A",
+                        method="N/A",
+                        review_points=[]
+                    )
+                )
             )
     
     async def _generate_goal_plan(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -997,52 +867,6 @@ class MotivationBehaviorCoach(ADKAgent):
         
         Devuelve el plan en formato JSON estructurado.
         """
-        
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += (
-                "\n\nConsidera la siguiente información del usuario:\n"
-                f"- Objetivos: {user_profile.get('goals', 'No disponible')}\n"
-                f"- Desafíos: {user_profile.get('challenges', 'No disponible')}\n"
-                f"- Preferencias: {user_profile.get('preferences', 'No disponible')}\n"
-                f"- Historial: {user_profile.get('history', 'No disponible')}"
-            )
-        
-        try:
-            # Generar el plan de metas
-            response = await self.gemini_client.generate_structured_output(prompt)
-            
-            # Si la respuesta no es un diccionario, intentar convertirla
-            if not isinstance(response, dict):
-                try:
-                    import json
-                    response = json.loads(response)
-                except:
-                    # Si no se puede convertir, crear un diccionario básico
-                    response = {
-                        "main_goal": {
-                            "specific": "Meta específica",
-                            "measurable": "Cómo se medirá el éxito",
-                            "achievable": "Por qué es alcanzable",
-                            "relevant": "Por qué es relevante",
-                            "time_bound": "Fecha límite"
-                        },
-                        "purpose": "Razón profunda para alcanzar esta meta",
-                        "milestones": [
-                            {
-                                "description": "Primer hito",
-                                "target_date": "Fecha objetivo",
-                                "metrics": "Cómo medir el éxito"
-                            },
-                            {
-                                "description": "Segundo hito",
-                                "target_date": "Fecha objetivo",
-                                "metrics": "Cómo medir el éxito"
-                            }
-                        ],
-                        "timeline": {
-                            "start_date": "Fecha de inicio",
-                            "end_date": "Fecha de finalización",
                             "key_dates": ["Fecha 1", "Fecha 2", "Fecha 3"]
                         },
                         "resources": [
@@ -1087,30 +911,23 @@ class MotivationBehaviorCoach(ADKAgent):
                 "tracking": {"frequency": "Semanal", "method": "Método", "review_points": ["Revisión"]}
             }
 
-    async def _skill_motivation_strategies(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def _skill_motivation_strategies(self, params: MotivationStrategiesInput) -> MotivationStrategiesOutput:
         """
         Skill para generar estrategias de motivación personalizadas.
         
         Genera estrategias de motivación basadas en la ciencia del comportamiento y la psicología positiva.
         
         Args:
-            task: Tarea con los parámetros de entrada
-                - user_input: Texto de entrada del usuario
-                - user_id: ID del usuario (opcional)
-                - session_id: ID de la sesión (opcional)
-                - user_profile: Perfil del usuario (opcional)
+            params: Parámetros de entrada para la skill
                 
         Returns:
-            Dict[str, Any]: Resultado con las estrategias de motivación
+            MotivationStrategiesOutput: Estrategias de motivación generadas
         """
         try:
-            # Validar la entrada con Pydantic
-            input_data = MotivationStrategiesInput(**task)
-            
-            # Generar las estrategias de motivación
+            # Generar las estrategias de motivación usando el input de Pydantic
             motivation_data = await self._generate_motivation_strategies(
-                input_data.user_input, 
-                input_data.user_profile
+                params.user_input, 
+                params.user_profile
             )
             
             # Convertir la respuesta al formato esperado
@@ -1143,8 +960,8 @@ class MotivationBehaviorCoach(ADKAgent):
                     difficulty="Baja"
                 ))
             
-            # Crear la salida
-            output_data = MotivationStrategiesOutput(
+            # Devolver directamente el objeto MotivationStrategiesOutput
+            return MotivationStrategiesOutput(
                 strategies=strategies,
                 analysis=motivation_data.get("analysis", "Análisis motivacional personalizado"),
                 recommended_strategy=motivation_data.get("recommended_strategy", strategies[0].name),
@@ -1154,37 +971,26 @@ class MotivationBehaviorCoach(ADKAgent):
                     "Conecta tus acciones con tus valores personales"
                 ])
             )
-            
-            # Crear el artefacto
-            artifact = MotivationStrategiesArtifact(
-                strategies=strategies,
-                analysis=output_data.analysis
-            )
-            
-            # Crear y devolver el resultado
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="motivation_strategies",
-                status="success",
-                output=output_data.dict(),
-                artifacts=[
-                    {
-                        "type": "motivation_strategies",
-                        "label": "Estrategias de motivación personalizadas",
-                        "data": artifact.dict()
-                    }
-                ]
-            )
         except Exception as e:
             logger.error(f"Error en _skill_motivation_strategies: {str(e)}")
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="motivation_strategies",
-                status="error",
-                error=str(e),
-                output={
-                    "error": f"Error al generar estrategias de motivación: {str(e)}"
-                }
+            # Devolver un objeto MotivationStrategiesOutput con valores predeterminados en caso de error
+            return MotivationStrategiesOutput(
+                strategies=[
+                    MotivationStrategy(
+                        name="Visualización del éxito",
+                        description="Visualizar el resultado deseado para aumentar la motivación",
+                        implementation="Dedica 5 minutos cada mañana a visualizar el logro de tus objetivos",
+                        science_backed=True,
+                        difficulty="Baja"
+                    )
+                ],
+                analysis=f"Error al generar análisis: {str(e)}",
+                recommended_strategy="Visualización del éxito",
+                long_term_tips=[
+                    "Mantén un registro de tus éxitos",
+                    "Celebra los pequeños logros",
+                    "Conecta tus acciones con tus valores personales"
+                ]
             )
     
     async def _generate_motivation_strategies(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1198,8 +1004,6 @@ class MotivationBehaviorCoach(ADKAgent):
         Returns:
             Dict[str, Any]: Estrategias de motivación estructuradas
         """
-        # TODO: Integrar RAG para buscar estrategias de motivación específicas de la filosofía NGX.
-        # TODO: Usar mcp7_query para obtener historial de motivación del usuario desde Supabase.
         prompt = (
             f"Genera estrategias de motivación personalizadas basadas en la siguiente solicitud:\n\n"
             f"\"{user_input}\"\n\n"
@@ -1290,30 +1094,23 @@ class MotivationBehaviorCoach(ADKAgent):
                 "long_term_tips": ["Mantén un registro de tus éxitos"]
             }
     
-    async def _skill_behavior_change(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def _skill_behavior_change(self, params: BehaviorChangeInput) -> BehaviorChangeOutput:
         """
         Skill para generar un plan de cambio de comportamiento personalizado.
         
         Genera un plan estructurado para cambiar comportamientos basado en la ciencia del comportamiento.
         
         Args:
-            task: Tarea con los parámetros de entrada
-                - user_input: Texto de entrada del usuario
-                - user_id: ID del usuario (opcional)
-                - session_id: ID de la sesión (opcional)
-                - user_profile: Perfil del usuario (opcional)
+            params: Parámetros de entrada para la skill
                 
         Returns:
-            Dict[str, Any]: Resultado con el plan de cambio de comportamiento
+            BehaviorChangeOutput: Plan de cambio de comportamiento generado
         """
         try:
-            # Validar la entrada con Pydantic
-            input_data = BehaviorChangeInput(**task)
-            
-            # Generar el plan de cambio de comportamiento
+            # Generar el plan de cambio de comportamiento usando el input de Pydantic
             behavior_data = await self._generate_behavior_change_plan(
-                input_data.user_input, 
-                input_data.user_profile
+                params.user_input, 
+                params.user_profile
             )
             
             # Crear las fases del plan
@@ -1378,8 +1175,8 @@ class MotivationBehaviorCoach(ADKAgent):
                     ]
                 ))
             
-            # Crear la salida
-            output_data = BehaviorChangeOutput(
+            # Devolver directamente el objeto BehaviorChangeOutput
+            return BehaviorChangeOutput(
                 target_behavior=behavior_data.get("target_behavior", "Comportamiento objetivo"),
                 current_state=behavior_data.get("current_state", "Estado actual del comportamiento"),
                 desired_state=behavior_data.get("desired_state", "Estado deseado del comportamiento"),
@@ -1389,39 +1186,28 @@ class MotivationBehaviorCoach(ADKAgent):
                 tracking_method=behavior_data.get("tracking_method", "Método de seguimiento diario"),
                 support_resources=behavior_data.get("support_resources", ["Recurso de apoyo"])
             )
-            
-            # Crear el artefacto
-            artifact = BehaviorChangeArtifact(
-                target_behavior=output_data.target_behavior,
-                current_state=output_data.current_state,
-                desired_state=output_data.desired_state,
-                phases=phases
-            )
-            
-            # Crear y devolver el resultado
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="behavior_change",
-                status="success",
-                output=output_data.dict(),
-                artifacts=[
-                    {
-                        "type": "behavior_change_plan",
-                        "label": "Plan de cambio de comportamiento",
-                        "data": artifact.dict()
-                    }
-                ]
-            )
         except Exception as e:
             logger.error(f"Error en _skill_behavior_change: {str(e)}")
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="behavior_change",
-                status="error",
-                error=str(e),
-                output={
-                    "error": f"Error al generar plan de cambio de comportamiento: {str(e)}"
-                }
+            # Devolver un objeto BehaviorChangeOutput con valores predeterminados en caso de error
+            return BehaviorChangeOutput(
+                target_behavior="Comportamiento no especificado",
+                current_state=f"Error: {str(e)}",
+                desired_state="Estado deseado no especificado",
+                motivation_factors=["Factor motivacional no especificado"],
+                potential_obstacles=["Error en la generación del plan"],
+                phases=[BehaviorChangePhase(
+                    name="Fase de error",
+                    description=f"No se pudo generar el plan debido a: {str(e)}",
+                    duration="N/A",
+                    steps=[BehaviorChangeStep(
+                        description="Intenta nuevamente con más detalles",
+                        duration="N/A",
+                        metrics=["N/A"],
+                        resources=["Consulta a un profesional"]
+                    )]
+                )],
+                tracking_method="No disponible",
+                support_resources=["Consulta a un profesional"]
             )
     
     async def _generate_behavior_change_plan(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1567,30 +1353,23 @@ class MotivationBehaviorCoach(ADKAgent):
                 "support_resources": ["Grupo de apoyo"]
             }
     
-    async def _skill_obstacle_management(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def _skill_obstacle_management(self, params: ObstacleManagementInput) -> ObstacleManagementOutput:
         """
         Skill para generar estrategias de manejo de obstáculos personalizadas.
         
         Genera estrategias para superar obstáculos específicos que impiden el logro de metas.
         
         Args:
-            task: Tarea con los parámetros de entrada
-                - user_input: Texto de entrada del usuario
-                - user_id: ID del usuario (opcional)
-                - session_id: ID de la sesión (opcional)
-                - user_profile: Perfil del usuario (opcional)
+            params: Parámetros de entrada para la skill
                 
         Returns:
-            Dict[str, Any]: Resultado con las estrategias de manejo de obstáculos
+            ObstacleManagementOutput: Estrategias de manejo de obstáculos generadas
         """
         try:
-            # Validar la entrada con Pydantic
-            input_data = ObstacleManagementInput(**task)
-            
-            # Generar el plan de manejo de obstáculos
+            # Generar el plan de manejo de obstáculos usando el input de Pydantic
             obstacle_data = await self._generate_obstacle_management_plan(
-                input_data.user_input, 
-                input_data.user_profile
+                params.user_input, 
+                params.user_profile
             )
             
             # Crear los obstáculos y estrategias
@@ -1649,46 +1428,37 @@ class MotivationBehaviorCoach(ADKAgent):
                     ]
                 ))
             
-            # Crear la salida
-            output_data = ObstacleManagementOutput(
+            # Devolver directamente el objeto ObstacleManagementOutput
+            return ObstacleManagementOutput(
                 goal=obstacle_data.get("goal", "Meta relacionada"),
                 obstacles=obstacles,
                 general_approach=obstacle_data.get("general_approach", "Enfoque general para manejar obstáculos"),
                 prevention_strategies=obstacle_data.get("prevention_strategies", ["Estrategia de prevención"]),
                 contingency_plan=obstacle_data.get("contingency_plan", "Plan de contingencia general")
             )
-            
-            # Crear el artefacto
-            artifact = ObstacleManagementArtifact(
-                goal=output_data.goal,
-                obstacles=obstacles,
-                general_approach=output_data.general_approach
-            )
-            
-            # Crear y devolver el resultado
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="obstacle_management",
-                status="success",
-                output=output_data.dict(),
-                artifacts=[
-                    {
-                        "type": "obstacle_management_plan",
-                        "label": "Plan de manejo de obstáculos",
-                        "data": artifact.dict()
-                    }
-                ]
-            )
         except Exception as e:
             logger.error(f"Error en _skill_obstacle_management: {str(e)}")
-            return create_result(
-                agent_id=self.agent_id,
-                skill_name="obstacle_management",
-                status="error",
-                error=str(e),
-                output={
-                    "error": f"Error al generar plan de manejo de obstáculos: {str(e)}"
-                }
+            # Devolver un objeto ObstacleManagementOutput con valores predeterminados en caso de error
+            return ObstacleManagementOutput(
+                goal="Meta no especificada",
+                obstacles=[
+                    Obstacle(
+                        name="Error en la generación",
+                        description=f"No se pudo generar el plan debido a: {str(e)}",
+                        impact="Alto",
+                        strategies=[
+                            ObstacleStrategy(
+                                description="Intenta nuevamente con más detalles",
+                                implementation="Proporciona información más específica sobre el obstáculo",
+                                effectiveness="Media",
+                                effort_required="Bajo"
+                            )
+                        ]
+                    )
+                ],
+                general_approach="Enfoque no disponible debido a un error",
+                prevention_strategies=["Intenta nuevamente con más detalles"],
+                contingency_plan="Plan de contingencia no disponible"
             )
     
     async def _generate_obstacle_management_plan(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:

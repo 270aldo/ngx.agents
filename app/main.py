@@ -17,6 +17,7 @@ from core.settings import settings
 from core.logging_config import setup_logging, get_logger
 from core.auth import get_current_user
 from app.routers import auth, agents, chat
+from clients.supabase_client import supabase_client
 
 # Configurar logger
 setup_logging()
@@ -44,6 +45,29 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(agents.router)
 app.include_router(chat.router)
+
+
+# Eventos de inicio y apagado de la aplicación
+@app.on_event("startup")
+async def startup_event():
+    """Tareas a ejecutar al iniciar la aplicación."""
+    logger.info("Iniciando la aplicación NGX Agents...")
+    try:
+        await supabase_client.initialize()
+        logger.info("Cliente Supabase inicializado correctamente.")
+    except ValueError as e:
+        logger.error(f"Error al inicializar Supabase: {e}")
+        # Podrías decidir si la app debe fallar al iniciar o continuar con funcionalidad limitada
+        # raise RuntimeError(f"No se pudo inicializar Supabase: {e}")
+    except Exception as e:
+        logger.error(f"Error inesperado durante la inicialización de Supabase: {e}", exc_info=True)
+        # raise RuntimeError(f"Error inesperado al inicializar Supabase: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Tareas a ejecutar al apagar la aplicación."""
+    logger.info("Cerrando la aplicación NGX Agents...")
+    # Aquí podrías añadir limpieza si es necesario, por ejemplo, cerrar conexiones
 
 
 # Endpoint para verificar el estado de la API
