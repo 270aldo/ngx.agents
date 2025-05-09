@@ -10,14 +10,14 @@ import logging
 import uuid
 from typing import Dict, List, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Query, BackgroundTasks, Request
 
 from core.auth import get_current_user
 from core.logging_config import get_logger
-from core.state_manager import StateManager
+from core.state_manager import StateManager, get_state_manager
 from app.schemas.chat import ChatRequest, ChatResponse, AgentResponse
 from agents.orchestrator.agent import NGXNexusOrchestrator
-from infrastructure.a2a_server import get_a2a_server
+from config import settings
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -29,36 +29,40 @@ router = APIRouter(
     responses={401: {"description": "No autorizado"}},
 )
 
-
-def get_state_manager() -> StateManager:
-    """
-    Dependencia para obtener una instancia del StateManager.
-    
-    Returns:
-        Instancia del StateManager
-    """
-    return StateManager()
-
+# Variable global para el orquestador (Singleton)
+_orchestrator_instance: Optional[NGXNexusOrchestrator] = None
+_orchestrator_lock = asyncio.Lock()
 
 def get_orchestrator() -> NGXNexusOrchestrator:
     """
     Dependencia para obtener una instancia del Orchestrator.
+    Utiliza un patrón Singleton simple para la instancia del orquestador.
     
     Returns:
         Instancia del Orchestrator
     """
-    # Obtener URL del servidor A2A
-    a2a_server = get_a2a_server()
-    a2a_server_url = f"ws://{a2a_server.host}:{a2a_server.port}"
+    global _orchestrator_instance
+
+    if _orchestrator_instance is None:
+        logger.info("Creando nueva instancia de NGXNexusOrchestrator.")
+        state_manager = get_state_manager()
+        
+        # La URL para las llamadas HTTP A2A del Orquestador debe apuntar
+        # al servidor FastAPI principal donde se exponen los endpoints /a2a/{agent_id}/process
+        http_a2a_target_url = f"http://{settings.API_HOST}:{settings.API_PORT}"
+        logger.debug(f"NGXNexusOrchestrator se inicializará con a2a_server_url (para HTTP A2A) = {http_a2a_target_url}")
+
+        _orchestrator_instance = NGXNexusOrchestrator(
+            a2a_server_url=http_a2a_target_url, # Esta URL es para las llamadas HTTP A2A salientes
+            state_manager=state_manager
+            # mcp_toolkit, model, instruction, etc., tomarán sus valores por defecto
+            # o podrían configurarse aquí si es necesario.
+        )
+        # No llamamos a orchestrator.connect() aquí. 
+        # El Orchestrator se conectará (si necesita WebSocket) cuando sea necesario,
+        # o sus llamadas HTTP no requieren una conexión persistente explícita de este tipo.
     
-    # Crear instancia del Orchestrator
-    state_manager = get_state_manager()
-    orchestrator = NGXNexusOrchestrator(
-        a2a_server_url=a2a_server_url,
-        state_manager=state_manager
-    )
-    
-    return orchestrator
+    return _orchestrator_instance
 
 
 @router.post("/", response_model=ChatResponse)
