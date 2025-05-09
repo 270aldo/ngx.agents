@@ -12,7 +12,7 @@ import json
 from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import Response, HTTPStatusError, RequestError, Request
 
-from orchestrator.a2a_connector import A2AConnector
+from agents.orchestrator.a2a_connector import A2AConnector
 from a2a import (
     AgentNotFoundError, AgentOfflineError, 
     TaskNotFoundError, ConnectionError,

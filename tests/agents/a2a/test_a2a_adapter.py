@@ -12,9 +12,9 @@ import json
 from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime, timedelta
 
-from orchestrator.a2a_adapter import A2AAdapter
-from orchestrator.orchestrator import Orchestrator, TaskResult
-from orchestrator.a2a_connector import A2AConnector
+from agents.orchestrator.a2a_adapter import A2AAdapter
+from agents.orchestrator.orchestrator import Orchestrator, TaskResult
+from agents.orchestrator.a2a_connector import A2AConnector
 from a2a import (
     AgentNotFoundError, AgentOfflineError, 
     TaskNotFoundError, ConnectionError,

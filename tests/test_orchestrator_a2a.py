@@ -10,8 +10,8 @@ import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime
 
-from orchestrator.orchestrator import Orchestrator, OrchestratorConfig, TaskResult
-from orchestrator.a2a_adapter import A2AAdapter
+from agents.orchestrator.orchestrator import Orchestrator, OrchestratorConfig, TaskResult
+from agents.orchestrator.a2a_adapter import A2AAdapter
 from a2a import AgentStatus
 
 # Fixture para el orquestador
@@ -40,7 +40,7 @@ def mock_a2a_adapter():
 async def test_get_a2a_adapter(orchestrator):
     """Prueba que get_a2a_adapter inicializa y devuelve el adaptador A2A."""
     # Usar patch para evitar la creación real del adaptador
-    with patch('orchestrator.a2a_adapter.A2AAdapter') as mock_adapter_class:
+    with patch('agents.orchestrator.a2a_adapter.A2AAdapter') as mock_adapter_class:
         mock_adapter = MagicMock()
         mock_adapter_class.return_value = mock_adapter
         
@@ -66,7 +66,7 @@ async def test_get_a2a_adapter_disabled(orchestrator):
     orchestrator.config.use_a2a = False
     
     # Usar patch para verificar que no se crea el adaptador
-    with patch('orchestrator.a2a_adapter.A2AAdapter') as mock_adapter_class:
+    with patch('agents.orchestrator.a2a_adapter.A2AAdapter') as mock_adapter_class:
         # Ejecutar la función
         adapter = await orchestrator.get_a2a_adapter()
         

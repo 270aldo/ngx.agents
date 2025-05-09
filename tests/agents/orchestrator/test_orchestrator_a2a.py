@@ -10,8 +10,8 @@ import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime
 
-from orchestrator.orchestrator import Orchestrator, OrchestratorConfig, TaskResult
-from orchestrator.a2a_adapter import A2AAdapter
+from agents.orchestrator.orchestrator import Orchestrator, OrchestratorConfig, TaskResult
+from agents.orchestrator.a2a_adapter import A2AAdapter
 from a2a import AgentStatus
 
 # Fixture para el orquestador
