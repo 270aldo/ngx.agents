@@ -1,0 +1,44 @@
+# Este archivo se mantiene para compatibilidad con entornos que no usan Poetry
+# Para desarrollo, se recomienda usar Poetry: pip install poetry && poetry install
+
+# Dependencias principales
+python>=3.9,<3.13
+fastapi>=0.110.0,<0.120.0
+uvicorn[standard]>=0.34.0,<0.35.0
+pydantic>=2.6.0,<3.0.0
+pydantic-settings>=2.2.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+httpx==0.28.1
+
+# Comunicación
+websockets>=13.0.0
+google-adk>=0.1.0
+sse-starlette>=1.6.1,<2.0.0
+
+# Logging
+python-json-logger>=2.0.7,<3.0.0
+
+# Base de datos
+supabase>=2.3.0,<3.0.0
+google-generativeai>=0.8.5
+
+# Testing
+pytest>=8.2.0,<9.0.0
+pytest-asyncio>=0.23.0,<0.24.0
+pytest-cov>=4.1.0,<5.0.0
+python-multipart>=0.0.9
+
+# Herramientas de desarrollo
+black>=24.3.0
+isort>=5.13.2
+mypy>=1.10.0
+ruff>=0.4.7
+safety>=3.5.0
+
+# Dependencias adicionales (mantener si son necesarias)
+# Descomentar si se requieren
+# numpy>=1.24.3,<2.0.0
+# pandas>=2.0.0,<3.0.0
+# scikit-learn>=1.2.2,<2.0.0
+# scipy>=1.10.1,<2.0.0
+# pillow>=9.5.0,<10.0.0
