@@ -1,0 +1,68 @@
+name: Pruebas de Componentes Aislados
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test-components:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [agents, app, clients, core, tools]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configurar Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Instalar Poetry
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+    
+    - name: Configurar caché para Poetry
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pypoetry
+        key: ${{ runner.os }}-poetry-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-poetry-
+    
+    - name: Crear entorno para componente ${{ matrix.component }}
+      run: |
+        # Crear directorio para componente
+        mkdir -p .venvs/${{ matrix.component }}
+        
+        # Crear archivo pyproject.toml específico para el componente
+        python -c "
+        import sys
+        component = sys.argv[1]
+        
+        with open('pyproject.toml', 'r') as f:
+            content = f.read()
+        
+        # Modificar para incluir solo el componente específico
+        content = content.replace(
+            'packages = [',
+            f'packages = [{{\include = \"{component}\"}}]'
+        )
+        
+        # Guardar en el directorio del componente
+        with open(f'.venvs/{component}/pyproject.toml', 'w') as f:
+            f.write(content)
+        " ${{ matrix.component }}
+        
+        # Instalar dependencias
+        cd .venvs/${{ matrix.component }}
+        poetry install
+    
+    - name: Ejecutar pruebas para ${{ matrix.component }}
+      run: |
+        cd .venvs/${{ matrix.component }}
+        poetry run pytest ../../tests/${{ matrix.component }} -v

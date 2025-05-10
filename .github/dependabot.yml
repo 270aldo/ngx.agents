@@ -1,0 +1,60 @@
+version: 2
+updates:
+  # Mantener dependencias de pip actualizadas
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Limitar a 5 PR abiertos a la vez
+    open-pull-requests-limit: 5
+    # Agrupar actualizaciones menores y de parches
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Asignar revisores
+    assignees:
+      - "ngx-team"
+    labels:
+      - "dependencies"
+      - "pip"
+    commit-message:
+      prefix: "Chore(deps)"
+      include: "scope"
+
+  # Mantener dependencias de Poetry actualizadas
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Especificar que se use Poetry
+    pip-requirements-file: "pyproject.toml"
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    assignees:
+      - "ngx-team"
+    labels:
+      - "dependencies"
+      - "poetry"
+    commit-message:
+      prefix: "Chore(deps)"
+      include: "scope"
+
+  # Mantener dependencias de GitHub Actions actualizadas
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    assignees:
+      - "ngx-team"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "Chore(ci)"
+      include: "scope"
