@@ -9,7 +9,7 @@ import json
 from typing import Dict, List, Optional, Any, Union
 
 from infrastructure.adapters.a2a_adapter import A2AAdapter
-from clients.vertex_ai_client_adapter import VertexAIClientAdapter
+from clients.vertex_ai import vertex_ai_client, VertexAIClient
 from core.telemetry import telemetry
 
 logger = logging.getLogger("recovery_corrective_adapter")
@@ -25,16 +25,14 @@ class RecoveryCorrectiveAdapter:
     - Proporcionar orientación de recuperación en tiempo real
     """
     
-    def __init__(self, a2a_client: A2AAdapter, vertex_client: VertexAIClientAdapter):
+    def __init__(self, a2a_client: A2AAdapter):
         """
         Inicializa el adaptador de Recovery Corrective.
         
         Args:
             a2a_client: Cliente A2A para comunicación con otros agentes
-            vertex_client: Cliente Vertex AI para generación de texto
         """
         self.a2a_client = a2a_client
-        self.vertex_client = vertex_client
         self.logger = logging.getLogger("recovery_corrective_adapter")
         
     @classmethod
@@ -46,8 +44,12 @@ class RecoveryCorrectiveAdapter:
             RecoveryCorrectiveAdapter: Una nueva instancia del adaptador
         """
         a2a_client = await A2AAdapter.create()
-        vertex_client = VertexAIClientAdapter()
-        return cls(a2a_client, vertex_client)
+        
+        # Inicializar el cliente Vertex AI si no está inicializado
+        if not vertex_ai_client.is_initialized:
+            await vertex_ai_client.initialize()
+            
+        return cls(a2a_client)
         
     async def analyze_recovery_needs(self, user_data: Dict[str, Any], training_history: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -64,10 +66,10 @@ class RecoveryCorrectiveAdapter:
             with telemetry.start_span("recovery_corrective.analyze_recovery_needs"):
                 # Implementación optimizada
                 prompt = self._build_recovery_analysis_prompt(user_data, training_history)
-                response = await self.vertex_client.generate_text(prompt)
+                response = await vertex_ai_client.generate_content(prompt=prompt)
                 
                 # Procesamiento y estructuración de la respuesta
-                analysis = self._parse_recovery_analysis(response)
+                analysis = self._parse_recovery_analysis(response["text"])
                 
                 # Telemetría
                 telemetry.record_event("recovery_corrective", "analysis_completed", {
@@ -118,10 +120,10 @@ class RecoveryCorrectiveAdapter:
                 )
                 
                 # Generar plan de recuperación
-                response = await self.vertex_client.generate_text(prompt)
+                response = await vertex_ai_client.generate_content(prompt=prompt)
                 
                 # Procesar y estructurar la respuesta
-                plan = self._parse_recovery_plan(response)
+                plan = self._parse_recovery_plan(response["text"])
                 
                 # Telemetría
                 telemetry.record_event("recovery_corrective", "plan_generated", {
@@ -165,10 +167,10 @@ class RecoveryCorrectiveAdapter:
                 )
                 
                 # Generar programa ajustado
-                response = await self.vertex_client.generate_text(prompt)
+                response = await vertex_ai_client.generate_content(prompt=prompt)
                 
                 # Procesar y estructurar la respuesta
-                adjusted_program = self._parse_adjusted_program(response)
+                adjusted_program = self._parse_adjusted_program(response["text"])
                 
                 # Telemetría
                 telemetry.record_event("recovery_corrective", "program_adjusted", {
@@ -209,10 +211,10 @@ class RecoveryCorrectiveAdapter:
                 prompt = self._build_guidance_prompt(user_id, recovery_needs, context)
                 
                 # Generar orientación
-                response = await self.vertex_client.generate_text(prompt)
+                response = await vertex_ai_client.generate_content(prompt=prompt)
                 
                 # Procesar y estructurar la respuesta
-                guidance = self._parse_guidance(response)
+                guidance = self._parse_guidance(response["text"])
                 
                 # Telemetría
                 telemetry.record_event("recovery_corrective", "guidance_provided", {
