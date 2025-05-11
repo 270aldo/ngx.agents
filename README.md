@@ -45,6 +45,33 @@ make dev
 # o: poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+## Integración con Google ADK Oficial
+
+NGX Agents ahora utiliza la biblioteca oficial de Google Agent Development Kit (ADK) para implementar la arquitectura A2A. Esta integración proporciona:
+
+- Compatibilidad con el estándar de la industria para desarrollo de agentes
+- Mejoras en la comunicación entre agentes
+- Acceso a herramientas y capacidades avanzadas del ecosistema Google ADK
+
+### Uso de la integración
+
+```python
+from adk.agent import Agent, Skill
+from adk.toolkit import Toolkit
+
+# Crear un toolkit
+toolkit = Toolkit()
+
+# Crear un agente
+agent = Agent(
+    toolkit=toolkit,
+    name="MiAgente",
+    description="Descripción del agente"
+)
+```
+
+Para más detalles, consulta la documentación en `docs/adk_integration.md` y los ejemplos en `examples/adk_usage_example.py`.
+
 ## Pruebas
 
 ```bash
@@ -74,6 +101,7 @@ Para facilitar las pruebas unitarias sin dependencias externas, se han implement
 - **Supabase**: Simulación completa del cliente de Supabase con almacenamiento en memoria.
 - **Google ADK**: Simulación del Agent Development Kit para pruebas de agentes.
 - **Gemini**: Simulación de la API de Gemini para pruebas de generación de texto.
+- **Vertex AI**: Simulación del cliente de Vertex AI para pruebas de generación de texto y embeddings.
 
 Los mocks se aplican automáticamente durante las pruebas unitarias y de agentes, pero no durante las pruebas de integración. Consulta la documentación en `tests/README.md` para más detalles.
 
@@ -95,6 +123,28 @@ Usuario → API FastAPI → Orchestrator → Agentes Especializados → Orchestr
 
 Para más detalles, consulta la documentación en `infrastructure/README.md`.
 
+## Clientes para servicios externos
+
+El proyecto utiliza varios clientes para interactuar con servicios externos:
+
+### Cliente Vertex AI
+
+Cliente optimizado para interactuar con Vertex AI de Google Cloud, con las siguientes características:
+
+- **Caché avanzado**: Soporte para caché en memoria y Redis con TTL configurable
+- **Pool de conexiones**: Gestión eficiente de conexiones a Vertex AI
+- **Telemetría integrada**: Integración con OpenTelemetry para monitoreo
+- **Soporte multimodal**: Procesamiento de texto e imágenes
+- **Gestión de errores robusta**: Reintentos automáticos y manejo de errores
+
+Para más detalles, consulta la documentación en `clients/vertex_ai/README.md`.  
+
+### Otros clientes disponibles
+
+- **Supabase**: Cliente para interactuar con Supabase (base de datos y autenticación)
+- **Gemini**: Cliente para interactuar con la API de Gemini de Google
+- **GCS**: Cliente para interactuar con Google Cloud Storage
+
 ## Estructura del proyecto
 
 ```
@@ -107,7 +157,10 @@ ngx-agents-refactorizado/
 │   ├── routers/         # Endpoints de la API
 │   └── schemas/         # Esquemas de datos
 ├── clients/             # Clientes para servicios externos
+│   └── vertex_ai/       # Cliente optimizado para Vertex AI
 ├── core/                # Funcionalidades centrales
+├── docs/                # Documentación del proyecto
+├── examples/            # Ejemplos de uso
 ├── infrastructure/      # Infraestructura A2A
 ├── tools/               # Herramientas compartidas
 ├── tests/               # Pruebas
@@ -183,6 +236,15 @@ SUPABASE_ANON_KEY=tu-clave-anonima
 
 # Gemini
 GEMINI_API_KEY=tu-api-key
+
+# Vertex AI
+GOOGLE_APPLICATION_CREDENTIALS=/ruta/a/tu/archivo-credenciales.json
+VERTEX_PROJECT_ID=tu-proyecto-id
+VERTEX_LOCATION=us-central1
+USE_REDIS_CACHE=false
+VERTEX_CACHE_TTL=3600
+VERTEX_MAX_CACHE_SIZE=100
+VERTEX_MAX_CONNECTIONS=10
 
 # JWT
 JWT_SECRET=tu-secreto-seguro
