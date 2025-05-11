@@ -16,7 +16,7 @@ from typing import Dict, Any, Optional, List, Union
 from core.logging_config import get_logger
 from agents.biometrics_insight_engine.agent import BiometricsInsightEngine
 from infrastructure.adapters.a2a_adapter import a2a_adapter
-from clients.vertex_ai_client_adapter import VertexAIClientAdapter
+from clients.vertex_ai import vertex_ai_client, VertexAIClient
 from core.state_manager_adapter import state_manager_adapter
 from core.telemetry import telemetry
 from app.schemas.a2a import A2ATaskContext
@@ -34,17 +34,15 @@ class BiometricsInsightEngineAdapter:
     - Visualización de datos biométricos
     """
     
-    def __init__(self, a2a_client, vertex_client, state_manager):
+    def __init__(self, a2a_client, state_manager):
         """
         Inicializa el adaptador del Biometrics Insight Engine.
         
         Args:
             a2a_client: Cliente A2A para comunicación con otros agentes
-            vertex_client: Cliente Vertex AI para generación de texto
             state_manager: Gestor de estado para persistencia
         """
         self.a2a_client = a2a_client
-        self.vertex_client = vertex_client
         self.state_manager = state_manager
         self.logger = get_logger("biometrics_insight_engine_adapter")
         
@@ -57,9 +55,13 @@ class BiometricsInsightEngineAdapter:
             BiometricsInsightEngineAdapter: Una nueva instancia del adaptador
         """
         a2a_client = a2a_adapter
-        vertex_client = VertexAIClientAdapter()
         state_manager = state_manager_adapter
-        return cls(a2a_client, vertex_client, state_manager)
+        
+        # Inicializar el cliente Vertex AI si no está inicializado
+        if not vertex_ai_client.is_initialized:
+            await vertex_ai_client.initialize()
+            
+        return cls(a2a_client, state_manager)
         
     async def analyze_biometric_data(self, user_id: str, biometric_data: Dict[str, Any], query: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -78,11 +80,11 @@ class BiometricsInsightEngineAdapter:
                 # Construir el prompt para el análisis
                 prompt = self._build_biometric_analysis_prompt(biometric_data, query)
                 
-                # Generar el análisis
-                response = await self.vertex_client.generate_text(prompt)
+                # Generar análisis
+                response = await vertex_ai_client.generate_content(prompt=prompt)
                 
                 # Procesar y estructurar la respuesta
-                analysis = self._parse_biometric_analysis(response)
+                analysis = self._parse_biometric_analysis(response["text"])
                 
                 # Guardar el análisis en el estado del usuario
                 await self._save_analysis_to_state(user_id, analysis)
@@ -120,11 +122,11 @@ class BiometricsInsightEngineAdapter:
                 # Construir el prompt para la identificación de patrones
                 prompt = self._build_pattern_recognition_prompt(biometric_data, time_range)
                 
-                # Generar el análisis de patrones
-                response = await self.vertex_client.generate_text(prompt)
+                # Generar identificación de patrones
+                response = await vertex_ai_client.generate_content(prompt=prompt)
                 
                 # Procesar y estructurar la respuesta
-                patterns = self._parse_pattern_recognition(response)
+                patterns = self._parse_pattern_recognition(response["text"])
                 
                 # Guardar los patrones en el estado del usuario
                 await self._save_patterns_to_state(user_id, patterns)
@@ -162,11 +164,11 @@ class BiometricsInsightEngineAdapter:
                 # Construir el prompt para el análisis de tendencias
                 prompt = self._build_trend_analysis_prompt(biometric_data, metrics)
                 
-                # Generar el análisis de tendencias
-                response = await self.vertex_client.generate_text(prompt)
+                # Generar análisis de tendencias
+                response = await vertex_ai_client.generate_content(prompt=prompt)
                 
                 # Procesar y estructurar la respuesta
-                trends = self._parse_trend_analysis(response)
+                trends = self._parse_trend_analysis(response["text"])
                 
                 # Guardar las tendencias en el estado del usuario
                 await self._save_trends_to_state(user_id, trends)
@@ -204,11 +206,11 @@ class BiometricsInsightEngineAdapter:
                 # Construir el prompt para la visualización
                 prompt = self._build_visualization_prompt(biometric_data, visualization_type)
                 
-                # Generar la descripción de la visualización
-                response = await self.vertex_client.generate_text(prompt)
+                # Generar visualización
+                response = await vertex_ai_client.generate_content(prompt=prompt)
                 
                 # Procesar y estructurar la respuesta
-                visualization = self._parse_visualization(response)
+                visualization = self._parse_visualization(response["text"])
                 
                 # Guardar la visualización en el estado del usuario
                 await self._save_visualization_to_state(user_id, visualization)
