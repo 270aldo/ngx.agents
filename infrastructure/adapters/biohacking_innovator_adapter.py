@@ -13,7 +13,7 @@ from agents.biohacking_innovator.agent import BiohackingInnovator
 from infrastructure.adapters.a2a_adapter import a2a_adapter
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
-from clients.vertex_ai_client_adapter import vertex_ai_client
+from clients.vertex_ai import vertex_ai_client
 from core.logging_config import get_logger
 
 # Configurar logger

@@ -12,7 +12,7 @@ from pathlib import Path
 # Añadir el directorio raíz al path para poder importar los módulos
 sys.path.append(str(Path(__file__).parent.parent))
 
-from clients.vertex_ai_client_adapter import VertexAIClientAdapter
+from clients.vertex_ai_client_adapter import VertexAIClientAdapter  # Mantener para pruebas del adaptador
 
 
 async def test_vertex_ai_adapter():

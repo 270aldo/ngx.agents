@@ -27,7 +27,7 @@ con componentes reales del sistema.
 
 import pytest
 import asyncio
-from clients.vertex_ai_client_adapter import vertex_ai_client
+from clients.vertex_ai import vertex_ai_client
 
 @pytest.mark.asyncio
 async def test_adapter_with_intent_analyzer():
