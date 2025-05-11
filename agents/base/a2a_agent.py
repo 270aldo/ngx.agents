@@ -101,41 +101,35 @@ class A2AAgent(BaseAgent):
             self._register_available_skills()
     
     def _register_available_skills(self):
-        """
-        Registra todas las skills disponibles en el sistema.
-        
-        Carga automáticamente las skills desde el registro global.
+        """Registra todas las skills disponibles desde el registro de skills."""
+        # TODO: Revisar si este mecanismo de SkillRegistry sigue siendo necesario
+        # dado que ADKAgent ahora procesa self.skills de la subclase.
+        # Por ahora, se comenta para evitar ImportError con SkillRegistry.
+        pass
         """
         try:
-            # Importar el módulo loader para asegurar que todas las skills estén registradas
-            try:
-                # Intentar importar de forma relativa primero
-                from skills import loader
-            except ImportError:
-                # Si falla, intentar con ruta absoluta
-                import sys
-                import os
-                sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                from skills import loader
-            
-            # Obtener todas las skills disponibles
-            available_skills = skill_registry.list_skills()
-            logger.info(f"Encontradas {len(available_skills)} skills disponibles")
-            
-            # Registrar cada skill en el agente
-            for skill_info in available_skills:
-                skill_name = skill_info["name"]
-                skill = skill_registry.get_skill(skill_name)
-                if skill:
-                    self.register_skill(skill)
-                    
-            logger.info(f"Registradas {len(self.registered_skills)} skills en el agente {self.agent_id}")
-            
-            # Actualizar la lista de skills para el registro en el servidor A2A
-            self._update_skill_list()
+            # Inicializar el registro de skills
+            # skill_registry = SkillRegistry() # Comentado para evitar ImportError
+            # # Obtener todas las skills disponibles
+            # available_skills = skill_registry.list_skills()
+            # logger.info(f"Encontradas {len(available_skills)} skills disponibles")
+            # 
+            # # Registrar cada skill en el agente
+            # for skill_info in available_skills:
+            #     skill_name = skill_info["name"]
+            #     skill = skill_registry.get_skill(skill_name)
+            #     if skill:
+            #         self.register_skill(skill)
+            #         
+            # logger.info(f"Registradas {len(self.registered_skills)} skills en el agente {self.agent_id}")
+            # 
+            # # Actualizar la lista de skills para el registro en el servidor A2A
+            # self._update_skill_list()
+            pass # Mantener el try-except por si se reintroduce lógica aquí
             
         except Exception as e:
             logger.error(f"Error al registrar skills disponibles: {str(e)}")
+        """
     
     def register_skill(self, skill: Skill) -> bool:
         """

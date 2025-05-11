@@ -7,18 +7,417 @@ import os
 import datetime
 import asyncio
 from google.cloud import aiplatform
+from pydantic import BaseModel, Field
 
 from adk.toolkit import Toolkit
+from adk.agent import Skill as GoogleADKSkill
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
-from agents.base.a2a_agent import A2AAgent
+from agents.base.adk_agent import ADKAgent
 from core.agent_card import AgentCard, Example
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
+from core.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+# Configurar logger
+logger = get_logger(__name__)
 
-class SystemsIntegrationOps(A2AAgent):
+# Definir esquemas de entrada y salida para las skills
+class IntegrationRequestInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre integración de sistemas")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class IntegrationRequestOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre integración de sistemas")
+    systems: List[str] = Field(..., description="Sistemas identificados para integración")
+    integration_report: Optional[Dict[str, Any]] = Field(None, description="Informe de integración estructurado")
+
+class AutomationRequestInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre automatización de flujos de trabajo")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class AutomationRequestOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre automatización")
+    automation_plan: Optional[Dict[str, Any]] = Field(None, description="Plan de automatización estructurado")
+
+class ApiRequestInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre gestión de APIs")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class ApiRequestOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre gestión de APIs")
+    apis: List[str] = Field(..., description="APIs identificadas")
+    api_guide: Optional[Dict[str, Any]] = Field(None, description="Guía de API estructurada")
+
+class InfrastructureRequestInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre infraestructura")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class InfrastructureRequestOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre infraestructura")
+    infrastructure_report: Optional[Dict[str, Any]] = Field(None, description="Informe de infraestructura estructurado")
+
+class DataPipelineRequestInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre pipelines de datos")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class DataPipelineRequestOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre pipelines de datos")
+    pipeline_design: Optional[Dict[str, Any]] = Field(None, description="Diseño de pipeline estructurado")
+
+class GeneralRequestInput(BaseModel):
+    query: str = Field(..., description="Consulta general del usuario")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class GeneralRequestOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada a la consulta general")
+
+# Definir las skills como clases que heredan de GoogleADKSkill
+class IntegrationRequestSkill(GoogleADKSkill):
+    name = "integration_request"
+    description = "Maneja consultas relacionadas con integración de sistemas"
+    input_schema = IntegrationRequestInput
+    output_schema = IntegrationRequestOutput
+    
+    async def handler(self, input_data: IntegrationRequestInput) -> IntegrationRequestOutput:
+        """Implementación de la skill de integración de sistemas"""
+        query = input_data.query
+        context = input_data.context or {}
+        
+        # Identificar qué sistemas se desean integrar
+        systems = []
+        query_lower = query.lower()
+        
+        # Sistemas comunes de fitness y salud
+        if any(s in query_lower for s in ["garmin", "connect"]):
+            systems.append("Garmin Connect")
+        if any(s in query_lower for s in ["fitbit"]):
+            systems.append("Fitbit")
+        if any(s in query_lower for s in ["apple", "health", "healthkit"]):
+            systems.append("Apple HealthKit")
+        if any(s in query_lower for s in ["google", "fit", "googlefit"]):
+            systems.append("Google Fit")
+        if any(s in query_lower for s in ["strava"]):
+            systems.append("Strava")
+        if any(s in query_lower for s in ["oura", "ring"]):
+            systems.append("Oura Ring")
+        if any(s in query_lower for s in ["whoop"]):
+            systems.append("WHOOP")
+        if any(s in query_lower for s in ["myfitnesspal", "fitness pal"]):
+            systems.append("MyFitnessPal")
+        
+        # Si no se identificaron sistemas específicos
+        if not systems:
+            systems = ["Sistema genérico de fitness/salud"]
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en integración de sistemas y automatización operativa.
+        
+        El usuario solicita información sobre integración de sistemas con la siguiente consulta:
+        "{query}"
+        
+        Sistemas identificados: {', '.join(systems)}
+        
+        Proporciona una respuesta detallada sobre cómo integrar estos sistemas,
+        incluyendo consideraciones técnicas, mejores prácticas, estrategias de implementación,
+        posibles desafíos y soluciones recomendadas. 
+        
+        Estructura tu respuesta en secciones:
+        1. Visión general de la integración
+        2. Arquitectura recomendada
+        3. APIs y protocolos relevantes
+        4. Desafíos de implementación
+        5. Próximos pasos recomendados
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Crear informe de integración como artefacto
+        integration_report = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "query_type": "integration_request",
+            "query": query,
+            "systems": systems,
+            "integration_summary": "Análisis de integración de sistemas completado",
+            "response": response_text
+        }
+        
+        return IntegrationRequestOutput(
+            response=response_text,
+            systems=systems,
+            integration_report=integration_report
+        )
+
+class AutomationRequestSkill(GoogleADKSkill):
+    name = "automation_request"
+    description = "Maneja consultas relacionadas con automatización de flujos de trabajo"
+    input_schema = AutomationRequestInput
+    output_schema = AutomationRequestOutput
+    
+    async def handler(self, input_data: AutomationRequestInput) -> AutomationRequestOutput:
+        """Implementación de la skill de automatización de flujos de trabajo"""
+        query = input_data.query
+        context = input_data.context or {}
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en automatización de flujos de trabajo y procesos.
+        
+        El usuario solicita información sobre automatización con la siguiente consulta:
+        "{query}"
+        
+        Proporciona una respuesta detallada sobre automatización de procesos relacionados,
+        incluyendo herramientas recomendadas, estrategias de implementación, mejores prácticas,
+        y consideraciones importantes.
+        
+        Estructura tu respuesta en secciones:
+        1. Análisis del proceso a automatizar
+        2. Estrategia de automatización recomendada
+        3. Herramientas y tecnologías sugeridas
+        4. Pasos de implementación
+        5. Métricas de éxito y monitoreo
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Crear plan de automatización como artefacto
+        automation_plan = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "query_type": "automation_request",
+            "query": query,
+            "automation_summary": "Plan de automatización generado",
+            "response": response_text
+        }
+        
+        return AutomationRequestOutput(
+            response=response_text,
+            automation_plan=automation_plan
+        )
+
+class ApiRequestSkill(GoogleADKSkill):
+    name = "api_request"
+    description = "Maneja consultas relacionadas con gestión de APIs"
+    input_schema = ApiRequestInput
+    output_schema = ApiRequestOutput
+    
+    async def handler(self, input_data: ApiRequestInput) -> ApiRequestOutput:
+        """Implementación de la skill de gestión de APIs"""
+        query = input_data.query
+        context = input_data.context or {}
+        
+        # Identificar posibles APIs mencionadas
+        apis = []
+        query_lower = query.lower()
+        
+        # APIs comunes de fitness y salud
+        if any(a in query_lower for a in ["garmin", "connect"]):
+            apis.append("Garmin Connect API")
+        if any(a in query_lower for a in ["fitbit"]):
+            apis.append("Fitbit API")
+        if any(a in query_lower for a in ["apple", "health", "healthkit"]):
+            apis.append("Apple HealthKit API")
+        if any(a in query_lower for a in ["google", "fit", "googlefit"]):
+            apis.append("Google Fit API")
+        if any(a in query_lower for a in ["strava"]):
+            apis.append("Strava API")
+        if any(a in query_lower for a in ["oura", "ring"]):
+            apis.append("Oura Ring API")
+        if any(a in query_lower for a in ["whoop"]):
+            apis.append("WHOOP API")
+        
+        # Si no se identificaron APIs específicas
+        if not apis:
+            apis = ["APIs genéricas de fitness/salud"]
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en gestión de APIs y integración de sistemas.
+        
+        El usuario solicita información sobre APIs con la siguiente consulta:
+        "{query}"
+        
+        APIs identificadas: {', '.join(apis)}
+        
+        Proporciona una respuesta detallada sobre estas APIs, incluyendo endpoints principales,
+        requisitos de autenticación, límites de uso, mejores prácticas de implementación,
+        y ejemplos de casos de uso comunes.
+        
+        Estructura tu respuesta en secciones:
+        1. Visión general de las APIs
+        2. Autenticación y autorización
+        3. Endpoints y funcionalidades clave
+        4. Consideraciones de implementación
+        5. Recursos adicionales
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Crear guía de API como artefacto
+        api_guide = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "query_type": "api_request",
+            "query": query,
+            "apis": apis,
+            "guide_summary": "Guía de APIs generada",
+            "response": response_text
+        }
+        
+        return ApiRequestOutput(
+            response=response_text,
+            apis=apis,
+            api_guide=api_guide
+        )
+
+class InfrastructureRequestSkill(GoogleADKSkill):
+    name = "infrastructure_request"
+    description = "Maneja consultas relacionadas con optimización de infraestructura"
+    input_schema = InfrastructureRequestInput
+    output_schema = InfrastructureRequestOutput
+    
+    async def handler(self, input_data: InfrastructureRequestInput) -> InfrastructureRequestOutput:
+        """Implementación de la skill de optimización de infraestructura"""
+        query = input_data.query
+        context = input_data.context or {}
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en arquitectura e infraestructura tecnológica.
+        
+        El usuario solicita información sobre infraestructura con la siguiente consulta:
+        "{query}"
+        
+        Proporciona una respuesta detallada sobre arquitectura e infraestructura tecnológica
+        para aplicaciones de fitness y salud, incluyendo recomendaciones de arquitectura,
+        estrategias de escalabilidad, balanceo de carga, almacenamiento de datos,
+        seguridad y monitoreo.
+        
+        Estructura tu respuesta en secciones:
+        1. Análisis de requisitos de infraestructura
+        2. Arquitectura recomendada
+        3. Componentes clave y tecnologías
+        4. Estrategias de escalabilidad y rendimiento
+        5. Consideraciones de seguridad
+        6. Monitoreo y mantenimiento
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Crear informe de infraestructura como artefacto
+        infrastructure_report = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "query_type": "infrastructure_request",
+            "query": query,
+            "report_summary": "Informe de infraestructura generado",
+            "response": response_text
+        }
+        
+        return InfrastructureRequestOutput(
+            response=response_text,
+            infrastructure_report=infrastructure_report
+        )
+
+class DataPipelineRequestSkill(GoogleADKSkill):
+    name = "data_pipeline_request"
+    description = "Maneja consultas relacionadas con diseño de pipelines de datos"
+    input_schema = DataPipelineRequestInput
+    output_schema = DataPipelineRequestOutput
+    
+    async def handler(self, input_data: DataPipelineRequestInput) -> DataPipelineRequestOutput:
+        """Implementación de la skill de diseño de pipelines de datos"""
+        query = input_data.query
+        context = input_data.context or {}
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en diseño de pipelines de datos y arquitectura de datos.
+        
+        El usuario solicita información sobre pipelines de datos con la siguiente consulta:
+        "{query}"
+        
+        Proporciona una respuesta detallada sobre diseño de pipelines de datos para aplicaciones
+        de fitness y salud, incluyendo arquitectura de procesamiento, estrategias ETL,
+        opciones de almacenamiento, consideraciones de latencia, integración de fuentes de datos,
+        y análisis de datos.
+        
+        Estructura tu respuesta en secciones:
+        1. Análisis de requisitos del pipeline
+        2. Arquitectura recomendada
+        3. Estrategias de procesamiento (batch vs. streaming)
+        4. Almacenamiento y acceso a datos
+        5. Calidad y gobierno de datos
+        6. Monitoreo y mantenimiento
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Crear diseño de pipeline como artefacto
+        pipeline_design = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "query_type": "data_pipeline_request",
+            "query": query,
+            "design_summary": "Diseño de pipeline de datos generado",
+            "response": response_text
+        }
+        
+        return DataPipelineRequestOutput(
+            response=response_text,
+            pipeline_design=pipeline_design
+        )
+
+class GeneralRequestSkill(GoogleADKSkill):
+    name = "general_request"
+    description = "Maneja consultas generales relacionadas con integración de sistemas y automatización"
+    input_schema = GeneralRequestInput
+    output_schema = GeneralRequestOutput
+    
+    async def handler(self, input_data: GeneralRequestInput) -> GeneralRequestOutput:
+        """Implementación de la skill de consultas generales"""
+        query = input_data.query
+        context = input_data.context or {}
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en integración de sistemas y automatización operativa.
+        
+        El usuario ha realizado la siguiente consulta sobre integración de sistemas o automatización:
+        "{query}"
+        
+        Proporciona una respuesta detallada y útil, adaptada específicamente a esta consulta.
+        Incluye información relevante, mejores prácticas, y recomendaciones concretas.
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.5)
+        
+        return GeneralRequestOutput(
+            response=response_text
+        )
+
+class SystemsIntegrationOps(ADKAgent):
     """
     Agente especializado en integración de sistemas y automatización.
     
@@ -27,8 +426,24 @@ class SystemsIntegrationOps(A2AAgent):
     y optimizar la infraestructura tecnológica para mejorar la eficiencia operativa.
     """
     
-    def __init__(self, toolkit: Optional[Toolkit] = None):
-        # Definir capacidades y habilidades
+    def __init__(self, 
+                 gemini_client: Optional[GeminiClient] = None,
+                 supabase_client: Optional[SupabaseClient] = None,
+                 state_manager = None,
+                 adk_toolkit: Optional[Toolkit] = None,
+                 a2a_server_url: Optional[str] = None):
+        
+        # Definir las skills del agente
+        skills = [
+            IntegrationRequestSkill(),
+            AutomationRequestSkill(),
+            ApiRequestSkill(),
+            InfrastructureRequestSkill(),
+            DataPipelineRequestSkill(),
+            GeneralRequestSkill()
+        ]
+        
+        # Definir capacidades según el protocolo ADK
         capabilities = [
             "systems_integration", 
             "workflow_automation", 
@@ -37,71 +452,13 @@ class SystemsIntegrationOps(A2AAgent):
             "data_pipeline_design"
         ]
         
-        skills = [
-            {"name": "systems_integration", "description": "Integración de sistemas heterogéneos y servicios digitales"},
-            {"name": "workflow_automation", "description": "Automatización de procesos y flujos de trabajo"},
-            {"name": "api_management", "description": "Gestión y optimización de conexiones con APIs"},
-            {"name": "infrastructure_optimization", "description": "Optimización de infraestructura técnica"},
-            {"name": "data_pipeline_design", "description": "Diseño de pipelines de datos eficientes"}
-        ]
-        
-        # Ejemplos para la Agent Card
-        examples = [
-            {
-                "input": {"message": "Necesito integrar mi aplicación de fitness con Apple Health"},
-                "output": {"response": "He creado un plan de integración detallado para conectar tu aplicación con Apple Health..."}
-            },
-            {
-                "input": {"message": "¿Cómo puedo automatizar el envío de notificaciones a mis usuarios?"},
-                "output": {"response": "Para automatizar notificaciones, te recomiendo implementar este flujo de trabajo..."}
-            }
-        ]
-        
-        # Inicializar agente base con los parámetros definidos
-        super().__init__(
-            agent_id="systems_integration_ops",
-            name="NGX Systems Integration & Ops",
-            description="Especialista en integración de sistemas y automatización operativa",
-            capabilities=capabilities,
-            toolkit=toolkit,
-            version="1.0.0",
-            skills=skills
-        )
-        
-        # Inicializar clientes y herramientas
-        self.gemini_client = GeminiClient(model_name="gemini-2.0-flash")
-        self.supabase_client = SupabaseClient()
+        # Inicializar clientes si no se proporcionan
+        self.gemini_client = gemini_client if gemini_client else GeminiClient(model_name="gemini-2.0-flash")
+        self.supabase_client = supabase_client if supabase_client else SupabaseClient()
         self.mcp_toolkit = MCPToolkit()
-        self.state_manager = StateManager(self.supabase_client)
         
-        # Inicialización de AI Platform
-        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
-        gcp_region = os.getenv("GCP_REGION", "us-central1")
-        try:
-            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
-            aiplatform.init(project=gcp_project_id, location=gcp_region)
-            logger.info("AI Platform inicializado correctamente.")
-        except Exception as e:
-            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
-        
-        # Crear Agent Card estandarizada
-        self.agent_card = AgentCard.create_standard_card(
-            agent_id=self.agent_id,
-            name=self.name,
-            description=self.description,
-            capabilities=self.capabilities,
-            skills=self.skills,
-            version="1.0.0",
-            examples=examples,
-            metadata={
-                "model": "gemini-pro",
-                "creator": "NGX Team",
-                "last_updated": time.strftime("%Y-%m-%d")
-            }
-        )
-        
-        # Definir el sistema de instrucciones para el agente
-        self.system_instructions = """
+        # Definir instrucciones del sistema
+        system_instructions = """
         Eres NGX Systems Integration & Ops, un experto en integración de sistemas y automatización operativa.
         
         Tu objetivo es facilitar la integración fluida de diferentes sistemas,
@@ -161,8 +518,77 @@ class SystemsIntegrationOps(A2AAgent):
         Tu objetivo es ayudar a crear un ecosistema tecnológico integrado, eficiente y escalable
         que permita una experiencia fluida para los usuarios y operaciones optimizadas para el negocio.
         """
+        
+        # Ejemplos para la Agent Card
+        examples = [
+            Example(
+                input={"message": "Necesito integrar mi aplicación de fitness con Apple Health"},
+                output={"response": "Para integrar tu aplicación con Apple Health, necesitarás implementar HealthKit API..."}
+            ),
+            Example(
+                input={"message": "¿Cómo puedo automatizar el envío de notificaciones a mis usuarios?"},
+                output={"response": "Para automatizar notificaciones, te recomiendo implementar un sistema de eventos..."}
+            ),
+            Example(
+                input={"message": "¿Qué arquitectura recomendarías para una app de fitness con millones de usuarios?"},
+                output={"response": "Para una app de fitness a gran escala, recomendaría una arquitectura de microservicios..."}
+            )
+        ]
+        
+        # Crear Agent Card
+        agent_card = AgentCard.create_standard_card(
+            agent_id="systems_integration_ops",
+            name="NGX Systems Integration & Ops",
+            description="Especialista en integración de sistemas y automatización operativa. Facilita la integración de diferentes sistemas, automatiza flujos de trabajo, gestiona conexiones con APIs externas, y optimiza la infraestructura tecnológica.",
+            capabilities=capabilities,
+            skills=[skill.name for skill in skills],
+            version="1.5.0",
+            examples=examples,
+            metadata={
+                "model": "gemini-2.0-flash",
+                "creator": "NGX Team",
+                "last_updated": time.strftime("%Y-%m-%d")
+            }
+        )
+        
+        # Inicializar agente base con los parámetros definidos
+        super().__init__(
+            agent_id="systems_integration_ops",
+            name="NGX Systems Integration & Ops",
+            description="Especialista en integración de sistemas y automatización operativa",
+            model="gemini-2.0-flash",
+            instruction=system_instructions,
+            capabilities=capabilities,
+            gemini_client=self.gemini_client,
+            supabase_client=self.supabase_client,
+            state_manager=state_manager,
+            adk_toolkit=adk_toolkit,
+            a2a_server_url=a2a_server_url,
+            version="1.5.0",
+            agent_card=agent_card,
+            skills=skills
+        )
+        
+        # Inicialización de AI Platform
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform inicializado correctamente.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+        
+        # Inicializar estado del agente
+        self.update_state("integration_requests", {})  # Almacenar solicitudes de integración
+        self.update_state("automation_requests", {})  # Almacenar solicitudes de automatización
+        self.update_state("api_requests", {})  # Almacenar solicitudes de API
+        self.update_state("infrastructure_requests", {})  # Almacenar solicitudes de infraestructura
+        self.update_state("data_pipeline_requests", {})  # Almacenar solicitudes de pipeline de datos
+        
+        logger.info(f"SystemsIntegrationOps inicializado con {len(capabilities)} capacidades y {len(skills)} skills")
     
-    async def _get_context(self, user_id: str, session_id: str) -> Dict[str, Any]:
+    async def _get_context(self, user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Obtiene el contexto de la conversación desde el StateManager.
         
@@ -174,11 +600,11 @@ class SystemsIntegrationOps(A2AAgent):
             Dict[str, Any]: Contexto de la conversación
         """
         try:
-            # Intentar cargar el contexto desde el StateManager
-            context = await self.state_manager.load_state(user_id, session_id)
+            # Intentar cargar el contexto desde el adaptador del StateManager
+            context = await state_manager_adapter.load_state(user_id, session_id)
             
             if not context or not context.get("state_data"):
-                logger.info(f"No se encontró contexto en StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
+                logger.info(f"No se encontró contexto en el adaptador del StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
                 # Si no hay contexto, crear uno nuevo
                 context = {
                     "conversation_history": [],
@@ -193,7 +619,7 @@ class SystemsIntegrationOps(A2AAgent):
             else:
                 # Si hay contexto, usar el state_data
                 context = context.get("state_data", {})
-                logger.info(f"Contexto cargado desde StateManager para user_id={user_id}, session_id={session_id}")
+                logger.info(f"Contexto cargado desde el adaptador del StateManager para user_id={user_id}, session_id={session_id}")
             
             return context
         except Exception as e:
@@ -223,265 +649,52 @@ class SystemsIntegrationOps(A2AAgent):
             # Actualizar la marca de tiempo
             context["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
             
-            # Guardar el contexto en el StateManager
-            await self.state_manager.save_state(context, user_id, session_id)
-            logger.info(f"Contexto actualizado en StateManager para user_id={user_id}, session_id={session_id}")
+            # Guardar el contexto en el adaptador del StateManager
+            await state_manager_adapter.save_state(user_id, session_id, context)
+            logger.info(f"Contexto actualizado en el adaptador del StateManager para user_id={user_id}, session_id={session_id}")
         except Exception as e:
             logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
-
-    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    
+    async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Ejecuta el agente con un texto de entrada siguiendo el protocolo ADK oficial.
+        Consulta a otro agente utilizando el adaptador de A2A.
         
         Args:
-            input_text: Texto de entrada del usuario
-            user_id: ID del usuario (opcional)
-            **kwargs: Argumentos adicionales como context, parameters, etc.
+            agent_id: ID del agente a consultar
+            query: Consulta a enviar al agente
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            context: Contexto adicional para la consulta
             
         Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo ADK
+            Dict[str, Any]: Respuesta del agente consultado
         """
         try:
-            start_time = time.time()
-            logger.info(f"Ejecutando SystemsIntegrationOps con input: {input_text[:50]}...")
-            
-            # Obtener session_id de los kwargs o generar uno nuevo
-            session_id = kwargs.get("session_id", str(uuid.uuid4()))
-            
-            # Obtener el contexto de la conversación
-            context = await self._get_context(user_id, session_id) if user_id else {}
-            
-            # Obtener perfil del usuario si está disponible
-            user_profile = None
-            if user_id:
-                # Intentar obtener el perfil del usuario del contexto primero
-                user_profile = context.get("user_profile", {})
-                if not user_profile:
-                    user_profile = self.supabase_client.get_user_profile(user_id)
-                    if user_profile:
-                        context["user_profile"] = user_profile
-            
-            # Clasificar el tipo de consulta
-            query_type = self._classify_query(input_text)
-            capabilities_used = []
-            
-            # Procesar la consulta según su tipo
-            if query_type == "integration_request":
-                result = await self._handle_integration_request(input_text, context)
-                capabilities_used.append("systems_integration")
-                
-                # Guardar en el contexto
-                if user_id:
-                    context["integration_requests"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "response": result.get("response", "")[:100] + "..."
-                    })
-                
-            elif query_type == "automation_request":
-                result = await self._handle_automation_request(input_text, context)
-                capabilities_used.append("workflow_automation")
-                
-                # Guardar en el contexto
-                if user_id:
-                    context["automation_requests"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "response": result.get("response", "")[:100] + "..."
-                    })
-                
-            elif query_type == "api_request":
-                result = await self._handle_api_request(input_text, context)
-                capabilities_used.append("api_management")
-                
-                # Guardar en el contexto
-                if user_id:
-                    context["api_requests"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "response": result.get("response", "")[:100] + "..."
-                    })
-                
-            elif query_type == "infrastructure_request":
-                result = await self._handle_infrastructure_request(input_text, context)
-                capabilities_used.append("infrastructure_optimization")
-                
-                # Guardar en el contexto
-                if user_id:
-                    context["infrastructure_requests"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "response": result.get("response", "")[:100] + "..."
-                    })
-                
-            elif query_type == "data_pipeline_request":
-                result = await self._handle_data_pipeline_request(input_text, context)
-                capabilities_used.append("data_pipeline_design")
-                
-                # Guardar en el contexto
-                if user_id:
-                    context["data_pipeline_requests"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "response": result.get("response", "")[:100] + "..."
-                    })
-                
-            else:
-                result = await self._handle_general_request(input_text, context)
-                capabilities_used.append("systems_integration")
-                capabilities_used.append("workflow_automation")
-            
-            response = result.get("response", "")
-            artifacts = result.get("artifacts", [])
-            
-            # Añadir la interacción al historial de conversación
-            if user_id:
-                context["conversation_history"].append({
-                    "user": input_text,
-                    "agent": response,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "query_type": query_type
-                })
-                
-                # Actualizar el contexto en el StateManager
-                await self._update_context(context, user_id, session_id)
-            
-            # Registrar la interacción si hay un usuario identificado
-            if user_id:
-                self.supabase_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=input_text,
-                    response=response
-                )
-            
-            # Calcular tiempo de ejecución
-            execution_time = time.time() - start_time
-            
-            # Formatear respuesta según el protocolo ADK
-            return {
-                "status": "success",
-                "response": response,
-                "confidence": 0.9,
-                "execution_time": execution_time,
-                "agent_id": self.agent_id,
-                "artifacts": artifacts,
-                "metadata": {
-                    "capabilities_used": capabilities_used,
-                    "user_id": user_id,
-                    "query_type": query_type,
-                    "session_id": session_id
-                }
+            # Crear contexto para la consulta
+            task_context = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "additional_context": context or {}
             }
             
-        except Exception as e:
-            logger.error(f"Error en SystemsIntegrationOps: {e}")
-            execution_time = time.time() - start_time if 'start_time' in locals() else 0.0
+            # Llamar al agente utilizando el adaptador de A2A
+            response = await a2a_adapter.call_agent(
+                agent_id=agent_id,
+                user_input=query,
+                context=task_context
+            )
             
+            logger.info(f"Respuesta recibida del agente {agent_id}")
+            return response
+        except Exception as e:
+            logger.error(f"Error al consultar al agente {agent_id}: {e}", exc_info=True)
             return {
                 "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre integración de sistemas.",
                 "error": str(e),
-                "execution_time": execution_time,
-                "confidence": 0.0,
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "error_type": type(e).__name__,
-                    "user_id": user_id
-                }
+                "output": f"Error al consultar al agente {agent_id}",
+                "agent_id": agent_id,
+                "agent_name": agent_id
             }
-    
-    def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
-        
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada
-        """
-        return self.agent_card.to_dict()
-    
-    async def execute_task(self, task: Dict[str, Any]) -> Any:
-        """
-        Ejecuta una tarea solicitada por el servidor A2A.
-        
-        Args:
-            task: Tarea a ejecutar
-            
-        Returns:
-            Any: Resultado de la tarea
-        """
-        user_input = task.get("input", "")
-        context = task.get("context", {})
-        user_id = context.get("user_id")
-        
-        logger.info(f"SystemsIntegrationOps procesando consulta: {user_input}")
-        
-        # Determinar el tipo de consulta
-        query_type = self._classify_query(user_input)
-        
-        # Procesar según el tipo de consulta
-        if query_type == "integration_request":
-            result = await self._handle_integration_request(user_input, context)
-        elif query_type == "automation_request":
-            result = await self._handle_automation_request(user_input, context)
-        elif query_type == "api_request":
-            result = await self._handle_api_request(user_input, context)
-        elif query_type == "infrastructure_request":
-            result = await self._handle_infrastructure_request(user_input, context)
-        elif query_type == "data_pipeline_request":
-            result = await self._handle_data_pipeline_request(user_input, context)
-        else:
-            result = await self._handle_general_request(user_input, context)
-        
-        # Registrar la interacción en Supabase si hay ID de usuario
-        if user_id:
-            self.supabase_client.log_interaction(
-                user_id=user_id,
-                agent_id=self.agent_id,
-                message=user_input,
-                response=result.get("response", "")
-            )
-        
-        return result
-    
-    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
-        """
-        Procesa un mensaje recibido de otro agente.
-        
-        Args:
-            from_agent: ID del agente que envió el mensaje
-            content: Contenido del mensaje
-            
-        Returns:
-            Any: Respuesta al mensaje
-        """
-        msg = content.get("text", "")
-        logger.info(f"SystemsIntegrationOps procesando mensaje de {from_agent}: {msg}")
-        
-        # Generar respuesta utilizando Gemini
-        prompt = f"""
-        {self.system_instructions}
-        
-        Has recibido un mensaje del agente {from_agent}:
-        "{msg}"
-        
-        Responde con información relevante sobre integración de sistemas, automatización
-        u optimización de infraestructura relacionada con este mensaje.
-        """
-        
-        response = await self.gemini_client.generate_response(prompt, temperature=0.3)
-        
-        # Crear mensaje de respuesta
-        message = self.create_message(
-            role="agent",
-            parts=[self.create_text_part(response)]
-        )
-        
-        return {
-            "status": "success",
-            "response": response,
-            "message": message
-        }
     
     def _classify_query(self, query: str) -> str:
         """
@@ -508,481 +721,182 @@ class SystemsIntegrationOps(A2AAgent):
         else:
             return "general_request"
     
-    async def _handle_integration_request(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def get_agent_card(self) -> Dict[str, Any]:
         """
-        Maneja consultas relacionadas con integración de sistemas.
+        Obtiene el Agent Card del agente según el protocolo ADK oficial.
+        
+        Returns:
+            Dict[str, Any]: Agent Card estandarizada
+        """
+        return self.agent_card.to_dict()
+    
+    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """
+        Implementación asíncrona del método run. Procesa la entrada del usuario y genera una respuesta.
         
         Args:
-            query: Consulta del usuario
-            context: Contexto de la consulta
+            input_text: Texto de entrada del usuario
+            user_id: ID del usuario (opcional)
+            **kwargs: Argumentos adicionales como context, parameters, etc.
             
         Returns:
-            Dict[str, Any]: Resultado de la consulta
+            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo ADK
         """
-        # TODO: Integrar RAG para buscar documentación de APIs de sistemas específicos o casos de integración NGX.
-        # TODO: Usar mcp7_query para obtener metadatos de configuración de sistemas desde Supabase.
-        # Identificar qué sistemas se desean integrar
-        systems = []
-        query_lower = query.lower()
+        start_time = time.time()
+        logger.info(f"Ejecutando SystemsIntegrationOps con input: {input_text[:50]}...")
         
-        # Sistemas comunes de fitness y salud
-        if any(s in query_lower for s in ["garmin", "connect"]):
-            systems.append("Garmin Connect")
-        if any(s in query_lower for s in ["fitbit"]):
-            systems.append("Fitbit")
-        if any(s in query_lower for s in ["apple", "health", "healthkit"]):
-            systems.append("Apple HealthKit")
-        if any(s in query_lower for s in ["google", "fit", "googlefit"]):
-            systems.append("Google Fit")
-        if any(s in query_lower for s in ["strava"]):
-            systems.append("Strava")
-        if any(s in query_lower for s in ["oura", "ring"]):
-            systems.append("Oura Ring")
-        if any(s in query_lower for s in ["whoop"]):
-            systems.append("WHOOP")
-        if any(s in query_lower for s in ["myfitnesspal", "fitness pal"]):
-            systems.append("MyFitnessPal")
+        # Obtener session_id de los kwargs o generar uno nuevo
+        session_id = kwargs.get("session_id", str(uuid.uuid4()))
         
-        # Si no se identificaron sistemas específicos
-        if not systems:
-            systems = ["Sistema genérico de fitness/salud"]
+        # Obtener el contexto de la conversación
+        context = await self._get_context(user_id, session_id) if user_id else {}
         
-        # Construir el prompt para el modelo
-        prompt = f"""
-        {self.system_instructions}
+        # Clasificar el tipo de consulta
+        query_type = self._classify_query(input_text)
+        capabilities_used = []
         
-        El usuario solicita información sobre integración de sistemas con la siguiente consulta:
-        "{query}"
+        # Procesar la consulta según su tipo utilizando las skills ADK
+        if query_type == "integration_request":
+            # Usar la skill de integración de sistemas
+            integration_skill = next((skill for skill in self.skills if skill.name == "integration_request"), None)
+            if integration_skill:
+                input_data = IntegrationRequestInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await integration_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("systems_integration")
+                
+                # Actualizar contexto con el informe de integración
+                if result.integration_report:
+                    context["integration_requests"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "query": input_text,
+                        "systems": result.systems,
+                        "integration_report": result.integration_report
+                    })
+                
+        elif query_type == "automation_request":
+            # Usar la skill de automatización de flujos de trabajo
+            automation_skill = next((skill for skill in self.skills if skill.name == "automation_request"), None)
+            if automation_skill:
+                input_data = AutomationRequestInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await automation_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("workflow_automation")
+                
+                # Actualizar contexto con el plan de automatización
+                if result.automation_plan:
+                    context["automation_requests"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "query": input_text,
+                        "automation_plan": result.automation_plan
+                    })
+                
+        elif query_type == "api_request":
+            # Usar la skill de gestión de APIs
+            api_skill = next((skill for skill in self.skills if skill.name == "api_request"), None)
+            if api_skill:
+                input_data = ApiRequestInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await api_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("api_management")
+                
+                # Actualizar contexto con la guía de API
+                if result.api_guide:
+                    context["api_requests"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "query": input_text,
+                        "apis": result.apis,
+                        "api_guide": result.api_guide
+                    })
+                
+        elif query_type == "infrastructure_request":
+            # Usar la skill de optimización de infraestructura
+            infrastructure_skill = next((skill for skill in self.skills if skill.name == "infrastructure_request"), None)
+            if infrastructure_skill:
+                input_data = InfrastructureRequestInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await infrastructure_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("infrastructure_optimization")
+                
+                # Actualizar contexto con el informe de infraestructura
+                if result.infrastructure_report:
+                    context["infrastructure_requests"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "query": input_text,
+                        "infrastructure_report": result.infrastructure_report
+                    })
+                
+        elif query_type == "data_pipeline_request":
+            # Usar la skill de diseño de pipelines de datos
+            pipeline_skill = next((skill for skill in self.skills if skill.name == "data_pipeline_request"), None)
+            if pipeline_skill:
+                input_data = DataPipelineRequestInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await pipeline_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("data_pipeline_design")
+                
+                # Actualizar contexto con el diseño de pipeline
+                if result.pipeline_design:
+                    context["data_pipeline_requests"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "query": input_text,
+                        "pipeline_design": result.pipeline_design
+                    })
+                
+        else:  # general_request
+            # Usar la skill de consultas generales
+            general_skill = next((skill for skill in self.skills if skill.name == "general_request"), None)
+            if general_skill:
+                input_data = GeneralRequestInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await general_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("systems_integration")
         
-        Sistemas identificados: {', '.join(systems)}
-        
-        Proporciona una respuesta detallada sobre cómo integrar estos sistemas,
-        incluyendo consideraciones técnicas, mejores prácticas, estrategias de implementación,
-        posibles desafíos y soluciones recomendadas. 
-        
-        Estructura tu respuesta en secciones:
-        1. Visión general de la integración
-        2. Arquitectura recomendada
-        3. APIs y protocolos relevantes
-        4. Desafíos de implementación
-        5. Próximos pasos recomendados
-        """
-        
-        # Generar respuesta utilizando Gemini
-        response = await self.gemini_client.generate_response(prompt, temperature=0.4)
-        
-        # Crear informe de integración como artefacto
-        integration_report = {
+        # Actualizar el historial de conversación
+        context["conversation_history"].append({
             "timestamp": datetime.datetime.now().isoformat(),
-            "query_type": "integration_request",
-            "query": query,
-            "systems": systems,
-            "integration_summary": "Análisis de integración de sistemas completado",
-            "response": response
-        }
+            "role": "user",
+            "content": input_text
+        })
+        context["conversation_history"].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "role": "assistant",
+            "content": response
+        })
         
-        # Crear artefacto
-        artifact = self.create_artifact(
-            artifact_id=f"integration_report_{uuid.uuid4().hex[:8]}",
-            artifact_type="integration_report",
-            parts=[self.create_data_part(integration_report)]
-        )
+        # Actualizar el contexto en el StateManager
+        if user_id:
+            await self._update_context(context, user_id, session_id)
         
-        # Crear mensaje
-        message = self.create_message(
-            role="agent",
-            parts=[self.create_text_part(response)]
-        )
+        # Calcular tiempo de ejecución
+        execution_time = time.time() - start_time
+        logger.info(f"SystemsIntegrationOps completó la ejecución en {execution_time:.2f} segundos")
         
+        # Preparar respuesta según el protocolo ADK
         return {
             "response": response,
-            "query_type": "integration_request",
-            "systems": systems,
-            "artifacts": [artifact],
-            "message": message,
-            "agent_id": self.agent_id,
-            "confidence": 0.9
+            "capabilities_used": capabilities_used,
+            "metadata": {
+                "query_type": query_type,
+                "execution_time": execution_time,
+                "session_id": session_id
+            }
         }
-    
-    async def _handle_automation_request(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Maneja consultas relacionadas con automatización de flujos de trabajo.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto de la consulta
-            
-        Returns:
-            Dict[str, Any]: Resultado de la consulta
-        """
-        # TODO: Integrar RAG para buscar plantillas de automatización (ej. Zapier, Make) o scripts NGX.
-        # TODO: Usar mcp7_query para obtener detalles de procesos actuales o métricas de eficiencia desde Supabase.
-        # Construir el prompt para el modelo
-        prompt = f"""
-        {self.system_instructions}
-        
-        El usuario solicita información sobre automatización con la siguiente consulta:
-        "{query}"
-        
-        Proporciona una respuesta detallada sobre automatización de procesos relacionados,
-        incluyendo herramientas recomendadas, estrategias de implementación, mejores prácticas,
-        y consideraciones importantes.
-        
-        Estructura tu respuesta en secciones:
-        1. Análisis del proceso a automatizar
-        2. Estrategia de automatización recomendada
-        3. Herramientas y tecnologías sugeridas
-        4. Pasos de implementación
-        5. Métricas de éxito y monitoreo
-        """
-        
-        # Generar respuesta utilizando Gemini
-        response = await self.gemini_client.generate_response(prompt, temperature=0.4)
-        
-        # Crear plan de automatización como artefacto
-        automation_plan = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "query_type": "automation_request",
-            "query": query,
-            "automation_summary": "Plan de automatización generado",
-            "response": response
-        }
-        
-        # Crear artefacto
-        artifact = self.create_artifact(
-            artifact_id=f"automation_plan_{uuid.uuid4().hex[:8]}",
-            artifact_type="automation_plan",
-            parts=[self.create_data_part(automation_plan)]
-        )
-        
-        # Crear mensaje
-        message = self.create_message(
-            role="agent",
-            parts=[self.create_text_part(response)]
-        )
-        
-        return {
-            "response": response,
-            "query_type": "automation_request",
-            "artifacts": [artifact],
-            "message": message,
-            "agent_id": self.agent_id,
-            "confidence": 0.9
-        }
-    
-    async def _handle_api_request(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Maneja consultas relacionadas con gestión de APIs.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto de la consulta
-            
-        Returns:
-            Dict[str, Any]: Resultado de la consulta
-        """
-        # TODO: Integrar RAG para buscar documentación oficial de APIs o políticas de gestión de APIs NGX.
-        # TODO: Usar mcp7_query para obtener logs de uso de API o estado de endpoints desde Supabase.
-        # TODO: Considerar mcp4_github tools si la API está en GitHub.
-        # Identificar posibles APIs mencionadas
-        apis = []
-        query_lower = query.lower()
-        
-        # APIs comunes de fitness y salud
-        if any(a in query_lower for a in ["garmin", "connect"]):
-            apis.append("Garmin Connect API")
-        if any(a in query_lower for a in ["fitbit"]):
-            apis.append("Fitbit API")
-        if any(a in query_lower for a in ["apple", "health", "healthkit"]):
-            apis.append("Apple HealthKit API")
-        if any(a in query_lower for a in ["google", "fit", "googlefit"]):
-            apis.append("Google Fit API")
-        if any(a in query_lower for a in ["strava"]):
-            apis.append("Strava API")
-        if any(a in query_lower for a in ["oura", "ring"]):
-            apis.append("Oura Ring API")
-        if any(a in query_lower for a in ["whoop"]):
-            apis.append("WHOOP API")
-        
-        # Si no se identificaron APIs específicas
-        if not apis:
-            apis = ["APIs genéricas de fitness/salud"]
-        
-        # Construir el prompt para el modelo
-        prompt = f"""
-        {self.system_instructions}
-        
-        El usuario solicita información sobre APIs con la siguiente consulta:
-        "{query}"
-        
-        APIs identificadas: {', '.join(apis)}
-        
-        Proporciona una respuesta detallada sobre estas APIs, incluyendo endpoints principales,
-        requisitos de autenticación, límites de uso, mejores prácticas de implementación,
-        y ejemplos de casos de uso comunes.
-        
-        Estructura tu respuesta en secciones:
-        1. Visión general de las APIs
-        2. Autenticación y autorización
-        3. Endpoints y funcionalidades clave
-        4. Consideraciones de implementación
-        5. Recursos adicionales
-        """
-        
-        # Generar respuesta utilizando Gemini
-        response = await self.gemini_client.generate_response(prompt, temperature=0.4)
-        
-        # Crear guía de API como artefacto
-        api_guide = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "query_type": "api_request",
-            "query": query,
-            "apis": apis,
-            "guide_summary": "Guía de APIs generada",
-            "response": response
-        }
-        
-        # Crear artefacto
-        artifact = self.create_artifact(
-            artifact_id=f"api_guide_{uuid.uuid4().hex[:8]}",
-            artifact_type="api_guide",
-            parts=[self.create_data_part(api_guide)]
-        )
-        
-        # Crear mensaje
-        message = self.create_message(
-            role="agent",
-            parts=[self.create_text_part(response)]
-        )
-        
-        return {
-            "response": response,
-            "query_type": "api_request",
-            "apis": apis,
-            "artifacts": [artifact],
-            "message": message,
-            "agent_id": self.agent_id,
-            "confidence": 0.9
-        }
-    
-    async def _handle_infrastructure_request(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Maneja consultas relacionadas con optimización de infraestructura.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto de la consulta
-            
-        Returns:
-            Dict[str, Any]: Resultado de la consulta
-        """
-        # TODO: Integrar RAG para buscar benchmarks de rendimiento de infraestructura o casos de estudio NGX.
-        # TODO: Usar mcp7_query para obtener métricas de uso de recursos (CPU, RAM, red) desde Supabase (si aplica).
-        # Construir el prompt para el modelo
-        prompt = f"""
-        {self.system_instructions}
-        
-        El usuario solicita información sobre infraestructura con la siguiente consulta:
-        "{query}"
-        
-        Proporciona una respuesta detallada sobre arquitectura e infraestructura tecnológica
-        para aplicaciones de fitness y salud, incluyendo recomendaciones de arquitectura,
-        estrategias de escalabilidad, balanceo de carga, almacenamiento de datos,
-        seguridad y monitoreo.
-        
-        Estructura tu respuesta en secciones:
-        1. Análisis de requisitos de infraestructura
-        2. Arquitectura recomendada
-        3. Componentes clave y tecnologías
-        4. Estrategias de escalabilidad y rendimiento
-        5. Consideraciones de seguridad
-        6. Monitoreo y mantenimiento
-        """
-        
-        # Generar respuesta utilizando Gemini
-        response = await self.gemini_client.generate_response(prompt, temperature=0.4)
-        
-        # Crear informe de infraestructura como artefacto
-        infrastructure_report = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "query_type": "infrastructure_request",
-            "query": query,
-            "report_summary": "Informe de infraestructura generado",
-            "response": response
-        }
-        
-        # Crear artefacto
-        artifact = self.create_artifact(
-            artifact_id=f"infrastructure_report_{uuid.uuid4().hex[:8]}",
-            artifact_type="infrastructure_report",
-            parts=[self.create_data_part(infrastructure_report)]
-        )
-        
-        # Crear mensaje
-        message = self.create_message(
-            role="agent",
-            parts=[self.create_text_part(response)]
-        )
-        
-        return {
-            "response": response,
-            "query_type": "infrastructure_request",
-            "artifacts": [artifact],
-            "message": message,
-            "agent_id": self.agent_id,
-            "confidence": 0.9
-        }
-    
-    async def _handle_data_pipeline_request(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Maneja consultas relacionadas con diseño de pipelines de datos.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto de la consulta
-            
-        Returns:
-            Dict[str, Any]: Resultado de la consulta
-        """
-        # TODO: Integrar RAG para buscar patrones de diseño de pipelines de datos (ETL, ELT) o ejemplos NGX.
-        # TODO: Usar mcp7_query para obtener esquemas de datos o volúmenes de datos actuales desde Supabase.
-        # Construir el prompt para el modelo
-        prompt = f"""
-        {self.system_instructions}
-        
-        El usuario solicita información sobre pipelines de datos con la siguiente consulta:
-        "{query}"
-        
-        Proporciona una respuesta detallada sobre diseño de pipelines de datos para aplicaciones
-        de fitness y salud, incluyendo arquitectura de procesamiento, estrategias ETL,
-        opciones de almacenamiento, consideraciones de latencia, integración de fuentes de datos,
-        y análisis de datos.
-        
-        Estructura tu respuesta en secciones:
-        1. Análisis de requisitos del pipeline
-        2. Arquitectura recomendada
-        3. Estrategias de procesamiento (batch vs. streaming)
-        4. Almacenamiento y acceso a datos
-        5. Calidad y gobierno de datos
-        6. Monitoreo y mantenimiento
-        """
-        
-        # Generar respuesta utilizando Gemini
-        response = await self.gemini_client.generate_response(prompt, temperature=0.4)
-        
-        # Crear diseño de pipeline como artefacto
-        pipeline_design = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "query_type": "data_pipeline_request",
-            "query": query,
-            "design_summary": "Diseño de pipeline de datos generado",
-            "response": response
-        }
-        
-        # Crear artefacto
-        artifact = self.create_artifact(
-            artifact_id=f"pipeline_design_{uuid.uuid4().hex[:8]}",
-            artifact_type="pipeline_design",
-            parts=[self.create_data_part(pipeline_design)]
-        )
-        
-        # Crear mensaje
-        message = self.create_message(
-            role="agent",
-            parts=[self.create_text_part(response)]
-        )
-        
-        return {
-            "response": response,
-            "query_type": "data_pipeline_request",
-            "artifacts": [artifact],
-            "message": message,
-            "agent_id": self.agent_id,
-            "confidence": 0.9
-        }
-    
-    async def _handle_general_request(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Maneja consultas generales relacionadas con integración de sistemas y automatización.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto de la consulta
-            
-        Returns:
-            Dict[str, Any]: Resultado de la consulta
-        """
-        # TODO: Integrar RAG para búsqueda general en documentación de integración y automatización NGX.
-        # TODO: Usar mcp8_think para análisis complejos o planificación de migraciones.
-        # Construir el prompt para el modelo
-        prompt = f"""
-        {self.system_instructions}
-        
-        El usuario ha realizado la siguiente consulta sobre integración de sistemas o automatización:
-        "{query}"
-        
-        Proporciona una respuesta detallada y útil, adaptada específicamente a esta consulta.
-        Incluye información relevante, mejores prácticas, y recomendaciones concretas.
-        """
-        
-        # Generar respuesta utilizando Gemini
-        response = await self.gemini_client.generate_response(prompt, temperature=0.5)
-        
-        # Crear mensaje
-        message = self.create_message(
-            role="agent",
-            parts=[self.create_text_part(response)]
-        )
-        
-        return {
-            "response": response,
-            "query_type": "general_request",
-            "artifacts": [],
-            "message": message,
-            "agent_id": self.agent_id,
-            "confidence": 0.8
-        }
-    
-    async def _generate_integration_diagram(self, systems: List[str]) -> Dict[str, Any]:
-        """
-        Genera un diagrama conceptual de integración de sistemas.
-        
-        Args:
-            systems: Lista de sistemas a integrar
-            
-        Returns:
-            Dict[str, Any]: Descripción del diagrama
-        """
-        # TODO: Integrar RAG para buscar plantillas de diagramas de arquitectura estándar o ejemplos NGX.
-        # TODO: Considerar usar herramientas de diagramación (Mermaid, etc.) si se integra una habilidad de generación de imágenes.
-        # En una implementación real, esto podría generar un diagrama visual
-        # Por ahora, generamos una descripción textual
-        
-        prompt = f"""
-        {self.system_instructions}
-        
-        Genera una descripción detallada de un diagrama de arquitectura para la integración de los siguientes sistemas:
-        {', '.join(systems)}
-        
-        La descripción debe incluir:
-        1. Componentes principales
-        2. Flujo de datos entre sistemas
-        3. Interfaces de integración
-        4. Protocolos de comunicación
-        5. Consideraciones de seguridad
-        
-        Formato la descripción como si estuvieras explicando un diagrama visual.
-        """
-        
-        # Generar descripción utilizando Gemini
-        diagram_description = await self.gemini_client.generate_response(prompt, temperature=0.3)
-        
-        # Crear estructura del diagrama
-        integration_diagram = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "systems": systems,
-            "diagram_type": "integration_architecture",
-            "description": diagram_description
-        }
-        
-        return integration_diagram

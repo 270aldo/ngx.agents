@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from clients.vertex_client import vertex_client
+from clients.vertex_ai import vertex_ai_client
 from core.skill import Skill, skill_registry
 
 
@@ -68,7 +68,7 @@ class VertexGenerateSkill(Skill):
         top_k = input_data.get("top_k", 40)
         
         # Ejecutar generación
-        result = await vertex_client.generate_content(
+        result = await vertex_ai_client.generate_content(
             prompt=prompt,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
@@ -132,7 +132,7 @@ class VertexAnalyzeDocumentSkill(Skill):
         document = input_data["document"]
         
         # Ejecutar análisis
-        result = await vertex_client.analyze_document(document_content=document)
+        result = await vertex_ai_client.analyze_document(document_bytes=document.encode('utf-8'), prompt="Analiza este documento y extrae información estructurada")
         
         # Extraer información
         title = result.get("title")
@@ -201,10 +201,37 @@ class VertexClassifySkill(Skill):
         categories = input_data["categories"]
         
         # Ejecutar clasificación
-        classifications = await vertex_client.classify_content(
-            content=content,
-            categories=categories
+        # Construir prompt para clasificación
+        categories_str = ", ".join(categories)
+        prompt = f"Clasifica el siguiente texto en una o más de estas categorías: {categories_str}.\n\nTexto: {content}"
+        
+        response = await vertex_ai_client.generate_content(
+            prompt=prompt,
+            temperature=0.1,
+            max_output_tokens=512
         )
+        
+        # Procesar respuesta para extraer clasificaciones
+        classifications = {}
+        try:
+            # Intentar extraer JSON si está presente
+            import re
+            import json
+            
+            # Buscar estructura JSON en la respuesta
+            json_match = re.search(r'\{.*\}', response["text"], re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(0))
+                classifications = data.get("classifications", {})
+            else:
+                # Procesamiento simple de texto
+                for category in categories:
+                    if category.lower() in response["text"].lower():
+                        classifications[category] = 0.9
+        except Exception as e:
+            logger.error(f"Error al procesar clasificaciones: {e}")
+            # Fallback: asignar puntuación baja a todas las categorías
+            classifications = {category: 0.1 for category in categories}
         
         # Encontrar la categoría con mayor puntuación
         top_category = max(classifications.items(), key=lambda x: x[1], default=("unknown", 0.0))

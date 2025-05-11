@@ -2,7 +2,8 @@
 Servidor A2A (Agent-to-Agent) basado en Google ADK.
 
 Este módulo proporciona funcionalidades para iniciar y gestionar un servidor A2A
-que permite la comunicación entre agentes mediante WebSockets.
+que permite la comunicación entre agentes mediante WebSockets y expone endpoints
+de monitorización de salud y métricas.
 """
 
 import asyncio
@@ -10,7 +11,10 @@ import logging
 import os
 import signal
 import sys
-from typing import Dict, List, Optional, Any, Callable
+import json
+import time
+from typing import Dict, List, Optional, Any, Callable, Union
+from aiohttp import web
 
 # Importar ADK cuando esté disponible
 try:
@@ -40,6 +44,8 @@ except ImportError:
 
 from core.logging_config import get_logger
 from core.settings import settings
+from infrastructure.health import health_monitor, health_endpoint, metrics_endpoint
+from core.telemetry import health_tracker
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -114,6 +120,12 @@ class A2AServer:
         """
         self.registered_agents[agent_id] = agent_info
         logger.info(f"Agente {agent_id} registrado en el servidor A2A")
+        
+        # Registrar el agente en el monitor de salud
+        try:
+            health_monitor.register_agent(agent_id)
+        except Exception as e:
+            logger.warning(f"No se pudo registrar el agente {agent_id} en el monitor de salud: {e}")
     
     def unregister_agent(self, agent_id: str) -> None:
         """
@@ -160,6 +172,104 @@ def get_a2a_server() -> A2AServer:
     return _a2a_server_instance
 
 
+def get_a2a_server_status() -> Dict[str, Any]:
+    """
+    Obtiene el estado de salud del servidor A2A.
+    
+    Returns:
+        Dict[str, Any]: Diccionario con el estado del servidor A2A
+    """
+    try:
+        server = get_a2a_server()
+        
+        # Comprobar si el servidor está activo
+        is_active = server.server is not None
+        
+        # Recopilar información de los agentes registrados
+        num_agents = len(server.registered_agents)
+        
+        # Construir respuesta
+        status_info = {
+            "status": "ok" if is_active else "error",
+            "timestamp": time.time(),
+            "details": {
+                "host": server.host,
+                "port": server.port,
+                "registered_agents": num_agents,
+                "is_active": is_active
+            }
+        }
+        
+        # Actualizar estado en el health tracker
+        health_tracker.update_status(
+            component="a2a_server",
+            status=is_active,
+            details=f"Servidor A2A {'activo' if is_active else 'inactivo'} con {num_agents} agentes registrados",
+            alert_on_degraded=True
+        )
+        
+        return status_info
+    
+    except Exception as e:
+        logger.error(f"Error al obtener el estado del servidor A2A: {e}")
+        
+        # Actualizar estado en el health tracker
+        health_tracker.update_status(
+            component="a2a_server",
+            status=False,
+            details=f"Error al obtener el estado del servidor A2A: {str(e)}",
+            alert_on_degraded=True
+        )
+        
+        return {
+            "status": "error",
+            "timestamp": time.time(),
+            "details": {
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+        }
+
+
+async def run_health_server(host: str = "0.0.0.0", port: int = 8001):
+    """
+    Inicia un servidor HTTP para los endpoints de salud y métricas.
+    
+    Args:
+        host: Host en el que se ejecutará el servidor de salud
+        port: Puerto en el que se ejecutará el servidor de salud
+    """
+    app = web.Application()
+    
+    # Registrar los endpoints de salud
+    async def health_handler(request):
+        return web.Response(
+            text=health_endpoint(),
+            content_type="application/json"
+        )
+    
+    async def metrics_handler(request):
+        return web.Response(
+            text=metrics_endpoint(),
+            content_type="application/json"
+        )
+    
+    # Registrar rutas
+    app.add_routes([
+        web.get('/health', health_handler),
+        web.get('/metrics', metrics_handler),
+    ])
+    
+    # Iniciar el servidor
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host, port)
+    await site.start()
+    
+    logger.info(f"Servidor de salud A2A iniciado en {host}:{port}")
+    
+    return runner
+
 async def run_server():
     """
     Función principal para ejecutar el servidor A2A como un proceso independiente.
@@ -169,19 +279,30 @@ async def run_server():
     
     # Manejador de señales para detener el servidor
     async def handle_signal():
-        logger.info("Recibida señal de terminación. Deteniendo servidor A2A...")
+        logger.info("Recibida señal de terminación. Deteniendo servidores...")
+        if health_runner:
+            await health_runner.cleanup()
         await server.stop()
     
     # Registrar manejadores de señales
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: asyncio.create_task(handle_signal()))
     
-    # Iniciar servidor
+    # Iniciar servidores
     server = get_a2a_server()
+    
+    # Obtener configuración para el servidor de salud
+    health_host = os.environ.get("A2A_HEALTH_HOST", "0.0.0.0")
+    health_port = int(os.environ.get("A2A_HEALTH_PORT", 8001))
+    
     try:
+        # Iniciar el servidor de salud
+        health_runner = await run_health_server(host=health_host, port=health_port)
+        
+        # Iniciar el servidor A2A principal
         await server.start()
     except Exception as e:
-        logger.error(f"Error en el servidor A2A: {e}")
+        logger.error(f"Error en los servidores A2A: {e}")
         sys.exit(1)
 
 

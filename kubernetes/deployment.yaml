@@ -1,0 +1,525 @@
+---
+# Deployment para la API principal de NGX Agents
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngx-agents-api
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ngx-agents
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ngx-agents
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
+    spec:
+      serviceAccountName: ngx-agents
+      containers:
+      - name: api
+        image: gcr.io/PROJECT_ID/ngx-agents-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        env:
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: ENVIRONMENT
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: LOG_LEVEL
+        - name: SERVICE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: SERVICE_NAME
+        - name: VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: VERSION
+        - name: ENABLE_MONITORING
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: ENABLE_MONITORING
+        - name: ENABLE_TRACING
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: ENABLE_TRACING
+        - name: VERTEX_AI_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: VERTEX_AI_REGION
+        - name: GCP_PROJECT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        # Secretos desde Secret Manager
+        - name: SUPABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: supabase-url
+              key: latest
+        - name: SUPABASE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: supabase-key
+              key: latest
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: jwt-secret
+              key: latest
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api-key
+              key: latest
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health/liveness
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health/readiness
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        startupProbe:
+          httpGet:
+            path: /api/v1/health/startup
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+      volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                  - api
+              topologyKey: "kubernetes.io/hostname"
+      terminationGracePeriodSeconds: 60
+
+---
+# Deployment para el servidor A2A
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngx-agents-a2a
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: a2a
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ngx-agents
+      component: a2a
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ngx-agents
+        component: a2a
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8001"
+    spec:
+      serviceAccountName: ngx-agents
+      containers:
+      - name: a2a
+        image: gcr.io/PROJECT_ID/ngx-agents-a2a:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8001
+          name: http
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        env:
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: ENVIRONMENT
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: LOG_LEVEL
+        - name: SERVICE_NAME
+          value: "a2a-server"
+        - name: VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: VERSION
+        - name: ENABLE_MONITORING
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: ENABLE_MONITORING
+        - name: ENABLE_TRACING
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: ENABLE_TRACING
+        - name: VERTEX_AI_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: ngx-agents-config
+              key: VERTEX_AI_REGION
+        - name: GCP_PROJECT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        # Secretos desde Secret Manager
+        - name: SUPABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: supabase-url
+              key: latest
+        - name: SUPABASE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: supabase-key
+              key: latest
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api-key
+              key: latest
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+      volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      # Tolerancia para ejecutar en nodos específicos para A2A
+      tolerations:
+      - key: "role"
+        operator: "Equal"
+        value: "a2a"
+        effect: "NoSchedule"
+      # Afinidad para ejecutar en nodos específicos para A2A
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: role
+                operator: In
+                values:
+                - a2a-server
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                  - a2a
+              topologyKey: "kubernetes.io/hostname"
+      terminationGracePeriodSeconds: 60
+
+---
+# Service para la API
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngx-agents-api
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: api
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "ngx-agents-backend-config"}'
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: ngx-agents
+    component: api
+
+---
+# Service para el servidor A2A
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngx-agents-a2a
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: a2a
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "ngx-agents-a2a-backend-config"}'
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8001
+    protocol: TCP
+    name: http
+  selector:
+    app: ngx-agents
+    component: a2a
+
+---
+# HorizontalPodAutoscaler para la API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ngx-agents-api-hpa
+  namespace: ngx-agents
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ngx-agents-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 65
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+
+---
+# HorizontalPodAutoscaler para el servidor A2A
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ngx-agents-a2a-hpa
+  namespace: ngx-agents
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ngx-agents-a2a
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 65
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+
+---
+# BackendConfig para la API
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: ngx-agents-backend-config
+  namespace: ngx-agents
+spec:
+  healthCheck:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /api/v1/health
+    port: 8000
+  securityPolicy:
+    name: "ngx-agents-security-policy"
+  logging:
+    enable: true
+  timeoutSec: 60
+  connectionDraining:
+    drainingTimeoutSec: 60
+
+---
+# BackendConfig para el servidor A2A
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: ngx-agents-a2a-backend-config
+  namespace: ngx-agents
+spec:
+  healthCheck:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /health
+    port: 8001
+  securityPolicy:
+    name: "ngx-agents-security-policy"
+  logging:
+    enable: true
+  timeoutSec: 120
+  connectionDraining:
+    drainingTimeoutSec: 60
+
+---
+# ServiceAccount para los pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ngx-agents
+  namespace: ngx-agents
+  annotations:
+    iam.gke.io/gcp-service-account: "ngx-agents-app-sa@PROJECT_ID.iam.gserviceaccount.com"
+
+---
+# PodDisruptionBudget para la API
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ngx-agents-api-pdb
+  namespace: ngx-agents
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ngx-agents
+      component: api
+
+---
+# PodDisruptionBudget para el servidor A2A
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ngx-agents-a2a-pdb
+  namespace: ngx-agents
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ngx-agents
+      component: a2a

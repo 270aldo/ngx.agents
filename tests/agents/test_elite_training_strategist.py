@@ -9,7 +9,7 @@ import pytest
 import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from agentes.elite_training_strategist import EliteTrainingStrategist
+from agents.elite_training_strategist import EliteTrainingStrategist
 
 # Mock para GeminiClient
 class MockGeminiClient:
@@ -60,10 +60,10 @@ class MockMCPClient:
 @pytest.fixture
 def mock_dependencies():
     """Fixture para simular las dependencias del agente."""
-    with patch("agentes.elite_training_strategist.GeminiClient", return_value=MockGeminiClient()), \
-         patch("agentes.elite_training_strategist.SupabaseClient", return_value=MockSupabaseClient()), \
-         patch("agentes.elite_training_strategist.MCPToolkit", return_value=MockMCPToolkit()), \
-         patch("agentes.elite_training_strategist.MCPClient", return_value=MockMCPClient()):
+    with patch("agents.elite_training_strategist.GeminiClient", return_value=MockGeminiClient()), \
+         patch("agents.elite_training_strategist.SupabaseClient", return_value=MockSupabaseClient()), \
+         patch("agents.elite_training_strategist.MCPToolkit", return_value=MockMCPToolkit()), \
+         patch("agents.elite_training_strategist.MCPClient", return_value=MockMCPClient()):
         yield
 
 @pytest.mark.asyncio

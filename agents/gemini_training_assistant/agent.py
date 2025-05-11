@@ -11,9 +11,12 @@ import json
 import time
 import uuid
 from typing import Dict, Any, List, Optional
+import datetime
+import asyncio
 
 from adk.toolkit import Toolkit
-from agents.base.a2a_agent import A2AAgent
+from adk.agent import Skill as GoogleADKSkill
+from agents.base.adk_agent import ADKAgent
 from tools.vertex_gemini_tools import (
     VertexGeminiGenerateSkill,
     VertexGeminiChatSkill,
@@ -22,168 +25,61 @@ from tools.vertex_gemini_tools import (
 from core.agent_card import AgentCard, Example
 from core.state_manager import StateManager
 from clients.supabase_client import SupabaseClient
+from clients.gemini_client import GeminiClient
 from core.contracts import create_task, create_result, validate_task, validate_result
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-class GeminiTrainingAssistant(A2AAgent):
-    """
-    Agente de asistencia de entrenamiento potenciado por Vertex AI Gemini.
+# Definir esquemas de entrada y salida para las skills
+class GenerateTrainingPlanInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre plan de entrenamiento")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class GenerateTrainingPlanOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada con plan de entrenamiento")
+    training_plan: Optional[Dict[str, Any]] = Field(None, description="Plan de entrenamiento estructurado")
+
+class RecommendNutritionInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre nutrición")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class RecommendNutritionOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada con recomendaciones nutricionales")
+    nutrition_plan: Optional[Dict[str, Any]] = Field(None, description="Plan nutricional estructurado")
+
+class AnswerFitnessQuestionInput(BaseModel):
+    query: str = Field(..., description="Pregunta del usuario sobre fitness")
+    session_id: Optional[str] = Field(None, description="ID de sesión para mantener contexto")
+
+class AnswerFitnessQuestionOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada a la pregunta de fitness")
+    session_id: Optional[str] = Field(None, description="ID de sesión actualizado")
+
+class AnalyzeProgressInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre análisis de progreso")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class AnalyzeProgressOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada con análisis de progreso")
+    progress_analysis: Optional[Dict[str, Any]] = Field(None, description="Análisis de progreso estructurado")
+
+# Definir las skills como clases que heredan de GoogleADKSkill
+class GenerateTrainingPlanSkill(GoogleADKSkill):
+    name = "generate_training_plan"
+    description = "Genera planes de entrenamiento personalizados basados en objetivos y nivel del usuario"
+    input_schema = GenerateTrainingPlanInput
+    output_schema = GenerateTrainingPlanOutput
     
-    Utiliza los modelos de Gemini para proporcionar recomendaciones personalizadas
-    de entrenamiento y nutrición, basadas en los objetivos y características del usuario.
-    """
-    
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None):
-        """
-        Inicializa el agente de asistencia de entrenamiento.
+    async def handler(self, input_data: GenerateTrainingPlanInput) -> GenerateTrainingPlanOutput:
+        """Implementación de la skill de generación de planes de entrenamiento"""
+        query = input_data.query
+        context = input_data.context or {}
         
-        Args:
-            toolkit: Toolkit con herramientas disponibles para el agente
-            a2a_server_url: URL del servidor A2A (opcional)
-        """
-        # Definir capacidades y habilidades
-        capabilities = [
-            "generate_training_plan",
-            "recommend_nutrition",
-            "answer_fitness_questions",
-            "analyze_progress"
-        ]
-        
-        skills = [
-            {
-                "id": "vertex_gemini_generate",
-                "name": "Generar texto utilizando los modelos Gemini",
-                "description": "Genera texto utilizando los modelos Gemini",
-                "tags": ["generate", "text", "gemini"],
-                "inputModes": ["text"],
-                "outputModes": ["text", "json", "markdown"],
-                "examples": [
-                    Example(input={"text": "Genera un plan de entrenamiento para principiantes"}, output={"markdown": "..."})
-                ]
-            },
-            {
-                "id": "vertex_gemini_chat",
-                "name": "Mantiene conversaciones utilizando los modelos Gemini",
-                "description": "Mantiene conversaciones utilizando los modelos Gemini",
-                "tags": ["chat", "conversational", "gemini"],
-                "inputModes": ["text"],
-                "outputModes": ["text", "markdown"],
-                "examples": [
-                    Example(input={"text": "¿Cómo puedo mejorar mi condición física?"}, output={"text": "..."})
-                ]
-            },
-            {
-                "id": "vertex_gemini_models",
-                "name": "Obtiene información sobre los modelos de Gemini disponibles",
-                "description": "Obtiene información sobre los modelos de Gemini disponibles",
-                "tags": ["models", "information", "gemini"],
-                "inputModes": ["text"],
-                "outputModes": ["text", "json"],
-                "examples": [
-                    Example(input={"text": "¿Qué modelos de Gemini están disponibles?"}, output={"text": "..."})
-                ]
-            }
-        ]
-        
-        # Ejemplos para la Agent Card
-        examples = [
-            {
-                "input": {"message": "Necesito un plan de entrenamiento para un maratón"},
-                "output": {"response": "Aquí tienes un plan de entrenamiento de 16 semanas para prepararte para un maratón..."}
-            },
-            {
-                "input": {"message": "¿Qué debo comer antes de entrenar?"},
-                "output": {"response": "Antes de entrenar, es recomendable consumir carbohidratos complejos y proteínas magras..."}
-            }
-        ]
-        
-        # Inicializar agente base con los parámetros definidos
-        super().__init__(
-            agent_id="gemini_training_assistant",
-            name="Asistente de Entrenamiento con Gemini",
-            description="Asistente de entrenamiento potenciado por Vertex AI Gemini que proporciona recomendaciones personalizadas de entrenamiento y nutrición",
-            capabilities=capabilities,
-            toolkit=toolkit,
-            version="1.0.0",
-            a2a_server_url=a2a_server_url,
-            skills=skills
-        )
-        
-        # Registrar las skills específicas de Vertex AI Gemini
-        self.register_skill(VertexGeminiGenerateSkill())
-        self.register_skill(VertexGeminiChatSkill())
-        self.register_skill(VertexGeminiModelsSkill())
-        
-        # Almacenar sesiones de chat activas por usuario
-        self.chat_sessions = {}
-        
-        # Inicializar estado del agente
-        self.update_state("training_plans", {})  # Almacenar planes de entrenamiento generados
-        self.update_state("nutrition_recommendations", {})  # Almacenar recomendaciones nutricionales
-        self.update_state("progress_analyses", {})  # Almacenar análisis de progreso
-        
-        # Inicializar clientes y StateManager
-        self.supabase_client = SupabaseClient()
-        self.state_manager = StateManager(self.supabase_client)
-        
-        logger.info(f"GeminiTrainingAssistant inicializado con {len(capabilities)} capacidades")
-    
-    async def _handle_task(self, task_id: str, content: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Procesa una tarea recibida.
-        
-        Args:
-            task_id: ID de la tarea
-            content: Contenido de la tarea
-            
-        Returns:
-            Resultado de la tarea
-        """
-        try:
-            # Extraer información de la tarea
-            task_type = content.get("type", "")
-            user_input = content.get("input", "")
-            user_id = content.get("user_id", "anonymous")
-            context = content.get("context", {})
-            
-            logger.info(f"Procesando tarea {task_id} de tipo {task_type} para usuario {user_id}")
-            
-            # Procesar según el tipo de tarea
-            if task_type == "generate_training_plan":
-                return await self._generate_training_plan(user_input, context)
-            elif task_type == "recommend_nutrition":
-                return await self._recommend_nutrition(user_input, context)
-            elif task_type == "answer_fitness_question":
-                return await self._answer_fitness_question(user_input, user_id)
-            elif task_type == "analyze_progress":
-                return await self._analyze_progress(user_input, context)
-            else:
-                # Tarea genérica o desconocida
-                return await self._process_generic_task(user_input, user_id)
-        except Exception as e:
-            logger.error(f"Error al procesar tarea {task_id}: {e}")
-            return {
-                "status": "failed",
-                "error": str(e),
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud."
-            }
-    
-    async def _generate_training_plan(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Genera un plan de entrenamiento personalizado utilizando Gemini.
-        
-        Args:
-            user_input: Solicitud del usuario
-            context: Contexto adicional (objetivos, nivel, limitaciones, etc.)
-            
-        Returns:
-            Plan de entrenamiento generado
-        """
         # Construir prompt para Gemini
         prompt = f"""Genera un plan de entrenamiento personalizado basado en la siguiente información:
 
-Solicitud del usuario: {user_input}
+Solicitud del usuario: {query}
 
 """
         # Añadir contexto si está disponible
@@ -210,38 +106,84 @@ Proporciona un plan de entrenamiento detallado que incluya:
 Formato el plan de forma clara y estructurada.
 """
         
-        # Ejecutar skill de generación
-        generate_skill = self.registered_skills.get("vertex_gemini_generate")
-        if not generate_skill:
-            return {"status": "failed", "error": "Skill de generación no disponible"}
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
         
-        result = await generate_skill.execute({
-            "prompt": prompt,
-            "temperature": 0.7
-        })
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.7)
         
-        return {
-            "status": "completed",
-            "training_plan": result.get("text", ""),
-            "model_used": result.get("model", ""),
-            "execution_time": result.get("execution_time", 0)
-        }
+        # Generar plan de entrenamiento estructurado
+        plan_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera un plan de entrenamiento estructurado en formato JSON con los siguientes campos:
+        - objective: objetivo principal del plan
+        - duration: duración recomendada (en semanas)
+        - weekly_structure: estructura semanal
+        - sessions: desglose de sesiones
+        - progression: progresión recomendada
+        - tips: consejos para maximizar resultados
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        plan_json = await gemini_client.generate_structured_output(plan_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(plan_json, dict):
+            try:
+                plan_json = json.loads(plan_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                plan_json = {
+                    "objective": "Mejorar condición física general",
+                    "duration": "8 semanas",
+                    "weekly_structure": {
+                        "monday": "Entrenamiento de fuerza - Tren superior",
+                        "tuesday": "Cardio",
+                        "wednesday": "Descanso activo",
+                        "thursday": "Entrenamiento de fuerza - Tren inferior",
+                        "friday": "HIIT",
+                        "saturday": "Entrenamiento completo",
+                        "sunday": "Descanso"
+                    },
+                    "sessions": {
+                        "strength_upper": ["Press de banca", "Remo", "Press hombro", "Dominadas", "Curl bíceps"],
+                        "strength_lower": ["Sentadillas", "Peso muerto", "Zancadas", "Extensiones", "Elevaciones"],
+                        "cardio": "30-45 minutos de cardio moderado",
+                        "hiit": "20 minutos de intervalos de alta intensidad",
+                        "full_body": ["Burpees", "Sentadillas", "Flexiones", "Mountain climbers"]
+                    },
+                    "progression": "Incrementar peso o repeticiones cada 1-2 semanas",
+                    "tips": [
+                        "Mantén una buena hidratación",
+                        "Asegura un descanso adecuado",
+                        "Combina con una nutrición apropiada",
+                        "Escucha a tu cuerpo y ajusta según sea necesario"
+                    ]
+                }
+        
+        return GenerateTrainingPlanOutput(
+            response=response_text,
+            training_plan=plan_json
+        )
+
+class RecommendNutritionSkill(GoogleADKSkill):
+    name = "recommend_nutrition"
+    description = "Proporciona recomendaciones nutricionales personalizadas"
+    input_schema = RecommendNutritionInput
+    output_schema = RecommendNutritionOutput
     
-    async def _recommend_nutrition(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Genera recomendaciones nutricionales personalizadas utilizando Gemini.
+    async def handler(self, input_data: RecommendNutritionInput) -> RecommendNutritionOutput:
+        """Implementación de la skill de recomendaciones nutricionales"""
+        query = input_data.query
+        context = input_data.context or {}
         
-        Args:
-            user_input: Solicitud del usuario
-            context: Contexto adicional (objetivos, preferencias, alergias, etc.)
-            
-        Returns:
-            Recomendaciones nutricionales generadas
-        """
         # Construir prompt para Gemini
         prompt = f"""Genera recomendaciones nutricionales personalizadas basadas en la siguiente información:
 
-Solicitud del usuario: {user_input}
+Solicitud del usuario: {query}
 
 """
         # Añadir contexto si está disponible
@@ -269,74 +211,125 @@ Proporciona recomendaciones nutricionales detalladas que incluyan:
 Formato las recomendaciones de forma clara y estructurada.
 """
         
-        # Ejecutar skill de generación
-        generate_skill = self.registered_skills.get("vertex_gemini_generate")
-        if not generate_skill:
-            return {"status": "failed", "error": "Skill de generación no disponible"}
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
         
-        result = await generate_skill.execute({
-            "prompt": prompt,
-            "temperature": 0.7
-        })
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.7)
         
-        return {
-            "status": "completed",
-            "nutrition_recommendations": result.get("text", ""),
-            "model_used": result.get("model", ""),
-            "execution_time": result.get("execution_time", 0)
-        }
+        # Generar plan nutricional estructurado
+        plan_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera un plan nutricional estructurado en formato JSON con los siguientes campos:
+        - approach: enfoque nutricional recomendado
+        - macros: distribución de macronutrientes
+        - meal_examples: ejemplos de comidas
+        - supplements: suplementos recomendados
+        - workout_nutrition: estrategias de nutrición alrededor del entrenamiento
+        - adherence_tips: consejos para adherencia
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        plan_json = await gemini_client.generate_structured_output(plan_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(plan_json, dict):
+            try:
+                plan_json = json.loads(plan_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                plan_json = {
+                    "approach": "Nutrición balanceada enfocada en alimentos integrales",
+                    "macros": {
+                        "protein": "30%",
+                        "carbs": "40%",
+                        "fats": "30%"
+                    },
+                    "meal_examples": {
+                        "breakfast": "Avena con proteína y frutas",
+                        "lunch": "Ensalada con pollo y quinoa",
+                        "dinner": "Salmón con vegetales y arroz integral",
+                        "snacks": ["Yogur griego con nueces", "Batido de proteínas", "Huevo duro"]
+                    },
+                    "supplements": [
+                        "Proteína de suero (whey)",
+                        "Creatina",
+                        "Multivitamínico",
+                        "Omega-3"
+                    ],
+                    "workout_nutrition": {
+                        "pre_workout": "Carbohidratos de digestión rápida + proteína",
+                        "during_workout": "Hidratación con electrolitos",
+                        "post_workout": "Proteína + carbohidratos (ventana anabólica)"
+                    },
+                    "adherence_tips": [
+                        "Preparación de comidas semanal",
+                        "Flexibilidad 80/20",
+                        "Hidratación adecuada",
+                        "Mindful eating"
+                    ]
+                }
+        
+        return RecommendNutritionOutput(
+            response=response_text,
+            nutrition_plan=plan_json
+        )
+
+class AnswerFitnessQuestionSkill(GoogleADKSkill):
+    name = "answer_fitness_question"
+    description = "Responde preguntas sobre fitness y entrenamiento"
+    input_schema = AnswerFitnessQuestionInput
+    output_schema = AnswerFitnessQuestionOutput
     
-    async def _answer_fitness_question(self, question: str, user_id: str) -> Dict[str, Any]:
+    async def handler(self, input_data: AnswerFitnessQuestionInput) -> AnswerFitnessQuestionOutput:
+        """Implementación de la skill de respuesta a preguntas de fitness"""
+        query = input_data.query
+        session_id = input_data.session_id
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Construir prompt para Gemini
+        prompt = f"""
+        Eres un experto en fitness, entrenamiento y nutrición.
+        
+        El usuario tiene la siguiente pregunta:
+        "{query}"
+        
+        Proporciona una respuesta detallada, precisa y basada en evidencia científica.
+        Incluye ejemplos prácticos y recomendaciones específicas cuando sea apropiado.
         """
-        Responde a preguntas sobre fitness utilizando una conversación con Gemini.
         
-        Args:
-            question: Pregunta del usuario
-            user_id: ID del usuario para mantener la sesión
-            
-        Returns:
-            Respuesta a la pregunta
-        """
-        # Obtener la sesión de chat del usuario o crear una nueva
-        session_id = self.chat_sessions.get(user_id)
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.5)
         
-        # Ejecutar skill de chat
-        chat_skill = self.registered_skills.get("vertex_gemini_chat")
-        if not chat_skill:
-            return {"status": "failed", "error": "Skill de chat no disponible"}
+        # Generar un nuevo session_id si no se proporcionó uno
+        if not session_id:
+            session_id = str(uuid.uuid4())
         
-        result = await chat_skill.execute({
-            "message": question,
-            "temperature": 0.7,
-            "session_id": session_id
-        })
-        
-        # Guardar la sesión para futuras interacciones
-        self.chat_sessions[user_id] = result.get("session_id")
-        
-        return {
-            "status": "completed",
-            "answer": result.get("text", ""),
-            "model_used": result.get("model", ""),
-            "execution_time": result.get("execution_time", 0),
-            "session_id": result.get("session_id")
-        }
+        return AnswerFitnessQuestionOutput(
+            response=response_text,
+            session_id=session_id
+        )
+
+class AnalyzeProgressSkill(GoogleADKSkill):
+    name = "analyze_progress"
+    description = "Analiza el progreso del usuario y proporciona recomendaciones"
+    input_schema = AnalyzeProgressInput
+    output_schema = AnalyzeProgressOutput
     
-    async def _analyze_progress(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Analiza el progreso del usuario utilizando Gemini.
+    async def handler(self, input_data: AnalyzeProgressInput) -> AnalyzeProgressOutput:
+        """Implementación de la skill de análisis de progreso"""
+        query = input_data.query
+        context = input_data.context or {}
         
-        Args:
-            user_input: Solicitud del usuario
-            context: Contexto adicional (métricas anteriores, objetivos, etc.)
-            
-        Returns:
-            Análisis del progreso
-        """
         # Construir prompt para Gemini
         prompt = f"""Analiza el progreso de entrenamiento basado en la siguiente información:
 
-Solicitud del usuario: {user_input}
+Solicitud del usuario: {query}
 
 """
         # Añadir contexto si está disponible
@@ -362,38 +355,220 @@ Proporciona un análisis detallado que incluya:
 Formato el análisis de forma clara y estructurada.
 """
         
-        # Ejecutar skill de generación
-        generate_skill = self.registered_skills.get("vertex_gemini_generate")
-        if not generate_skill:
-            return {"status": "failed", "error": "Skill de generación no disponible"}
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
         
-        result = await generate_skill.execute({
-            "prompt": prompt,
-            "temperature": 0.7
-        })
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.7)
         
-        return {
-            "status": "completed",
-            "progress_analysis": result.get("text", ""),
-            "model_used": result.get("model", ""),
-            "execution_time": result.get("execution_time", 0)
-        }
+        # Generar análisis de progreso estructurado
+        analysis_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera un análisis de progreso estructurado en formato JSON con los siguientes campos:
+        - current_status: evaluación del progreso actual
+        - strengths: fortalezas identificadas
+        - improvement_areas: áreas de mejora
+        - recommendations: recomendaciones para ajustar el entrenamiento
+        - projection: proyección de progreso futuro
+        - plateau_strategies: estrategias para superar mesetas
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        analysis_json = await gemini_client.generate_structured_output(analysis_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(analysis_json, dict):
+            try:
+                analysis_json = json.loads(analysis_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                analysis_json = {
+                    "current_status": "Progreso moderado con algunas áreas de estancamiento",
+                    "strengths": [
+                        "Consistencia en asistencia",
+                        "Buena progresión en ejercicios de tren superior",
+                        "Mejora en resistencia cardiovascular"
+                    ],
+                    "improvement_areas": [
+                        "Estancamiento en ejercicios de tren inferior",
+                        "Recuperación insuficiente",
+                        "Posible déficit nutricional"
+                    ],
+                    "recommendations": [
+                        "Incorporar variación en ejercicios de tren inferior",
+                        "Aumentar días de recuperación",
+                        "Revisar ingesta de proteínas y calorías"
+                    ],
+                    "projection": "Con los ajustes recomendados, se espera romper la meseta en 3-4 semanas",
+                    "plateau_strategies": [
+                        "Periodización no lineal",
+                        "Técnicas de intensidad (dropsets, supersets)",
+                        "Semana de descarga cada 4-6 semanas",
+                        "Revisión de factores externos (sueño, estrés)"
+                    ]
+                }
+        
+        return AnalyzeProgressOutput(
+            response=response_text,
+            progress_analysis=analysis_json
+        )
+
+class GeminiTrainingAssistant(ADKAgent):
+    """
+    Agente de asistencia de entrenamiento potenciado por Vertex AI Gemini.
     
-    async def _process_generic_task(self, user_input: str, user_id: str) -> Dict[str, Any]:
-        """
-        Procesa una tarea genérica utilizando una conversación con Gemini.
+    Utiliza los modelos de Gemini para proporcionar recomendaciones personalizadas
+    de entrenamiento y nutrición, basadas en los objetivos y características del usuario.
+    """
+    
+    def __init__(self, 
+                 gemini_client: Optional[GeminiClient] = None,
+                 supabase_client: Optional[SupabaseClient] = None,
+                 state_manager: Optional[StateManager] = None,
+                 adk_toolkit: Optional[Toolkit] = None,
+                 a2a_server_url: Optional[str] = None):
         
-        Args:
-            user_input: Entrada del usuario
-            user_id: ID del usuario para mantener la sesión
-            
-        Returns:
-            Respuesta generada
-        """
-        # Utilizar el mismo flujo que para responder preguntas
-        return await self._answer_fitness_question(user_input, user_id)
+        # Definir las skills del agente
+        skills = [
+            GenerateTrainingPlanSkill(),
+            RecommendNutritionSkill(),
+            AnswerFitnessQuestionSkill(),
+            AnalyzeProgressSkill()
+        ]
         
-    async def _get_context(self, user_id: str, session_id: str) -> Dict[str, Any]:
+        # Definir capacidades según el protocolo ADK
+        capabilities = [
+            "generate_training_plan",
+            "recommend_nutrition",
+            "answer_fitness_questions",
+            "analyze_progress"
+        ]
+        
+        # Inicializar clientes si no se proporcionan
+        self.gemini_client = gemini_client if gemini_client else GeminiClient(model_name="gemini-1.5-flash")
+        self.supabase_client = supabase_client if supabase_client else SupabaseClient()
+        
+        # Definir instrucciones del sistema
+        system_instructions = """
+        Eres NGX Gemini Training Assistant, un experto en entrenamiento físico y nutrición.
+        
+        Tu objetivo es proporcionar recomendaciones personalizadas de entrenamiento y nutrición,
+        responder preguntas sobre fitness, y analizar el progreso de los usuarios para ayudarles
+        a alcanzar sus objetivos de forma efectiva y segura.
+        
+        Tus áreas de especialización incluyen:
+        
+        1. Planes de entrenamiento
+           - Diseño de programas personalizados
+           - Periodización del entrenamiento
+           - Técnicas de ejercicios
+           - Adaptaciones para diferentes niveles
+           - Entrenamiento específico por objetivos
+        
+        2. Nutrición deportiva
+           - Recomendaciones nutricionales personalizadas
+           - Timing de nutrientes
+           - Suplementación
+           - Estrategias para diferentes objetivos
+           - Planes de alimentación estructurados
+        
+        3. Respuestas sobre fitness
+           - Aclaración de dudas técnicas
+           - Explicación de conceptos de entrenamiento
+           - Información sobre ejercicios específicos
+           - Consejos para optimizar resultados
+           - Desmitificación de creencias erróneas
+        
+        4. Análisis de progreso
+           - Evaluación de métricas y resultados
+           - Identificación de áreas de mejora
+           - Recomendaciones para superar mesetas
+           - Ajustes de programas existentes
+           - Proyecciones de progreso futuro
+        
+        Debes adaptar tus respuestas según:
+        - El nivel de experiencia del usuario
+        - Sus objetivos específicos
+        - Sus limitaciones o condiciones especiales
+        - Su historial de entrenamiento
+        - Sus preferencias personales
+        
+        Cuando proporciones recomendaciones:
+        - Basa tus respuestas en evidencia científica
+        - Sé específico y detallado
+        - Proporciona ejemplos concretos
+        - Explica el razonamiento detrás de tus sugerencias
+        - Prioriza la seguridad y la progresión adecuada
+        - Considera factores individuales
+        
+        Tu objetivo es ayudar a los usuarios a alcanzar sus metas de fitness de manera
+        efectiva, segura y sostenible, proporcionando información precisa y personalizada.
+        """
+        
+        # Ejemplos para la Agent Card
+        examples = [
+            Example(
+                input={"message": "Necesito un plan de entrenamiento para un maratón"},
+                output={"response": "Aquí tienes un plan de entrenamiento de 16 semanas para prepararte para un maratón..."}
+            ),
+            Example(
+                input={"message": "¿Qué debo comer antes de entrenar?"},
+                output={"response": "Antes de entrenar, es recomendable consumir carbohidratos complejos y proteínas magras..."}
+            ),
+            Example(
+                input={"message": "¿Cómo puedo superar mi meseta en press de banca?"},
+                output={"response": "Para superar una meseta en press de banca, puedes implementar estas estrategias..."}
+            )
+        ]
+        
+        # Crear Agent Card
+        agent_card = AgentCard.create_standard_card(
+            agent_id="gemini_training_assistant",
+            name="NGX Gemini Training Assistant",
+            description="Asistente de entrenamiento potenciado por Vertex AI Gemini que proporciona recomendaciones personalizadas de entrenamiento y nutrición",
+            capabilities=capabilities,
+            skills=[skill.name for skill in skills],
+            version="1.5.0",
+            examples=examples,
+            metadata={
+                "model": "gemini-1.5-flash",
+                "creator": "NGX Team",
+                "last_updated": time.strftime("%Y-%m-%d")
+            }
+        )
+        
+        # Inicializar agente base con los parámetros definidos
+        super().__init__(
+            agent_id="gemini_training_assistant",
+            name="NGX Gemini Training Assistant",
+            description="Asistente de entrenamiento potenciado por Vertex AI Gemini que proporciona recomendaciones personalizadas de entrenamiento y nutrición",
+            model="gemini-1.5-flash",
+            instruction=system_instructions,
+            capabilities=capabilities,
+            gemini_client=self.gemini_client,
+            supabase_client=self.supabase_client,
+            state_manager=state_manager,
+            adk_toolkit=adk_toolkit,
+            a2a_server_url=a2a_server_url,
+            version="1.5.0",
+            agent_card=agent_card,
+            skills=skills
+        )
+        
+        # Almacenar sesiones de chat activas por usuario
+        self.chat_sessions = {}
+        
+        # Inicializar estado del agente
+        self.update_state("training_plans", {})  # Almacenar planes de entrenamiento generados
+        self.update_state("nutrition_recommendations", {})  # Almacenar recomendaciones nutricionales
+        self.update_state("progress_analyses", {})  # Almacenar análisis de progreso
+        
+        logger.info(f"GeminiTrainingAssistant inicializado con {len(capabilities)} capacidades y {len(skills)} skills")
+    
+    async def _get_context(self, user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Obtiene el contexto de la conversación desde el StateManager.
         
@@ -456,12 +631,39 @@ Formato el análisis de forma clara y estructurada.
         except Exception as e:
             logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
     
+    def _classify_query(self, query: str) -> str:
+        """
+        Clasifica el tipo de consulta del usuario.
+        
+        Args:
+            query: Consulta del usuario
+            
+        Returns:
+            str: Tipo de consulta
+        """
+        query_lower = query.lower()
+        
+        if any(word in query_lower for word in ["plan", "entrenamiento", "rutina", "ejercicios", "programa"]):
+            return "generate_training_plan"
+        elif any(word in query_lower for word in ["nutrición", "dieta", "alimentación", "comer", "comida", "macros"]):
+            return "recommend_nutrition"
+        elif any(word in query_lower for word in ["progreso", "avance", "resultados", "meseta", "estancamiento"]):
+            return "analyze_progress"
+        else:
+            return "answer_fitness_question"
+    
+    def get_agent_card(self) -> Dict[str, Any]:
+        """
+        Obtiene el Agent Card del agente según el protocolo ADK oficial.
+        
+        Returns:
+            Dict[str, Any]: Agent Card estandarizada
+        """
+        return self.agent_card.to_dict()
+    
     async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
-        Implementación asíncrona del procesamiento del agente GeminiTrainingAssistant.
-        
-        Sobrescribe el método de la clase base para proporcionar la implementación
-        específica del agente especializado en entrenamiento con Gemini.
+        Implementación asíncrona del método run. Procesa la entrada del usuario y genera una respuesta.
         
         Args:
             input_text: Texto de entrada del usuario
@@ -469,362 +671,125 @@ Formato el análisis de forma clara y estructurada.
             **kwargs: Argumentos adicionales como context, parameters, etc.
             
         Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente
+            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo ADK
         """
-        try:
-            start_time = time.time()
-            logger.info(f"Ejecutando GeminiTrainingAssistant con input: {input_text[:50]}...")
-            
-            # Generar session_id si no se proporciona
-            if not kwargs.get("session_id"):
-                kwargs["session_id"] = str(uuid.uuid4())
-            
-            # Obtener el contexto de la conversación
-            context = await self._get_context(user_id, kwargs.get("session_id")) if user_id else {}
-            
-            # Obtener perfil del usuario si está disponible
-            user_profile = None
-            if user_id:
-                # Intentar obtener el perfil del usuario del contexto primero
-                user_profile = context.get("user_profile", {})
-                if not user_profile:
-                    # Aquí se implementaría la lógica para obtener el perfil del usuario desde Supabase
-                    try:
-                        user_profile = self.supabase_client.get_user_profile(user_id)
-                        if user_profile:
-                            context["user_profile"] = user_profile
-                    except Exception as e:
-                        logger.warning(f"No se pudo obtener el perfil del usuario {user_id}: {e}")
-            
-            # Determinar el tipo de tarea basado en el input del usuario
-            if "plan de entrenamiento" in input_text.lower() or "rutina" in input_text.lower():
-                task_type = "generate_training_plan"
-                result = await self._generate_training_plan(input_text, context)
-            elif "nutrición" in input_text.lower() or "dieta" in input_text.lower():
-                task_type = "recommend_nutrition"
-                result = await self._recommend_nutrition(input_text, context)
-            elif "progreso" in input_text.lower() or "avance" in input_text.lower() or "resultados" in input_text.lower():
-                task_type = "analyze_progress"
-                result = await self._analyze_progress(input_text, context)
-            else:
-                task_type = "answer_question"
-                result = await self._answer_fitness_question(input_text, user_id or "anonymous")
-            
-            # Preparar la respuesta
-            artifacts = []
-            
-            # Procesar el resultado según el tipo de tarea
-            if task_type == "generate_training_plan":
-                response = result.get("training_plan", "")
-                if "training_plan_structure" in result:
-                    artifacts.append({
-                        "type": "training_plan",
-                        "content": result.get("training_plan_structure", {})
-                    })
-                    
-                    # Guardar el plan en el contexto
-                    if user_id:
-                        context["training_plans"].append({
-                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "query": input_text,
-                            "plan": result.get("training_plan_structure", {})
-                        })
-                    
-                # Guardar el plan en el estado del agente
-                if user_id:
-                    plans = self.get_state("training_plans", {})
-                    plans[user_id] = plans.get(user_id, []) + [{
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result.get("training_plan_structure", {})
-                    }]
-                    self.update_state("training_plans", plans)
-                    
-            elif task_type == "recommend_nutrition":
-                response = result.get("nutrition_recommendations", "")
-                if "nutrition_plan" in result:
-                    artifacts.append({
-                        "type": "nutrition_plan",
-                        "content": result.get("nutrition_plan", {})
-                    })
-                    
-                    # Guardar la recomendación en el contexto
-                    if user_id:
-                        context["nutrition_recommendations"].append({
-                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "query": input_text,
-                            "recommendation": result.get("nutrition_plan", {})
-                        })
-                    
-                # Guardar la recomendación en el estado del agente
-                if user_id:
-                    recommendations = self.get_state("nutrition_recommendations", {})
-                    recommendations[user_id] = recommendations.get(user_id, []) + [{
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "recommendation": result.get("nutrition_plan", {})
-                    }]
-                    self.update_state("nutrition_recommendations", recommendations)
-                    
-            elif task_type == "analyze_progress":
-                response = result.get("progress_analysis", "")
-                if "metrics" in result:
-                    artifacts.append({
-                        "type": "progress_metrics",
-                        "content": result.get("metrics", {})
-                    })
-                    
-                    # Guardar el análisis en el contexto
-                    if user_id:
-                        context["progress_analyses"].append({
-                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "query": input_text,
-                            "analysis": result.get("metrics", {})
-                        })
-                    
-                # Guardar el análisis en el estado del agente
-                if user_id:
-                    analyses = self.get_state("progress_analyses", {})
-                    analyses[user_id] = analyses.get(user_id, []) + [{
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "analysis": result.get("metrics", {})
-                    }]
-                    self.update_state("progress_analyses", analyses)
-                    
-            else:
-                response = result.get("answer", "")
-            
-            # Añadir la interacción al historial interno del agente
-            self.add_to_history(input_text, response)
-            
-            # Añadir la interacción al historial de conversación en el contexto
-            if user_id:
-                context["conversation_history"].append({
-                    "user": input_text,
-                    "agent": response,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "task_type": task_type
-                })
+        start_time = time.time()
+        logger.info(f"Ejecutando GeminiTrainingAssistant con input: {input_text[:50]}...")
+        
+        # Obtener session_id de los kwargs o generar uno nuevo
+        session_id = kwargs.get("session_id", str(uuid.uuid4()))
+        
+        # Obtener el contexto de la conversación
+        context = await self._get_context(user_id, session_id) if user_id else {}
+        
+        # Clasificar el tipo de consulta
+        query_type = self._classify_query(input_text)
+        capabilities_used = []
+        
+        # Procesar la consulta según su tipo utilizando las skills ADK
+        if query_type == "generate_training_plan":
+            # Usar la skill de generación de planes de entrenamiento
+            training_skill = next((skill for skill in self.skills if skill.name == "generate_training_plan"), None)
+            if training_skill:
+                input_data = GenerateTrainingPlanInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await training_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("generate_training_plan")
                 
-                # Actualizar el contexto en el StateManager
-                await self._update_context(context, user_id, kwargs.get("session_id"))
-            
-            # Devolver respuesta final
-            return {
-                "status": "success",
-                "response": response,
-                "artifacts": artifacts,
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "task_type": task_type,
-                    "user_id": user_id,
-                    "session_id": kwargs.get("session_id"),
-                    "model_used": result.get("model_used", "gemini-pro")
-                }
+                # Actualizar contexto con el plan de entrenamiento
+                if result.training_plan:
+                    context["training_plans"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "query": input_text,
+                        "training_plan": result.training_plan
+                    })
+                
+        elif query_type == "recommend_nutrition":
+            # Usar la skill de recomendaciones nutricionales
+            nutrition_skill = next((skill for skill in self.skills if skill.name == "recommend_nutrition"), None)
+            if nutrition_skill:
+                input_data = RecommendNutritionInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await nutrition_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("recommend_nutrition")
+                
+                # Actualizar contexto con las recomendaciones nutricionales
+                if result.nutrition_plan:
+                    context["nutrition_recommendations"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "query": input_text,
+                        "nutrition_plan": result.nutrition_plan
+                    })
+                
+        elif query_type == "analyze_progress":
+            # Usar la skill de análisis de progreso
+            progress_skill = next((skill for skill in self.skills if skill.name == "analyze_progress"), None)
+            if progress_skill:
+                input_data = AnalyzeProgressInput(
+                    query=input_text,
+                    context=context
+                )
+                result = await progress_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("analyze_progress")
+                
+                # Actualizar contexto con el análisis de progreso
+                if result.progress_analysis:
+                    context["progress_analyses"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "query": input_text,
+                        "progress_analysis": result.progress_analysis
+                    })
+                
+        else:  # answer_fitness_question
+            # Usar la skill de respuesta a preguntas de fitness
+            question_skill = next((skill for skill in self.skills if skill.name == "answer_fitness_question"), None)
+            if question_skill:
+                input_data = AnswerFitnessQuestionInput(
+                    query=input_text,
+                    session_id=session_id
+                )
+                result = await question_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("answer_fitness_questions")
+                
+                # Actualizar el session_id si cambió
+                if result.session_id and result.session_id != session_id:
+                    session_id = result.session_id
+        
+        # Actualizar el historial de conversación
+        context["conversation_history"].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "role": "user",
+            "content": input_text
+        })
+        context["conversation_history"].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "role": "assistant",
+            "content": response
+        })
+        
+        # Actualizar el contexto en el StateManager
+        if user_id:
+            await self._update_context(context, user_id, session_id)
+        
+        # Calcular tiempo de ejecución
+        execution_time = time.time() - start_time
+        logger.info(f"GeminiTrainingAssistant completó la ejecución en {execution_time:.2f} segundos")
+        
+        # Preparar respuesta según el protocolo ADK
+        return {
+            "response": response,
+            "capabilities_used": capabilities_used,
+            "metadata": {
+                "query_type": query_type,
+                "execution_time": execution_time,
+                "session_id": session_id
             }
-            
-        except Exception as e:
-            logger.error(f"Error en GeminiTrainingAssistant: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre entrenamiento y nutrición.",
-                "error": str(e),
-                "agent_id": self.agent_id
-            }
-    
-    def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
-        
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada
-        """
-        logger.info(f"[{self.agent_id}] Solicitada Agent Card.")
-        if not hasattr(self, 'agent_card') or not self.agent_card:
-             logger.warning(f"[{self.agent_id}] Agent Card no inicializada, creándola ahora.")
-             self.agent_card = self._create_agent_card()
-        # Asegurarse de que se devuelve un diccionario, no el objeto AgentCard
-        return self.agent_card.to_dict() 
-
-    async def execute_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Ejecuta una tarea solicitada por otro agente o sistema A2A.
-        
-        Args:
-            task: Tarea A2A
-        
-        Returns:
-            Dict[str, Any]: Resultado de la tarea
-        """
-        logger.info(f"[{self.agent_id}] Recibida tarea A2A: {task.get('task_id')}, skill: {task.get('skill_id')}")
-        if not validate_task(task):
-            logger.error(f"[{self.agent_id}] Tarea A2A inválida recibida: {task}")
-            return create_result(task.get('task_id', 'unknown'), status="error", error_message="Invalid task format")
-
-        skill_id = task.get('skill_id')
-        input_data = task.get('input_data', {})
-        task_id = task.get('task_id')
-
-        try:
-            # TODO: Implementar lógica para ejecutar skills específicos basados en skill_id
-            if skill_id == "vertex_gemini_generate":
-                # Extraer parámetros necesarios de input_data
-                user_input = input_data.get("text", "Generar texto general")
-                user_id = input_data.get("user_id")
-                # Llamar a la lógica ADK (o una versión adaptada para A2A)
-                result_data = await self._run_async_impl(user_input, user_id=user_id, session_id=task_id)
-                # Extraer la parte relevante de la respuesta ADK para el resultado A2A
-                output_content = result_data.get("message", {}).get("parts", [{}])[0].get("text", "Error al generar texto.")
-                if result_data.get("status") == "success":
-                    return create_result(task_id, status="success", output_data={"text": output_content})
-                else:
-                     return create_result(task_id, status="error", error_message=output_content)
-
-            elif skill_id == "vertex_gemini_chat":
-                 # Lógica similar para la conversación
-                 user_input = input_data.get("text", "Conversación general")
-                 user_id = input_data.get("user_id")
-                 result_data = await self._run_async_impl(user_input, user_id=user_id, session_id=task_id)
-                 output_content = result_data.get("message", {}).get("parts", [{}])[0].get("text", "Error al responder.")
-                 if result_data.get("status") == "success":
-                     return create_result(task_id, status="success", output_data={"text": output_content})
-                 else:
-                     return create_result(task_id, status="error", error_message=output_content)
-
-            else:
-                logger.warning(f"[{self.agent_id}] Skill no soportado solicitado: {skill_id}")
-                return create_result(task_id, status="error", error_message=f"Skill '{skill_id}' not supported")
-
-        except Exception as e:
-            logger.error(f"[{self.agent_id}] Error ejecutando tarea A2A {task_id} ({skill_id}): {e}", exc_info=True)
-            return create_result(task_id, status="error", error_message=f"Internal server error: {e}")
-
-    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Procesa un mensaje recibido de otro agente A2A.
-        
-        Args:
-            from_agent: ID del agente que envió el mensaje
-            content: Contenido del mensaje
-            
-        Returns:
-            Dict[str, Any]: Mensaje de respuesta (opcional)
-        """
-        message_id = content.get('message_id', 'unknown')
-        logger.info(f"[{self.agent_id}] Recibido mensaje A2A {message_id} de {from_agent}")
-        logger.debug(f"[{self.agent_id}] Contenido del mensaje: {content}")
-
-        # TODO: Implementar lógica para manejar diferentes tipos de mensajes A2A
-        # Ejemplo: Si es una solicitud de información, responder directamente.
-        # Ejemplo: Si es una notificación, registrarla.
-        # Ejemplo: Si requiere ejecutar una acción, podría llamar a _run_async_impl o execute_task
-
-        # Implementación de ejemplo: tratar el mensaje como una entrada de usuario
-        try:
-            user_input = ""
-            if content.get("parts") and isinstance(content["parts"], list):
-                text_parts = [part.get("text") for part in content["parts"] if part.get("type") == "text"]
-                user_input = " ".join(filter(None, text_parts))
-
-            if not user_input:
-                logger.warning(f"[{self.agent_id}] Mensaje A2A de {from_agent} no contiene texto procesable.")
-                # Podríamos no responder nada o enviar un error
-                return None # No responder
-
-            # Usar la lógica ADK para generar una respuesta
-            user_id = content.get("metadata", {}).get("user_id") # Asumiendo que el user_id viene en metadata
-            session_id = content.get("metadata", {}).get("session_id", message_id) # Usar message_id como fallback
-            response_data = await self._run_async_impl(user_input, user_id=user_id, session_id=session_id)
-
-            # Devolver la respuesta como un nuevo mensaje A2A (si es apropiado)
-            if response_data.get("status") == "success":
-                response_content = response_data.get("message", {}).get("parts", [{}])[0].get("text")
-                if response_content:
-                     reply_message = self.create_message(
-                         role="agent",
-                         parts=[self.create_text_part(f"En respuesta a tu mensaje ({message_id}): {response_content}")],
-                         metadata={"in_reply_to": message_id} # Referencia al mensaje original
-                     )
-                     logger.info(f"[{self.agent_id}] Enviando respuesta A2A a {from_agent}")
-                     return reply_message
-                else:
-                     logger.warning(f"[{self.agent_id}] La respuesta ADK generada no contenía texto para enviar como mensaje A2A.")
-                     return None
-            else:
-                 # Enviar un mensaje de error A2A
-                 error_details = response_data.get("error_details", "Error desconocido")
-                 error_reply = self.create_message(
-                     role="agent",
-                     parts=[self.create_text_part(f"No pude procesar tu mensaje ({message_id}): {error_details}")],
-                     metadata={"in_reply_to": message_id, "error": True}
-                 )
-                 logger.error(f"[{self.agent_id}] Enviando mensaje de error A2A a {from_agent}")
-                 return error_reply
-
-        except Exception as e:
-            logger.error(f"[{self.agent_id}] Error procesando mensaje A2A {message_id} de {from_agent}: {e}", exc_info=True)
-            # Podríamos devolver un mensaje de error A2A genérico
-            error_reply = self.create_message(
-                role="agent",
-                parts=[self.create_text_part(f"Error interno al procesar tu mensaje ({message_id}).")],
-                metadata={"in_reply_to": message_id, "error": True}
-            )
-            return error_reply
-
-        # Si no se genera respuesta, devolver None
-        return None
-
-    def _create_agent_card(self) -> AgentCard:
-        """
-        Crea la AgentCard estandarizada para este agente.
-        """
-        # Reutilizar skills definidos en __init__ o definirlos aquí
-        skills_for_card = [
-            {
-                "id": "vertex_gemini_generate",
-                "name": "Generar texto utilizando los modelos Gemini",
-                "description": "Genera texto utilizando los modelos Gemini",
-                "tags": ["generate", "text", "gemini"],
-                "inputModes": ["text"],
-                "outputModes": ["text", "json", "markdown"],
-                "examples": [
-                    Example(input={"text": "Genera un plan de entrenamiento para principiantes"}, output={"markdown": "..."})
-                ]
-            },
-            {
-                "id": "vertex_gemini_chat",
-                "name": "Mantiene conversaciones utilizando los modelos Gemini",
-                "description": "Mantiene conversaciones utilizando los modelos Gemini",
-                "tags": ["chat", "conversational", "gemini"],
-                "inputModes": ["text"],
-                "outputModes": ["text", "markdown"],
-                "examples": [
-                    Example(input={"text": "¿Cómo puedo mejorar mi condición física?"}, output={"text": "..."})
-                ]
-            },
-            {
-                "id": "vertex_gemini_models",
-                "name": "Obtiene información sobre los modelos de Gemini disponibles",
-                "description": "Obtiene información sobre los modelos de Gemini disponibles",
-                "tags": ["models", "information", "gemini"],
-                "inputModes": ["text"],
-                "outputModes": ["text", "json"],
-                "examples": [
-                    Example(input={"text": "¿Qué modelos de Gemini están disponibles?"}, output={"text": "..."})
-                ]
-            }
-        ]
-        return AgentCard.create_standard_card(
-            agent_id=self.agent_id,
-            name=self.name,
-            description=self.description,
-            capabilities=self.capabilities,
-            skills=skills_for_card,
-            version=self.version,
-            examples=[
-                 Example(input={"message": "Necesito un plan de entrenamiento para un maratón"}, output={"response": "Aquí tienes un plan de entrenamiento de 16 semanas para prepararte para un maratón..."}),
-                 Example(input={"message": "¿Qué debo comer antes de entrenar?"}, output={"response": "Antes de entrenar, es recomendable consumir carbohidratos complejos y proteínas magras..."})
-            ]
-            # Añadir otros campos de AgentCard si es necesario
-        )
+        }

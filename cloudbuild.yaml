@@ -1,0 +1,77 @@
+# Cloud Build configuration for NGX Agents
+steps:
+  # Build the API Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build', 
+      '-t', 'gcr.io/$PROJECT_ID/ngx-agents-api:$COMMIT_SHA', 
+      '-t', 'gcr.io/$PROJECT_ID/ngx-agents-api:latest', 
+      '.'
+    ]
+
+  # Build the A2A server Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build', 
+      '-t', 'gcr.io/$PROJECT_ID/ngx-agents-a2a:$COMMIT_SHA', 
+      '-t', 'gcr.io/$PROJECT_ID/ngx-agents-a2a:latest',
+      '-f', 'Dockerfile.a2a', 
+      '.'
+    ]
+
+  # Run tests
+  - name: 'gcr.io/$PROJECT_ID/ngx-agents-api:$COMMIT_SHA'
+    entrypoint: 'pytest'
+    args: ['-xvs']
+    env:
+      - 'PYTHONPATH=/app'
+
+  # Push the API Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/ngx-agents-api:$COMMIT_SHA']
+
+  # Push the A2A server Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/ngx-agents-a2a:$COMMIT_SHA']
+
+  # Deploy API to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args: [
+      'run', 'deploy', 'ngx-agents-api',
+      '--image', 'gcr.io/$PROJECT_ID/ngx-agents-api:$COMMIT_SHA',
+      '--region', '${_REGION}',
+      '--platform', 'managed',
+      '--allow-unauthenticated',
+      '--memory', '1Gi',
+      '--cpu', '1',
+      '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID'
+    ]
+
+  # Deploy A2A server to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args: [
+      'run', 'deploy', 'ngx-agents-a2a',
+      '--image', 'gcr.io/$PROJECT_ID/ngx-agents-a2a:$COMMIT_SHA',
+      '--region', '${_REGION}',
+      '--platform', 'managed',
+      '--allow-unauthenticated',
+      '--memory', '1Gi',
+      '--cpu', '1',
+      '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID'
+    ]
+
+# Define the images to be pushed to Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/ngx-agents-api:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/ngx-agents-api:latest'
+  - 'gcr.io/$PROJECT_ID/ngx-agents-a2a:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/ngx-agents-a2a:latest'
+
+# Define substitution variables with default values
+substitutions:
+  _REGION: 'us-central1'
+
+# Configure the timeout for the build
+timeout: '1800s'

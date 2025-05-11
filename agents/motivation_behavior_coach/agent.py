@@ -15,21 +15,18 @@ from typing import Dict, Any, Optional, List, Union
 import asyncio
 from datetime import datetime, timezone
 from google.cloud import aiplatform
+
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
 from tools.mcp_client import MCPClient
 from agents.base.adk_agent import ADKAgent
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from core.logging_config import get_logger
-from core.contracts import create_task, create_result, validate_task, validate_result
 
-# Importar Skill desde adk.agent
-try:
-    from adk.agent import Skill
-except ImportError:
-    # Stub para Skill si no está disponible
-    from adk.agent import Skill
+# Importar Skill y Toolkit desde adk.agent
+from adk.agent import Skill
+from adk.toolkit import Toolkit
 
 # Importar esquemas para las skills
 from agents.motivation_behavior_coach.schemas import (
@@ -40,7 +37,13 @@ from agents.motivation_behavior_coach.schemas import (
     ObstacleManagementInput, ObstacleManagementOutput,
     HabitPlanArtifact, GoalPlanArtifact,
     MotivationStrategiesArtifact, BehaviorChangePlanArtifact,
-    ObstacleManagementArtifact
+    ObstacleManagementArtifact,
+    # Importar modelos adicionales para las skills
+    HabitPlan, HabitStep,
+    SmartGoal, Milestone, Timeline, Obstacle, TrackingSystem, GoalPlan,
+    MotivationStrategy,
+    BehaviorChangeStage, BehaviorChangePlan,
+    ObstacleAnalysis, ObstacleSolution
 )
 
 # Configurar logger
@@ -56,38 +59,84 @@ class MotivationBehaviorCoach(ADKAgent):
     
     Implementa los protocolos oficiales ADK y A2A para comunicación entre agentes.
     """
-    gemini_client: Optional[GeminiClient] = None
-    supabase_client: Optional[SupabaseClient] = None
     
-    def __init__(self, 
-                 toolkit: Optional[MCPToolkit] = None, 
-                 state_manager: Optional[StateManager] = None,
-                 system_instructions: Optional[str] = None,
-                 gemini_client: Optional[GeminiClient] = None,
-                 model: str = "gemini-1.5-flash",
-                 **kwargs):
+    AGENT_ID = "motivation_behavior_coach"
+    AGENT_NAME = "NGX Motivation & Behavior Coach"
+    AGENT_DESCRIPTION = "Especialista en motivación, formación de hábitos y cambio de comportamiento"
+    DEFAULT_INSTRUCTION = "Eres un coach especializado en motivación y cambio de comportamiento. Tu función es ayudar a los usuarios a establecer hábitos saludables, mantener la motivación, superar obstáculos psicológicos y lograr cambios de comportamiento duraderos."
+    DEFAULT_MODEL = "gemini-1.5-flash"
+    
+    def __init__(
+        self,
+        state_manager = None,
+        mcp_toolkit: Optional[MCPToolkit] = None,
+        a2a_server_url: Optional[str] = None,
+        model: Optional[str] = None,
+        instruction: Optional[str] = None,
+        agent_id: str = AGENT_ID,
+        name: str = AGENT_NAME,
+        description: str = AGENT_DESCRIPTION,
+        **kwargs
+    ):
         """
         Inicializa el agente MotivationBehaviorCoach.
         
         Args:
-            toolkit: Toolkit de ADK para registro de habilidades
             state_manager: Gestor de estado para persistencia
-            system_instructions: Instrucciones del sistema
-            gemini_client: Cliente de Gemini para generación de texto
+            mcp_toolkit: Toolkit de MCP para herramientas adicionales
+            a2a_server_url: URL del servidor A2A
             model: Modelo de Gemini a utilizar
+            instruction: Instrucciones del sistema
+            agent_id: ID del agente
+            name: Nombre del agente
+            description: Descripción del agente
             **kwargs: Argumentos adicionales para la clase base
         """
-        # Definir instrucciones del sistema
-        self.system_instructions = system_instructions or """
-        Eres un coach especializado en motivación y cambio de comportamiento. 
-        Tu función es ayudar a los usuarios a establecer hábitos saludables, 
-        mantener la motivación, superar obstáculos psicológicos y lograr 
-        cambios de comportamiento duraderos. Utiliza principios de psicología 
-        positiva, ciencia del comportamiento y técnicas de coaching validadas.
-        """
+        _model = model or self.DEFAULT_MODEL
+        _instruction = instruction or self.DEFAULT_INSTRUCTION
+        _mcp_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
         
-        # Definir capacidades
-        capabilities = [
+        # Definir las skills antes de llamar al constructor de ADKAgent
+        self.skills = [
+            Skill(
+                name="habit_formation",
+                description="Técnicas para establecer y mantener hábitos saludables basadas en ciencia del comportamiento",
+                handler=self._skill_habit_formation,
+                input_schema=HabitFormationInput,
+                output_schema=HabitFormationOutput
+            ),
+            Skill(
+                name="motivation_strategies",
+                description="Estrategias basadas en evidencia para mantener la motivación a largo plazo y superar barreras psicológicas",
+                handler=self._skill_motivation_strategies,
+                input_schema=MotivationStrategiesInput,
+                output_schema=MotivationStrategiesOutput
+            ),
+            Skill(
+                name="behavior_change",
+                description="Métodos para lograr cambios de comportamiento duraderos basados en modelos psicológicos validados",
+                handler=self._skill_behavior_change,
+                input_schema=BehaviorChangeInput,
+                output_schema=BehaviorChangeOutput
+            ),
+            Skill(
+                name="goal_setting",
+                description="Técnicas para establecer metas efectivas usando el marco SMART y otros modelos validados",
+                handler=self._skill_goal_setting,
+                input_schema=GoalSettingInput,
+                output_schema=GoalSettingOutput
+            ),
+            Skill(
+                name="obstacle_management",
+                description="Estrategias para identificar, anticipar y superar obstáculos en el camino hacia los objetivos",
+                handler=self._skill_obstacle_management,
+                input_schema=ObstacleManagementInput,
+                output_schema=ObstacleManagementOutput
+            )
+        ]
+        
+        # Definir las capacidades del agente
+        _capabilities = [
             "habit_formation", 
             "motivation_strategies", 
             "behavior_change", 
@@ -95,97 +144,76 @@ class MotivationBehaviorCoach(ADKAgent):
             "obstacle_management"
         ]
         
-        # Inicializar clientes
-        self.gemini_client = gemini_client or GeminiClient(model=model)
+        # Crear un toolkit de ADK
+        adk_toolkit = Toolkit()
         
-        # Inicializar StateManager si no se proporciona
-        self.state_manager = state_manager or StateManager()
-        
-        # Definir skills usando la clase Skill para compatibilidad con ADK y A2A
-        self.skills = {
-            "habit_formation": Skill(
-                name="Formación de Hábitos",
-                description="Técnicas para establecer y mantener hábitos saludables basadas en ciencia del comportamiento",
-                handler=self._skill_habit_formation,
-                input_schema=HabitFormationInput,
-                output_schema=HabitFormationOutput
-            ),
-            "motivation_strategies": Skill(
-                name="Estrategias de Motivación",
-                description="Estrategias basadas en evidencia para mantener la motivación a largo plazo y superar barreras psicológicas",
-                handler=self._skill_motivation_strategies,
-                input_schema=MotivationStrategiesInput,
-                output_schema=MotivationStrategiesOutput
-            ),
-            "behavior_change": Skill(
-                name="Cambio de Comportamiento",
-                description="Métodos para lograr cambios de comportamiento duraderos basados en modelos psicológicos validados",
-                handler=self._skill_behavior_change,
-                input_schema=BehaviorChangeInput,
-                output_schema=BehaviorChangeOutput
-            ),
-            "goal_setting": Skill(
-                name="Establecimiento de Metas",
-                description="Técnicas para establecer metas efectivas usando el marco SMART y otros modelos validados",
-                handler=self._skill_goal_setting,
-                input_schema=GoalSettingInput,
-                output_schema=GoalSettingOutput
-            ),
-            "obstacle_management": Skill(
-                name="Gestión de Obstáculos",
-                description="Estrategias para identificar, anticipar y superar obstáculos en el camino hacia los objetivos",
-                handler=self._skill_obstacle_management,
-                input_schema=ObstacleManagementInput,
-                output_schema=ObstacleManagementOutput
-            )
-        }
-        
-        # Inicializar la clase base ADKAgent
+        # Inicializar el agente ADK
         super().__init__(
-            agent_id="motivation_behavior_coach",
-            name="NGX Motivation & Behavior Coach",
-            description="Especialista en motivación, formación de hábitos y cambio de comportamiento",
-            capabilities=capabilities,
-            toolkit=toolkit,
+            agent_id=agent_id,
+            name=name,
+            description=description,
+            model=_model,
+            instruction=_instruction,
             state_manager=state_manager,
-            version="1.2.0",
-            system_instructions=self.system_instructions,
-            skills=self.skills,
-            model=model,
+            adk_toolkit=adk_toolkit,
+            capabilities=_capabilities,
+            a2a_server_url=a2a_server_url,
             **kwargs
         )
+        
+        # Configurar clientes adicionales
+        self.gemini_client = GeminiClient(model_name=self.model)
+        self.supabase_client = SupabaseClient()
+        
+        # Configurar sistema de instrucciones para Gemini
+        self.system_instructions = """Eres un coach especializado en motivación y cambio de comportamiento. 
+        Tu función es ayudar a los usuarios a establecer hábitos saludables, 
+        mantener la motivación, superar obstáculos psicológicos y lograr 
+        cambios de comportamiento duraderos. Utiliza principios de psicología 
+        positiva, ciencia del comportamiento y técnicas de coaching validadas."""
+        
+        # Inicializar Vertex AI
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform (Vertex AI SDK) inicializado correctamente para MotivationBehaviorCoach.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform para MotivationBehaviorCoach: {e}", exc_info=True)
+            
+        logger.info(f"{self.name} ({self.agent_id}) inicializado con integración oficial de Google ADK.")
     
-    async def _get_context(self, user_id: str, session_id: str) -> Dict[str, Any]:
+    async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
         """
-        Obtiene el contexto de la conversación desde el StateManager.
+        Obtiene el contexto de la conversación desde el adaptador del StateManager.
 
         Args:
-            user_id (str): ID del usuario.
-            session_id (str): ID de la sesión.
+            user_id (Optional[str]): ID del usuario.
+            session_id (Optional[str]): ID de la sesión.
 
         Returns:
             Dict[str, Any]: Contexto de la conversación.
         """
         try:
-            # Intentar cargar el contexto desde el StateManager
-            context = await self.state_manager.load_state(user_id, session_id)
+            # Intentar cargar desde el adaptador del StateManager
+            if user_id and session_id:
+                try:
+                    state_data = await state_manager_adapter.load_state(user_id, session_id)
+                    if state_data and isinstance(state_data, dict):
+                        logger.debug(f"Contexto cargado desde adaptador del StateManager para user_id={user_id}, session_id={session_id}")
+                        return state_data
+                except Exception as e:
+                    logger.warning(f"Error al cargar contexto desde adaptador del StateManager: {e}")
             
-            if not context or not context.get("state_data"):
-                logger.info(f"No se encontró contexto en StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
-                # Si no hay contexto, crear uno nuevo
-                context = {
-                    "conversation_history": [],
-                    "user_profile": {},
-                    "habit_plans": [],
-                    "goal_plans": [],
-                    "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            else:
-                # Si hay contexto, usar el state_data
-                context = context.get("state_data", {})
-                logger.info(f"Contexto cargado desde StateManager para user_id={user_id}, session_id={session_id}")
-            
-            return context
+            # Si no hay contexto o hay error, crear uno nuevo
+            return {
+                "conversation_history": [],
+                "user_profile": {},
+                "habit_plans": [],
+                "goal_plans": [],
+                "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
         except Exception as e:
             logger.error(f"Error al obtener contexto: {e}", exc_info=True)
             # En caso de error, devolver un contexto vacío
@@ -199,7 +227,7 @@ class MotivationBehaviorCoach(ADKAgent):
 
     async def _update_context(self, context: Dict[str, Any], user_id: str, session_id: str) -> None:
         """
-        Actualiza el contexto de la conversación en el StateManager.
+        Actualiza el contexto de la conversación en el adaptador del StateManager.
 
         Args:
             context (Dict[str, Any]): Contexto actualizado.
@@ -210,422 +238,134 @@ class MotivationBehaviorCoach(ADKAgent):
             # Actualizar la marca de tiempo
             context["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
             
-            # Guardar el contexto en el StateManager
-            await self.state_manager.save_state(context, user_id, session_id)
-            logger.info(f"Contexto actualizado en StateManager para user_id={user_id}, session_id={session_id}")
+            # Guardar el contexto en el adaptador del StateManager
+            await state_manager_adapter.save_state(user_id, session_id, context)
+            logger.info(f"Contexto actualizado en adaptador del StateManager para user_id={user_id}, session_id={session_id}")
         except Exception as e:
             logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
-
-    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, 
-                          session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    
+    async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Implementación asíncrona del procesamiento del agente MotivationBehaviorCoach.
-        
-        Sobrescribe el método de la clase base para proporcionar la implementación
-        específica del agente especializado en motivación y cambio de comportamiento.
+        Consulta a otro agente utilizando el adaptador de A2A.
         
         Args:
-            input_text (str): Texto de entrada del usuario.
-            user_id (Optional[str]): ID del usuario (opcional).
-            session_id (Optional[str]): ID de la sesión (opcional).
-            **kwargs: Argumentos adicionales como context, parameters, etc.
+            agent_id: ID del agente a consultar
+            query: Consulta a enviar al agente
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            context: Contexto adicional para la consulta
             
         Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente.
+            Dict[str, Any]: Respuesta del agente consultado
         """
         try:
-            start_time = time.time()
-            logger.info(f"Ejecutando MotivationBehaviorCoach con input: {input_text[:50]}...")
-            
-            # Generar session_id si no se proporciona
-            if not session_id:
-                session_id = str(uuid.uuid4())
-                logger.info(f"Generando nuevo session_id: {session_id}")
-            
-            # Obtener el contexto de la conversación
-            context = await self._get_context(user_id, session_id) if user_id else {}
-            
-            # Obtener perfil del usuario si está disponible
-            user_profile = None
-            if user_id:
-                # Intentar obtener el perfil del usuario del contexto primero
-                user_profile = context.get("user_profile", {})
-                if not user_profile:
-                    try:
-                        user_profile = self.supabase_client.get_user_profile(user_id)
-                        if user_profile:
-                            context["user_profile"] = user_profile
-                    except Exception as e:
-                        logger.warning(f"No se pudo obtener el perfil del usuario {user_id}: {e}")
-            
-            # Determinar el tipo de tarea basado en palabras clave
-            lower_input = input_text.lower()
-            
-            # Clasificar la consulta
-            if any(kw in lower_input for kw in ["hábito", "costumbre", "rutina", "consistencia"]):
-                # Generar un plan de hábitos estructurado
-                result = await self._generate_habit_plan(input_text, user_profile)
-                
-                # Generar un resumen textual para la respuesta
-                response = self._summarize_habit_plan(result)
-                
-                # Guardar el plan en el contexto
-                if user_id:
-                    context["habit_plans"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result
-                    })
-                
-                # Guardar el plan en el estado del agente
-                if user_id:
-                    habit_plans = self.get_state("habit_plans", {})
-                    habit_plans[user_id] = habit_plans.get(user_id, []) + [{
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result
-                    }]
-                    self.update_state("habit_plans", habit_plans)
-                    
-                # Preparar artefactos para la respuesta
-                artifacts = [{
-                    "type": "habit_plan",
-                    "content": result
-                }]
-                
-                task_type = "habit_formation"
-                
-            elif any(kw in lower_input for kw in ["meta", "objetivo", "lograr", "alcanzar"]):
-                # Generar un plan de metas estructurado
-                result = await self._generate_goal_plan(input_text, user_profile)
-                
-                # Generar un resumen textual para la respuesta
-                response = self._summarize_goal_plan(result)
-                
-                # Guardar el plan en el contexto
-                if user_id:
-                    context["goal_plans"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result
-                    })
-                
-                # Guardar el plan en el estado del agente
-                if user_id:
-                    goal_plans = self.get_state("goal_plans", {})
-                    goal_plans[user_id] = goal_plans.get(user_id, []) + [{
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result
-                    }]
-                    self.update_state("goal_plans", goal_plans)
-                    
-                # Preparar artefactos para la respuesta
-                artifacts = [{
-                    "type": "goal_plan",
-                    "content": result
-                }]
-                
-                task_type = "goal_setting"
-                
-            else:
-                # Para otras consultas, generar una respuesta general sobre motivación
-                prompt = self._build_prompt(input_text, user_profile)
-                response = await self.gemini_client.generate_content(prompt)
-                
-                # Sin artefactos estructurados para respuestas generales
-                artifacts = []
-                
-                # Determinar el tipo de tarea basado en palabras clave
-                if any(kw in lower_input for kw in ["motivación", "inspiración", "animar", "impulso"]):
-                    task_type = "motivation_strategies"
-                elif any(kw in lower_input for kw in ["cambio", "transformación", "modificar", "ajustar"]):
-                    task_type = "behavior_change"
-                elif any(kw in lower_input for kw in ["obstáculo", "barrera", "dificultad", "desafío"]):
-                    task_type = "obstacle_management"
-                else:
-                    task_type = "general_motivation"
-            
-            # Añadir la interacción al historial de conversación
-            if user_id:
-                context["conversation_history"].append({
-                    "user": input_text,
-                    "agent": response,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "task_type": task_type
-                })
-                
-                # Actualizar el contexto en el StateManager
-                await self._update_context(context, user_id, session_id)
-            
-            # Registrar la interacción si hay un usuario identificado
-            if user_id:
-                self.supabase_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=input_text,
-                    response=response
-                )
-            
-            # Calcular tiempo de ejecución
-            execution_time = time.time() - start_time
-            
-            # Formatear respuesta según el protocolo ADK
-            metadata = {
-                "status": "success",
-                "agent_id": self.agent_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+            # Crear contexto para la consulta
+            task_context = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "additional_context": context or {}
             }
-            payload = {
-                "response": response,
-                "message": response,
-                "artifacts": artifacts
-            }
-            return {"metadata": metadata, "payload": payload}
             
+            # Llamar al agente utilizando el adaptador de A2A
+            response = await a2a_adapter.call_agent(
+                agent_id=agent_id,
+                user_input=query,
+                context=task_context
+            )
+            
+            logger.info(f"Respuesta recibida del agente {agent_id}")
+            return response
         except Exception as e:
-            logger.error(f"Error en MotivationBehaviorCoach: {e}", exc_info=True)
-            execution_time = time.time() - start_time if 'start_time' in locals() else 0.0
-            
-            metadata = {
+            logger.error(f"Error al consultar al agente {agent_id}: {e}", exc_info=True)
+            return {
                 "status": "error",
-                "agent_id": self.agent_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            payload = {
                 "error": str(e),
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre motivación y comportamiento."
+                "output": f"Error al consultar al agente {agent_id}",
+                "agent_id": agent_id,
+                "agent_name": agent_id
             }
-            return {"metadata": metadata, "payload": payload}
     
-    async def execute_task(self, task: Dict[str, Any]) -> Any:
+    # --- Métodos de Habilidades (Skills) ---
+    
+    async def _skill_habit_formation(self, input_data: HabitFormationInput) -> HabitFormationOutput:
         """
-        Ejecuta una tarea solicitada por el servidor A2A.
+        Skill para generar un plan de hábitos estructurado.
         
         Args:
-            task: Tarea a ejecutar
+            input_data: Datos de entrada para la skill
             
         Returns:
-            Any: Resultado de la tarea
+            HabitFormationOutput: Plan de hábitos generado
         """
+        logger.info(f"Ejecutando habilidad: _skill_habit_formation con input: {input_data.user_input[:30]}...")
+        
         try:
-            user_input = task.get("input", "")
-            context = task.get("context", {})
-            user_id = context.get("user_id")
-            session_id = context.get("session_id")
+            # Generar el plan de hábitos
+            habit_data = await self._generate_habit_plan(input_data.user_input, input_data.user_profile)
             
-            logger.info(f"Procesando consulta de motivación y comportamiento: {user_input}")
+            # Crear los pasos del hábito
+            steps = []
+            for step_data in habit_data.get("steps", []):
+                if isinstance(step_data, dict):
+                    steps.append(HabitStep(
+                        description=step_data.get("description", "Paso del hábito"),
+                        timeframe=step_data.get("timeframe", "1 semana"),
+                        difficulty=step_data.get("difficulty", "Media")
+                    ))
+                elif isinstance(step_data, str):
+                    steps.append(HabitStep(
+                        description=step_data,
+                        timeframe="Según sea necesario",
+                        difficulty="Media"
+                    ))
             
-            # Obtener perfil del usuario si está disponible
-            user_profile = None
-            if user_id:
-                # Intentar obtener el perfil del usuario del contexto primero
-                user_profile = context.get("user_profile", {})
-                if not user_profile:
-                    try:
-                        user_profile = self.supabase_client.get_user_profile(user_id)
-                        if user_profile:
-                            context["user_profile"] = user_profile
-                    except Exception as e:
-                        logger.warning(f"No se pudo obtener el perfil del usuario {user_id}: {e}")
+            # Si no hay pasos, crear al menos uno predeterminado
+            if not steps:
+                steps.append(HabitStep(
+                    description="Comenzar con una versión mínima del hábito",
+                    timeframe="1 semana",
+                    difficulty="Baja"
+                ))
             
-            # Construir el prompt para el modelo
-            prompt = self._build_prompt(user_input, user_profile)
-            
-            # Generar respuesta utilizando Gemini
-            response = await self.gemini_client.generate_response(
-                prompt=prompt,
-                temperature=0.7
+            # Crear el plan de hábitos
+            habit_plan = HabitPlan(
+                habit_name=habit_data.get("habit", "Hábito personalizado"),
+                cue=habit_data.get("cue", "Señal para iniciar el hábito"),
+                routine=habit_data.get("routine", "Acción a realizar"),
+                reward=habit_data.get("reward", "Recompensa por completar el hábito"),
+                implementation_intention=habit_data.get("implementation_intention", "Cuando X, haré Y"),
+                steps=steps,
+                tracking_method=habit_data.get("tracking_method", "Registro diario")
             )
             
-            # Registrar la interacción en Supabase si hay ID de usuario
-            if user_id:
-                self.supabase_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=user_input,
-                    response=response
-                )
-                
-                # Interactuar con MCPClient
-                await self.mcp_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=user_input,
-                    response=response
-                )
-                logger.info("Interacción con MCPClient registrada")
-            
-            # Crear artefactos si es necesario
-            artifacts = []
-            
-            # Si se menciona hábitos o rutinas, crear un artefacto de plan de hábitos
-            if any(keyword in user_input.lower() for keyword in ["hábito", "rutina", "costumbre", "disciplina"]):
-                habit_plan = await self._generate_habit_plan(user_input, user_profile)
-                
-                artifact_id = f"habit_plan_{uuid.uuid4().hex[:8]}"
-                artifact = self.create_artifact(
-                    artifact_id=artifact_id,
-                    artifact_type="habit_plan",
-                    parts=[
-                        self.create_data_part(habit_plan)
-                    ]
-                )
-                artifacts.append(artifact)
-            
-            # Si se menciona metas u objetivos, crear un artefacto de plan de metas
-            if any(keyword in user_input.lower() for keyword in ["meta", "objetivo", "propósito", "logro"]):
-                goal_plan = await self._generate_goal_plan(user_input, user_profile)
-                
-                artifact_id = f"goal_plan_{uuid.uuid4().hex[:8]}"
-                artifact = self.create_artifact(
-                    artifact_id=artifact_id,
-                    artifact_type="goal_plan",
-                    parts=[
-                        self.create_data_part(goal_plan)
-                    ]
-                )
-                artifacts.append(artifact)
-            
-            # Crear mensaje de respuesta
-            response_message = self.create_message(
-                role="agent",
-                parts=[
-                    self.create_text_part(response)
-                ]
-            )
-            
-            metadata = {
-                "status": "success",
-                "agent_id": self.agent_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            payload = {
-                "response": response,
-                "message": response_message,
-                "artifacts": artifacts
-            }
-            return {"metadata": metadata, "payload": payload}
-            
-        except Exception as e:
-            logger.error(f"Error en MotivationBehaviorCoach: {e}")
-            metadata = {
-                "status": "error",
-                "agent_id": self.agent_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            payload = {
-                "error": str(e),
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre motivación y comportamiento."
-            }
-            return {"metadata": metadata, "payload": payload}
-    
-    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
-        """
-        Procesa un mensaje recibido de otro agente.
-        
-        Args:
-            from_agent: ID del agente que envió el mensaje
-            content: Contenido del mensaje
-            
-        Returns:
-            Any: Respuesta al mensaje
-        """
-        try:
-            # Extraer información del mensaje
-            message_text = content.get("text", "")
-            context = content.get("context", {})
-            
-            logger.info(f"Procesando mensaje de agente {from_agent}: {message_text}")
-            
-            # Generar respuesta basada en el contenido del mensaje
-            prompt = f"""
-            Has recibido un mensaje del agente {from_agent}:
-            
-            "{message_text}"
-            
-            Responde con información relevante sobre motivación y cambio de comportamiento relacionada con este mensaje.
-            """
-            
-            response = await self.gemini_client.generate_response(prompt, temperature=0.7)
-            
-            # Crear mensaje de respuesta
-            response_message = self.create_message(
-                role="agent",
-                parts=[
-                    self.create_text_part(response)
-                ]
-            )
-            
-            metadata = {
-                "status": "success",
-                "agent_id": self.agent_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            payload = {
-                "response": response,
-                "message": response_message
-            }
-            return {"metadata": metadata, "payload": payload}
-            
-        except Exception as e:
-            logger.error(f"Error al procesar mensaje de agente {from_agent}: {e}")
-            metadata = {
-                "status": "error",
-                "agent_id": self.agent_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            payload = {
-                "error": str(e),
-                "response": f"Error procesando mensaje del agente {from_agent}."
-            }
-            return {"metadata": metadata, "payload": payload}
-    
-    def _build_prompt(self, user_input: str, user_profile: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Construye el prompt para el modelo de Gemini.
-        
-        Args:
-            user_input: La consulta del usuario
-            user_profile: Perfil del usuario
-            
-        Returns:
-            str: Prompt completo para el modelo
-        """
-        prompt = f"{self.system_instructions}\n\n"
-        
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            user_info = (
-                f"Información del usuario:\n"
-                f"- Edad: {user_profile.get('age', 'No disponible')}\n"
-                f"- Género: {user_profile.get('gender', 'No disponible')}\n"
-                f"- Objetivos: {user_profile.get('goals', 'No disponible')}\n"
-                f"- Preferencias: {user_profile.get('preferences', 'No disponible')}\n"
-                f"- Historial: {user_profile.get('history', 'No disponible')}"
-            )
-            prompt += user_info
-        
-        prompt += f"\n\nConsulta del usuario: {user_input}\n\n"
-        prompt += "Proporciona una respuesta detallada y personalizada basada en la ciencia del comportamiento."
-        
-        return prompt
-    
-    async def _skill_habit_formation(self, params: HabitFormationInput) -> HabitFormationOutput:
-        """
-        Skill para generar un plan de hábitos estructurado usando Pydantic.
-        """
-        logger.info(f"Skill 'habit_formation' llamada con user_input: {params.user_input[:30]}")
-        try:
-            plan_data = await self._generate_habit_plan(params.user_input, params.user_profile or {})
-            return HabitFormationOutput(**{"habit_plan": plan_data, "tips": plan_data.get("tips", []), "obstacles": plan_data.get("obstacles", []), "consistency_strategies": plan_data.get("consistency_strategies", [])})
-        except Exception as e:
-            logger.error(f"Error en skill 'habit_formation': {e}", exc_info=True)
+            # Crear la salida de la skill
             return HabitFormationOutput(
-                habit_plan=plan_data if 'plan_data' in locals() else None,
-                tips=[],
-                obstacles=[],
-                consistency_strategies=[]
+                habit_plan=habit_plan,
+                tips=habit_data.get("tips", ["Comienza pequeño", "Sé consistente", "Celebra los éxitos"]),
+                obstacles=habit_data.get("obstacles", [{"obstacle": "Falta de tiempo", "strategy": "Priorizar"}]),
+                consistency_strategies=habit_data.get("consistency_strategies", ["Establecer recordatorios"])
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en skill '_skill_habit_formation': {e}", exc_info=True)
+            # En caso de error, devolver un plan básico
+            return HabitFormationOutput(
+                habit_plan=HabitPlan(
+                    habit_name="Hábito personalizado",
+                    cue="Señal para iniciar el hábito",
+                    routine="Acción a realizar",
+                    reward="Recompensa por completar el hábito",
+                    implementation_intention="Cuando X, haré Y",
+                    steps=[HabitStep(
+                        description="Comenzar con una versión mínima del hábito",
+                        timeframe="1 semana",
+                        difficulty="Baja"
+                    )],
+                    tracking_method="Registro diario"
+                ),
+                tips=["Comienza pequeño", "Sé consistente", "Celebra los éxitos"],
+                obstacles=[{"obstacle": "Falta de tiempo", "strategy": "Priorizar"}],
+                consistency_strategies=["Establecer recordatorios"]
             )
     
     async def _generate_habit_plan(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -639,9 +379,18 @@ class MotivationBehaviorCoach(ADKAgent):
         Returns:
             Dict[str, Any]: Plan de hábitos estructurado
         """
-        # TODO: Integrar RAG para buscar estrategias específicas de formación de hábitos de la filosofía NGX.
-        # TODO: Usar mcp7_query para obtener historial de hábitos/preferencias del usuario desde Supabase.
-        # TODO: Usar mcp8_think si la definición de la meta SMART requiere varios pasos de refinamiento.
+        # Preparar información del usuario si está disponible
+        user_info = ""
+        if user_profile:
+            user_info = (
+                f"Información del usuario:\n"
+                f"- Edad: {user_profile.get('age', 'No disponible')}\n"
+                f"- Género: {user_profile.get('gender', 'No disponible')}\n"
+                f"- Objetivos: {user_profile.get('goals', 'No disponible')}\n"
+                f"- Preferencias: {user_profile.get('preferences', 'No disponible')}\n"
+                f"- Historial: {user_profile.get('history', 'No disponible')}"
+            )
+        
         prompt = (
             f"Eres un experto en formación de hábitos y cambio de comportamiento. "
             f"Un usuario quiere desarrollar un nuevo hábito: {user_input}\n\n"
@@ -665,30 +414,43 @@ class MotivationBehaviorCoach(ADKAgent):
                     # Si no se puede convertir, crear un diccionario básico
                     response = {
                         "habit": "Hábito principal a desarrollar",
+                        "cue": "Después de una actividad existente",
+                        "routine": "Acción específica a realizar",
+                        "reward": "Recompensa inmediata después de completar el hábito",
+                        "implementation_intention": "Cuando [situación específica], yo [acción específica]",
                         "duration": "66 días (tiempo promedio para formar un hábito)",
-                        "triggers": [
-                            "Después de una actividad existente",
-                            "A una hora específica del día",
-                            "En un lugar específico"
-                        ],
                         "steps": [
-                            "Paso 1: Comenzar con una versión mínima del hábito",
-                            "Paso 2: Incrementar gradualmente la dificultad",
-                            "Paso 3: Mantener consistencia diaria"
+                            {
+                                "description": "Paso 1: Comenzar con una versión mínima del hábito",
+                                "timeframe": "Semana 1-2",
+                                "difficulty": "Baja"
+                            },
+                            {
+                                "description": "Paso 2: Incrementar gradualmente la dificultad",
+                                "timeframe": "Semana 3-4",
+                                "difficulty": "Media"
+                            },
+                            {
+                                "description": "Paso 3: Mantener consistencia diaria",
+                                "timeframe": "Semana 5-10",
+                                "difficulty": "Alta"
+                            }
                         ],
-                        "tracking": {
-                            "method": "Registro diario en aplicación o diario",
-                            "metrics": "Consistencia, no perfección"
-                        },
-                        "relapse_strategies": [
+                        "tracking_method": "Registro diario en aplicación o diario",
+                        "tips": [
+                            "Comienza con una versión tan pequeña del hábito que sea imposible fallar",
+                            "Ancla el nuevo hábito a uno existente para crear un recordatorio natural",
+                            "Celebra inmediatamente después de completar el hábito para reforzar la conducta"
+                        ],
+                        "obstacles": [
+                            {"obstacle": "Falta de tiempo", "strategy": "Reducir el hábito a su versión mínima viable"},
+                            {"obstacle": "Olvido", "strategy": "Establecer recordatorios visuales en el entorno"},
+                            {"obstacle": "Pérdida de motivación", "strategy": "Conectar el hábito con valores personales profundos"}
+                        ],
+                        "consistency_strategies": [
                             "Regla de nunca fallar dos veces seguidas",
-                            "Identificar y eliminar obstáculos",
-                            "Ajustar el hábito si es demasiado difícil"
-                        ],
-                        "rewards": [
-                            "Recompensa inmediata después de completar el hábito",
-                            "Celebrar hitos (7 días, 30 días, etc.)",
-                            "Recompensas alineadas con los valores personales"
+                            "Seguimiento visual del progreso (ej. calendario marcado)",
+                            "Compromiso público con amigos o familia"
                         ]
                     }
             
@@ -698,31 +460,43 @@ class MotivationBehaviorCoach(ADKAgent):
             # Devolver un plan de hábitos básico en caso de error
             return {
                 "habit": "Hábito personalizado",
-                "duration": "66 días (tiempo promedio para formar un hábito)",
-                "triggers": ["Después de una actividad existente"],
-                "steps": ["Comenzar con una versión mínima del hábito"],
-                "tracking": {"method": "Registro diario"},
-                "relapse_strategies": ["Regla de nunca fallar dos veces seguidas"],
-                "rewards": ["Recompensa inmediata después de completar el hábito"]
+                "cue": "Después de una actividad existente",
+                "routine": "Acción específica a realizar",
+                "reward": "Recompensa inmediata",
+                "implementation_intention": "Cuando [situación], yo [acción]",
+                "duration": "66 días",
+                "steps": [
+                    {
+                        "description": "Comenzar con una versión mínima del hábito",
+                        "timeframe": "Semana 1-2",
+                        "difficulty": "Baja"
+                    }
+                ],
+                "tracking_method": "Registro diario",
+                "tips": ["Comienza pequeño", "Sé consistente", "Celebra los éxitos"],
+                "obstacles": [{"obstacle": "Falta de tiempo", "strategy": "Priorizar"}],
+                "consistency_strategies": ["Establecer recordatorios"]
             }
     
-    async def _skill_goal_setting(self, params: GoalSettingInput) -> GoalSettingOutput:
+    async def _skill_goal_setting(self, input_data: GoalSettingInput) -> GoalSettingOutput:
         """
         Skill para el establecimiento de metas.
         
         Genera un plan estructurado para establecer y alcanzar metas siguiendo el formato SMART.
         
         Args:
-            params: Parámetros de entrada para la skill
+            input_data: Parámetros de entrada para la skill
                 
         Returns:
             GoalSettingOutput: Plan de metas generado
         """
+        logger.info(f"Ejecutando habilidad: _skill_goal_setting con input: {input_data.user_input[:30]}...")
+        
         try:
             # Generar el plan de metas usando el input de Pydantic
             goal_plan_data = await self._generate_goal_plan(
-                params.user_input, 
-                params.user_profile
+                input_data.user_input, 
+                input_data.user_profile
             )
             
             # Convertir la respuesta al formato esperado
@@ -848,47 +622,58 @@ class MotivationBehaviorCoach(ADKAgent):
         Returns:
             Dict[str, Any]: Plan de metas estructurado
         """
-        # TODO: Integrar RAG para buscar marcos de establecimiento de metas (ej. WOOP, OKR) adaptados por NGX.
-        # TODO: Usar mcp7_query para obtener metas previas o métricas de progreso del usuario desde Supabase.
-        # TODO: Usar mcp8_think si la definición de la meta SMART requiere varios pasos de refinamiento.
-        prompt = f"""
-        Genera un plan de metas estructurado basado en la siguiente solicitud:
-        
-        "{user_input}"
-        
-        El plan debe incluir:
-        1. Meta principal (siguiendo el formato SMART)
-        2. Razón profunda o propósito de la meta
-        3. Submetas o hitos intermedios
-        4. Cronograma con fechas específicas
-        5. Recursos necesarios
-        6. Posibles obstáculos y estrategias para superarlos
-        7. Sistema de seguimiento del progreso
-        
-        Devuelve el plan en formato JSON estructurado.
-        """
-                            "key_dates": ["Fecha 1", "Fecha 2", "Fecha 3"]
+        try:
+            prompt = f"""
+            Genera un plan de metas estructurado basado en la siguiente solicitud:
+            
+            "{user_input}"
+            
+            El plan debe incluir:
+            1. Meta principal (siguiendo el formato SMART)
+            2. Razón profunda o propósito de la meta
+            3. Submetas o hitos intermedios
+            4. Cronograma con fechas específicas
+            5. Recursos necesarios
+            6. Posibles obstáculos y estrategias para superarlos
+            7. Sistema de seguimiento del progreso
+            
+            Devuelve el resultado en formato JSON estructurado.
+            """
+            
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += (
+                    "\n\nConsidera la siguiente información del usuario:\n"
+                    f"- Objetivos: {user_profile.get('goals', 'No disponible')}\n"
+                    f"- Desafíos: {user_profile.get('challenges', 'No disponible')}\n"
+                    f"- Preferencias: {user_profile.get('preferences', 'No disponible')}\n"
+                    f"- Historial: {user_profile.get('history', 'No disponible')}"
+                )
+            
+            # Generar el plan de metas
+            response = await self.gemini_client.generate_structured_output(prompt)
+            
+            # Si la respuesta no es un diccionario, intentar convertirla
+            if not isinstance(response, dict):
+                try:
+                    import json
+                    response = json.loads(response)
+                except Exception:
+                    # Si no se puede convertir, crear un diccionario básico
+                    response = {
+                        "main_goal": {
+                            "specific": "Meta específica",
+                            "measurable": "Cómo se medirá el éxito",
+                            "achievable": "Por qué es alcanzable",
+                            "relevant": "Por qué es relevante",
+                            "time_bound": "Fecha límite"
                         },
-                        "resources": [
-                            "Recurso 1 necesario",
-                            "Recurso 2 necesario",
-                            "Recurso 3 necesario"
-                        ],
-                        "obstacles": [
-                            {
-                                "description": "Posible obstáculo 1",
-                                "strategy": "Estrategia para superarlo"
-                            },
-                            {
-                                "description": "Posible obstáculo 2",
-                                "strategy": "Estrategia para superarlo"
-                            }
-                        ],
-                        "tracking": {
-                            "frequency": "Diaria/Semanal/Mensual",
-                            "method": "Método de seguimiento",
-                            "review_points": ["Punto de revisión 1", "Punto de revisión 2"]
-                        }
+                        "purpose": "Propósito de la meta",
+                        "milestones": [{"description": "Hito", "target_date": "Fecha", "metrics": "Métricas"}],
+                        "timeline": {"start_date": "Inicio", "end_date": "Fin", "key_dates": ["Fecha clave"]},
+                        "resources": ["Recurso necesario"],
+                        "obstacles": [{"description": "Obstáculo", "strategy": "Estrategia"}],
+                        "tracking": {"frequency": "Semanal", "method": "Método", "review_points": ["Revisión"]}
                     }
             
             return response
@@ -910,27 +695,29 @@ class MotivationBehaviorCoach(ADKAgent):
                 "obstacles": [{"description": "Obstáculo", "strategy": "Estrategia"}],
                 "tracking": {"frequency": "Semanal", "method": "Método", "review_points": ["Revisión"]}
             }
-
-    async def _skill_motivation_strategies(self, params: MotivationStrategiesInput) -> MotivationStrategiesOutput:
+    
+    async def _skill_motivation_strategies(self, input_data: MotivationStrategiesInput) -> MotivationStrategiesOutput:
         """
         Skill para generar estrategias de motivación personalizadas.
         
         Genera estrategias de motivación basadas en la ciencia del comportamiento y la psicología positiva.
         
         Args:
-            params: Parámetros de entrada para la skill
+            input_data: Parámetros de entrada para la skill
                 
         Returns:
             MotivationStrategiesOutput: Estrategias de motivación generadas
         """
+        logger.info(f"Ejecutando habilidad: _skill_motivation_strategies con input: {input_data.user_input[:30]}...")
+        
         try:
-            # Generar las estrategias de motivación usando el input de Pydantic
+            # Generar las estrategias de motivación
             motivation_data = await self._generate_motivation_strategies(
-                params.user_input, 
-                params.user_profile
+                input_data.user_input, 
+                input_data.user_profile
             )
             
-            # Convertir la respuesta al formato esperado
+            # Crear las estrategias de motivación
             strategies = []
             for strategy_data in motivation_data.get("strategies", []):
                 if isinstance(strategy_data, dict):
@@ -938,16 +725,16 @@ class MotivationBehaviorCoach(ADKAgent):
                         name=strategy_data.get("name", "Estrategia de motivación"),
                         description=strategy_data.get("description", "Descripción de la estrategia"),
                         implementation=strategy_data.get("implementation", "Pasos para implementar"),
-                        science_backed=strategy_data.get("science_backed", True),
-                        difficulty=strategy_data.get("difficulty", "Media")
+                        science_behind=strategy_data.get("science_behind", "Respaldado por investigaciones en psicología positiva"),
+                        example=strategy_data.get("example", "Ejemplo de aplicación")
                     ))
                 elif isinstance(strategy_data, str):
                     strategies.append(MotivationStrategy(
                         name=f"Estrategia: {strategy_data[:30]}...",
                         description=strategy_data,
                         implementation="Implementar según las circunstancias personales",
-                        science_backed=True,
-                        difficulty="Media"
+                        science_behind="Basado en principios de psicología positiva",
+                        example="Ejemplo personalizado"
                     ))
             
             # Si no hay estrategias, crear al menos una predeterminada
@@ -956,41 +743,32 @@ class MotivationBehaviorCoach(ADKAgent):
                     name="Visualización del éxito",
                     description="Visualizar el resultado deseado para aumentar la motivación",
                     implementation="Dedica 5 minutos cada mañana a visualizar el logro de tus objetivos",
-                    science_backed=True,
-                    difficulty="Baja"
+                    science_behind="Basado en investigaciones sobre neuroplasticidad y priming mental",
+                    example="Un atleta que visualiza su victoria antes de la competencia"
                 ))
             
-            # Devolver directamente el objeto MotivationStrategiesOutput
+            # Crear la salida de la skill
             return MotivationStrategiesOutput(
-                strategies=strategies,
                 analysis=motivation_data.get("analysis", "Análisis motivacional personalizado"),
-                recommended_strategy=motivation_data.get("recommended_strategy", strategies[0].name),
-                long_term_tips=motivation_data.get("long_term_tips", [
-                    "Mantén un registro de tus éxitos",
-                    "Celebra los pequeños logros",
-                    "Conecta tus acciones con tus valores personales"
-                ])
+                strategies=strategies,
+                daily_practices=motivation_data.get("daily_practices", ["Práctica diaria recomendada"]),
+                long_term_approach=motivation_data.get("long_term_approach", "Enfoque a largo plazo para mantener la motivación")
             )
+            
         except Exception as e:
-            logger.error(f"Error en _skill_motivation_strategies: {str(e)}")
-            # Devolver un objeto MotivationStrategiesOutput con valores predeterminados en caso de error
+            logger.error(f"Error en skill '_skill_motivation_strategies': {e}", exc_info=True)
+            # En caso de error, devolver estrategias básicas
             return MotivationStrategiesOutput(
-                strategies=[
-                    MotivationStrategy(
-                        name="Visualización del éxito",
-                        description="Visualizar el resultado deseado para aumentar la motivación",
-                        implementation="Dedica 5 minutos cada mañana a visualizar el logro de tus objetivos",
-                        science_backed=True,
-                        difficulty="Baja"
-                    )
-                ],
-                analysis=f"Error al generar análisis: {str(e)}",
-                recommended_strategy="Visualización del éxito",
-                long_term_tips=[
-                    "Mantén un registro de tus éxitos",
-                    "Celebra los pequeños logros",
-                    "Conecta tus acciones con tus valores personales"
-                ]
+                analysis="No se pudo generar un análisis completo debido a un error",
+                strategies=[MotivationStrategy(
+                    name="Visualización del éxito",
+                    description="Visualizar el resultado deseado para aumentar la motivación",
+                    implementation="Dedica 5 minutos cada mañana a visualizar el logro de tus objetivos",
+                    science_behind="Basado en investigaciones sobre neuroplasticidad y priming mental",
+                    example="Un atleta que visualiza su victoria antes de la competencia"
+                )],
+                daily_practices=["Práctica de gratitud diaria", "Meditación de 5 minutos", "Registro de logros"],
+                long_term_approach="Enfoque gradual y consistente, celebrando pequeños logros en el camino"
             )
     
     async def _generate_motivation_strategies(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1010,14 +788,14 @@ class MotivationBehaviorCoach(ADKAgent):
             f"El resultado debe incluir:\n"
             f"1. Análisis motivacional de la situación\n"
             f"2. Lista de estrategias de motivación aplicables (mínimo 3)\n"
-            f"3. Estrategia más recomendada\n"
-            f"4. Consejos para mantener la motivación a largo plazo\n\n"
+            f"3. Prácticas diarias recomendadas\n"
+            f"4. Enfoque a largo plazo\n\n"
             f"Para cada estrategia, incluye:\n"
             f"- Nombre de la estrategia\n"
             f"- Descripción detallada\n"
             f"- Pasos para implementarla\n"
-            f"- Si está respaldada por la ciencia (true/false)\n"
-            f"- Nivel de dificultad (Baja/Media/Alta)\n\n"
+            f"- Ciencia detrás de la estrategia\n"
+            f"- Ejemplo de aplicación\n\n"
             f"Devuelve el resultado en formato JSON estructurado."
         )
         
@@ -1049,30 +827,30 @@ class MotivationBehaviorCoach(ADKAgent):
                                 "name": "Visualización del éxito",
                                 "description": "Visualizar el resultado deseado para aumentar la motivación",
                                 "implementation": "Dedica 5 minutos cada mañana a visualizar el logro de tus objetivos",
-                                "science_backed": True,
-                                "difficulty": "Baja"
+                                "science_behind": "Basado en investigaciones sobre neuroplasticidad y priming mental",
+                                "example": "Un atleta que visualiza su victoria antes de la competencia"
                             },
                             {
                                 "name": "Establecimiento de micro-metas",
                                 "description": "Dividir objetivos grandes en pequeñas metas alcanzables",
                                 "implementation": "Identifica el próximo paso más pequeño y concéntrate solo en él",
-                                "science_backed": True,
-                                "difficulty": "Media"
+                                "science_behind": "Basado en la teoría del flujo y la psicología del logro",
+                                "example": "Escribir 100 palabras al día en lugar de proponerse terminar un libro"
                             },
                             {
                                 "name": "Técnica Pomodoro",
                                 "description": "Trabajar en intervalos de tiempo enfocados",
                                 "implementation": "Trabaja durante 25 minutos, luego descansa 5 minutos",
-                                "science_backed": True,
-                                "difficulty": "Baja"
+                                "science_behind": "Basado en investigaciones sobre atención y productividad",
+                                "example": "Estudiar con intervalos de descanso programados"
                             }
                         ],
-                        "recommended_strategy": "Establecimiento de micro-metas",
-                        "long_term_tips": [
-                            "Mantén un registro de tus éxitos",
-                            "Celebra los pequeños logros",
-                            "Conecta tus acciones con tus valores personales"
-                        ]
+                        "daily_practices": [
+                            "Práctica de gratitud diaria",
+                            "Meditación de 5 minutos",
+                            "Registro de logros"
+                        ],
+                        "long_term_approach": "Enfoque gradual y consistente, celebrando pequeños logros en el camino"
                     }
             
             return response
@@ -1086,128 +864,104 @@ class MotivationBehaviorCoach(ADKAgent):
                         "name": "Visualización del éxito",
                         "description": "Visualizar el resultado deseado para aumentar la motivación",
                         "implementation": "Dedica 5 minutos cada mañana a visualizar el logro de tus objetivos",
-                        "science_backed": True,
-                        "difficulty": "Baja"
+                        "science_behind": "Basado en investigaciones sobre neuroplasticidad y priming mental",
+                        "example": "Un atleta que visualiza su victoria antes de la competencia"
                     }
                 ],
-                "recommended_strategy": "Visualización del éxito",
-                "long_term_tips": ["Mantén un registro de tus éxitos"]
+                "daily_practices": ["Práctica de gratitud diaria"],
+                "long_term_approach": "Enfoque gradual y consistente"
             }
     
-    async def _skill_behavior_change(self, params: BehaviorChangeInput) -> BehaviorChangeOutput:
+    async def _skill_behavior_change(self, input_data: BehaviorChangeInput) -> BehaviorChangeOutput:
         """
         Skill para generar un plan de cambio de comportamiento personalizado.
         
         Genera un plan estructurado para cambiar comportamientos basado en la ciencia del comportamiento.
         
         Args:
-            params: Parámetros de entrada para la skill
+            input_data: Parámetros de entrada para la skill
                 
         Returns:
             BehaviorChangeOutput: Plan de cambio de comportamiento generado
         """
+        logger.info(f"Ejecutando habilidad: _skill_behavior_change con input: {input_data.user_input[:30]}...")
+        
         try:
-            # Generar el plan de cambio de comportamiento usando el input de Pydantic
+            # Generar el plan de cambio de comportamiento
             behavior_data = await self._generate_behavior_change_plan(
-                params.user_input, 
-                params.user_profile
+                input_data.user_input, 
+                input_data.user_profile
             )
             
-            # Crear las fases del plan
-            phases = []
-            for phase_data in behavior_data.get("phases", []):
-                if isinstance(phase_data, dict):
-                    steps = []
-                    for step_data in phase_data.get("steps", []):
-                        if isinstance(step_data, dict):
-                            steps.append(BehaviorChangeStep(
-                                description=step_data.get("description", "Paso del plan"),
-                                duration=step_data.get("duration", "1 semana"),
-                                metrics=step_data.get("metrics", ["Progreso general"]),
-                                resources=step_data.get("resources", [])
-                            ))
-                        elif isinstance(step_data, str):
-                            steps.append(BehaviorChangeStep(
-                                description=step_data,
-                                duration="Según sea necesario",
-                                metrics=["Progreso general"],
-                                resources=[]
-                            ))
-                    
-                    phases.append(BehaviorChangePhase(
-                        name=phase_data.get("name", "Fase del plan"),
-                        description=phase_data.get("description", "Descripción de la fase"),
-                        duration=phase_data.get("duration", "2-4 semanas"),
-                        steps=steps
+            # Crear las etapas del plan
+            stages = []
+            for stage_data in behavior_data.get("stages", []):
+                if isinstance(stage_data, dict):
+                    stages.append(BehaviorChangeStage(
+                        stage_name=stage_data.get("stage_name", "Etapa del cambio"),
+                        description=stage_data.get("description", "Descripción de la etapa"),
+                        strategies=stage_data.get("strategies", ["Estrategia recomendada"]),
+                        duration=stage_data.get("duration", "2-4 semanas"),
+                        success_indicators=stage_data.get("success_indicators", ["Indicador de éxito"])
                     ))
-                elif isinstance(phase_data, str):
-                    phases.append(BehaviorChangePhase(
-                        name=f"Fase: {phase_data[:30]}...",
-                        description=phase_data,
-                        duration="Según sea necesario",
-                        steps=[BehaviorChangeStep(
-                            description="Implementar según las circunstancias personales",
-                            duration="Variable",
-                            metrics=["Progreso general"],
-                            resources=[]
-                        )]
+                elif isinstance(stage_data, str):
+                    stages.append(BehaviorChangeStage(
+                        stage_name=f"Etapa: {stage_data[:30]}...",
+                        description=stage_data,
+                        strategies=["Estrategia personalizada"],
+                        duration="Variable",
+                        success_indicators=["Progreso visible"]
                     ))
             
-            # Si no hay fases, crear al menos una predeterminada
-            if not phases:
-                phases.append(BehaviorChangePhase(
-                    name="Fase de preparación",
+            # Si no hay etapas, crear al menos una predeterminada
+            if not stages:
+                stages.append(BehaviorChangeStage(
+                    stage_name="Etapa de preparación",
                     description="Preparación para el cambio de comportamiento",
+                    strategies=["Identificar desencadenantes", "Establecer metas claras"],
                     duration="2 semanas",
-                    steps=[
-                        BehaviorChangeStep(
-                            description="Identificar el comportamiento específico a cambiar",
-                            duration="3 días",
-                            metrics=["Claridad del objetivo"],
-                            resources=[]
-                        ),
-                        BehaviorChangeStep(
-                            description="Establecer una meta SMART",
-                            duration="2 días",
-                            metrics=["Calidad de la meta"],
-                            resources=[]
-                        )
-                    ]
+                    success_indicators=["Plan detallado completado", "Compromiso establecido"]
                 ))
             
-            # Devolver directamente el objeto BehaviorChangeOutput
-            return BehaviorChangeOutput(
+            # Crear el plan de cambio de comportamiento
+            behavior_plan = BehaviorChangePlan(
                 target_behavior=behavior_data.get("target_behavior", "Comportamiento objetivo"),
                 current_state=behavior_data.get("current_state", "Estado actual del comportamiento"),
                 desired_state=behavior_data.get("desired_state", "Estado deseado del comportamiento"),
-                motivation_factors=behavior_data.get("motivation_factors", ["Factor motivacional"]),
-                potential_obstacles=behavior_data.get("potential_obstacles", ["Obstáculo potencial"]),
-                phases=phases,
-                tracking_method=behavior_data.get("tracking_method", "Método de seguimiento diario"),
-                support_resources=behavior_data.get("support_resources", ["Recurso de apoyo"])
+                stages=stages,
+                psychological_techniques=behavior_data.get("psychological_techniques", ["Técnica psicológica recomendada"]),
+                environmental_adjustments=behavior_data.get("environmental_adjustments", ["Ajuste ambiental recomendado"]),
+                support_systems=behavior_data.get("support_systems", ["Sistema de apoyo recomendado"])
             )
-        except Exception as e:
-            logger.error(f"Error en _skill_behavior_change: {str(e)}")
-            # Devolver un objeto BehaviorChangeOutput con valores predeterminados en caso de error
+            
+            # Crear la salida de la skill
             return BehaviorChangeOutput(
-                target_behavior="Comportamiento no especificado",
-                current_state=f"Error: {str(e)}",
-                desired_state="Estado deseado no especificado",
-                motivation_factors=["Factor motivacional no especificado"],
-                potential_obstacles=["Error en la generación del plan"],
-                phases=[BehaviorChangePhase(
-                    name="Fase de error",
-                    description=f"No se pudo generar el plan debido a: {str(e)}",
-                    duration="N/A",
-                    steps=[BehaviorChangeStep(
-                        description="Intenta nuevamente con más detalles",
-                        duration="N/A",
-                        metrics=["N/A"],
-                        resources=["Consulta a un profesional"]
-                    )]
-                )],
-                tracking_method="No disponible",
-                support_resources=["Consulta a un profesional"]
+                behavior_plan=behavior_plan,
+                estimated_timeline=behavior_data.get("estimated_timeline", "3-6 meses"),
+                success_probability_factors=behavior_data.get("success_probability_factors", ["Factor que afecta la probabilidad de éxito"])
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en skill '_skill_behavior_change': {e}", exc_info=True)
+            # En caso de error, devolver un plan básico
+            return BehaviorChangeOutput(
+                behavior_plan=BehaviorChangePlan(
+                    target_behavior="Comportamiento objetivo",
+                    current_state="Estado actual",
+                    desired_state="Estado deseado",
+                    stages=[BehaviorChangeStage(
+                        stage_name="Etapa de preparación",
+                        description="Preparación para el cambio",
+                        strategies=["Identificar desencadenantes"],
+                        duration="2 semanas",
+                        success_indicators=["Plan completado"]
+                    )],
+                    psychological_techniques=["Técnica recomendada"],
+                    environmental_adjustments=["Ajuste recomendado"],
+                    support_systems=["Sistema de apoyo"]
+                ),
+                estimated_timeline="3-6 meses",
+                success_probability_factors=["Compromiso personal"]
             )
     
     async def _generate_behavior_change_plan(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1228,21 +982,18 @@ class MotivationBehaviorCoach(ADKAgent):
             f"1. Comportamiento objetivo a cambiar\n"
             f"2. Estado actual del comportamiento\n"
             f"3. Estado deseado del comportamiento\n"
-            f"4. Factores motivacionales (qué motiva al usuario)\n"
-            f"5. Obstáculos potenciales\n"
-            f"6. Fases del plan de cambio (mínimo 3 fases)\n"
-            f"7. Método de seguimiento\n"
-            f"8. Recursos de apoyo\n\n"
-            f"Para cada fase, incluye:\n"
-            f"- Nombre de la fase\n"
+            f"4. Etapas del cambio (mínimo 3)\n"
+            f"5. Técnicas psicológicas recomendadas\n"
+            f"6. Ajustes ambientales recomendados\n"
+            f"7. Sistemas de apoyo recomendados\n"
+            f"8. Línea de tiempo estimada\n"
+            f"9. Factores que afectan la probabilidad de éxito\n\n"
+            f"Para cada etapa, incluye:\n"
+            f"- Nombre de la etapa\n"
             f"- Descripción detallada\n"
+            f"- Estrategias específicas\n"
             f"- Duración estimada\n"
-            f"- Pasos específicos a seguir\n\n"
-            f"Para cada paso, incluye:\n"
-            f"- Descripción detallada\n"
-            f"- Duración estimada\n"
-            f"- Métricas para medir el progreso\n"
-            f"- Recursos necesarios\n\n"
+            f"- Indicadores de éxito\n\n"
             f"Devuelve el resultado en formato JSON estructurado."
         )
         
@@ -1271,57 +1022,50 @@ class MotivationBehaviorCoach(ADKAgent):
                         "target_behavior": "Comportamiento objetivo",
                         "current_state": "Estado actual del comportamiento",
                         "desired_state": "Estado deseado del comportamiento",
-                        "motivation_factors": ["Salud", "Bienestar", "Productividad"],
-                        "potential_obstacles": ["Falta de tiempo", "Distracciones", "Falta de apoyo"],
-                        "phases": [
+                        "stages": [
                             {
-                                "name": "Fase de preparación",
+                                "stage_name": "Etapa de preparación",
                                 "description": "Preparación para el cambio de comportamiento",
+                                "strategies": ["Identificar desencadenantes", "Establecer metas claras"],
                                 "duration": "2 semanas",
-                                "steps": [
-                                    {
-                                        "description": "Identificar el comportamiento específico a cambiar",
-                                        "duration": "3 días",
-                                        "metrics": ["Claridad del objetivo"],
-                                        "resources": []
-                                    },
-                                    {
-                                        "description": "Establecer una meta SMART",
-                                        "duration": "2 días",
-                                        "metrics": ["Calidad de la meta"],
-                                        "resources": []
-                                    }
-                                ]
+                                "success_indicators": ["Plan detallado completado", "Compromiso establecido"]
                             },
                             {
-                                "name": "Fase de acción",
-                                "description": "Implementación del cambio de comportamiento",
-                                "duration": "4 semanas",
-                                "steps": [
-                                    {
-                                        "description": "Implementar el nuevo comportamiento diariamente",
-                                        "duration": "4 semanas",
-                                        "metrics": ["Frecuencia", "Consistencia"],
-                                        "resources": ["Aplicación de seguimiento"]
-                                    }
-                                ]
+                                "stage_name": "Etapa de acción",
+                                "description": "Implementación activa del cambio",
+                                "strategies": ["Práctica diaria", "Seguimiento de progreso"],
+                                "duration": "4-8 semanas",
+                                "success_indicators": ["Consistencia en nuevos comportamientos", "Reducción de comportamientos antiguos"]
                             },
                             {
-                                "name": "Fase de mantenimiento",
-                                "description": "Consolidar el nuevo comportamiento",
-                                "duration": "Continua",
-                                "steps": [
-                                    {
-                                        "description": "Revisar y ajustar el plan según sea necesario",
-                                        "duration": "Semanal",
-                                        "metrics": ["Sostenibilidad"],
-                                        "resources": []
-                                    }
-                                ]
+                                "stage_name": "Etapa de mantenimiento",
+                                "description": "Consolidación del nuevo comportamiento",
+                                "strategies": ["Prevención de recaídas", "Integración en la rutina diaria"],
+                                "duration": "3-6 meses",
+                                "success_indicators": ["Automatización del comportamiento", "Resistencia a tentaciones"]
                             }
                         ],
-                        "tracking_method": "Registro diario en aplicación",
-                        "support_resources": ["Grupo de apoyo", "Aplicación de seguimiento", "Coach personal"]
+                        "psychological_techniques": [
+                            "Reestructuración cognitiva",
+                            "Establecimiento de intenciones de implementación",
+                            "Técnicas de mindfulness"
+                        ],
+                        "environmental_adjustments": [
+                            "Modificación del entorno físico",
+                            "Eliminación de desencadenantes",
+                            "Creación de recordatorios visuales"
+                        ],
+                        "support_systems": [
+                            "Grupo de apoyo",
+                            "Mentor o coach",
+                            "Aplicación de seguimiento"
+                        ],
+                        "estimated_timeline": "3-6 meses para cambio sostenible",
+                        "success_probability_factors": [
+                            "Nivel de compromiso personal",
+                            "Calidad del sistema de apoyo",
+                            "Manejo efectivo de recaídas"
+                        ]
                     }
             
             return response
@@ -1330,135 +1074,124 @@ class MotivationBehaviorCoach(ADKAgent):
             # Devolver un plan básico en caso de error
             return {
                 "target_behavior": "Comportamiento objetivo",
-                "current_state": "Estado actual del comportamiento",
-                "desired_state": "Estado deseado del comportamiento",
-                "motivation_factors": ["Salud", "Bienestar"],
-                "potential_obstacles": ["Falta de tiempo"],
-                "phases": [
+                "current_state": "Estado actual",
+                "desired_state": "Estado deseado",
+                "stages": [
                     {
-                        "name": "Fase de preparación",
-                        "description": "Preparación para el cambio de comportamiento",
+                        "stage_name": "Etapa de preparación",
+                        "description": "Preparación para el cambio",
+                        "strategies": ["Identificar desencadenantes"],
                         "duration": "2 semanas",
-                        "steps": [
-                            {
-                                "description": "Identificar el comportamiento específico a cambiar",
-                                "duration": "3 días",
-                                "metrics": ["Claridad del objetivo"],
-                                "resources": []
-                            }
-                        ]
+                        "success_indicators": ["Plan completado"]
                     }
                 ],
-                "tracking_method": "Registro diario",
-                "support_resources": ["Grupo de apoyo"]
+                "psychological_techniques": ["Técnica recomendada"],
+                "environmental_adjustments": ["Ajuste recomendado"],
+                "support_systems": ["Sistema de apoyo"],
+                "estimated_timeline": "3-6 meses",
+                "success_probability_factors": ["Compromiso personal"]
             }
     
-    async def _skill_obstacle_management(self, params: ObstacleManagementInput) -> ObstacleManagementOutput:
+    async def _skill_obstacle_management(self, input_data: ObstacleManagementInput) -> ObstacleManagementOutput:
         """
         Skill para generar estrategias de manejo de obstáculos personalizadas.
         
         Genera estrategias para superar obstáculos específicos que impiden el logro de metas.
         
         Args:
-            params: Parámetros de entrada para la skill
+            input_data: Parámetros de entrada para la skill
                 
         Returns:
             ObstacleManagementOutput: Estrategias de manejo de obstáculos generadas
         """
+        logger.info(f"Ejecutando habilidad: _skill_obstacle_management con input: {input_data.user_input[:30]}...")
+        
         try:
-            # Generar el plan de manejo de obstáculos usando el input de Pydantic
+            # Generar el plan de manejo de obstáculos
             obstacle_data = await self._generate_obstacle_management_plan(
-                params.user_input, 
-                params.user_profile
+                input_data.user_input, 
+                input_data.user_profile
             )
             
-            # Crear los obstáculos y estrategias
-            obstacles = []
-            for obstacle_info in obstacle_data.get("obstacles", []):
-                if isinstance(obstacle_info, dict):
-                    strategies = []
-                    for strategy_info in obstacle_info.get("strategies", []):
-                        if isinstance(strategy_info, dict):
-                            strategies.append(ObstacleStrategy(
-                                description=strategy_info.get("description", "Estrategia para superar el obstáculo"),
-                                implementation=strategy_info.get("implementation", "Pasos para implementar la estrategia"),
-                                effectiveness=strategy_info.get("effectiveness", "Media"),
-                                effort_required=strategy_info.get("effort_required", "Medio")
-                            ))
-                        elif isinstance(strategy_info, str):
-                            strategies.append(ObstacleStrategy(
-                                description=strategy_info,
-                                implementation="Implementar según las circunstancias personales",
-                                effectiveness="Media",
-                                effort_required="Medio"
-                            ))
-                    
-                    obstacles.append(Obstacle(
-                        name=obstacle_info.get("name", "Obstáculo"),
-                        description=obstacle_info.get("description", "Descripción del obstáculo"),
-                        impact=obstacle_info.get("impact", "Medio"),
-                        strategies=strategies
-                    ))
-                elif isinstance(obstacle_info, str):
-                    obstacles.append(Obstacle(
-                        name=f"Obstáculo: {obstacle_info[:30]}...",
-                        description=obstacle_info,
-                        impact="Medio",
-                        strategies=[ObstacleStrategy(
-                            description="Estrategia genérica para superar el obstáculo",
-                            implementation="Implementar según las circunstancias personales",
-                            effectiveness="Media",
-                            effort_required="Medio"
-                        )]
+            # Crear el análisis del obstáculo
+            obstacle_analysis = ObstacleAnalysis(
+                nature=obstacle_data.get("nature", "Naturaleza del obstáculo"),
+                impact=obstacle_data.get("impact", "Impacto del obstáculo"),
+                frequency=obstacle_data.get("frequency", "Frecuencia con la que aparece"),
+                triggers=obstacle_data.get("triggers", ["Desencadenante del obstáculo"]),
+                past_attempts=obstacle_data.get("past_attempts", "No hay intentos previos registrados")
+            )
+            
+            # Crear la solución principal
+            primary_solution_data = obstacle_data.get("primary_solution", {})
+            primary_solution = ObstacleSolution(
+                strategy=primary_solution_data.get("strategy", "Estrategia principal"),
+                implementation=primary_solution_data.get("implementation", "Pasos para implementar"),
+                expected_outcome=primary_solution_data.get("expected_outcome", "Resultado esperado"),
+                alternative_approaches=primary_solution_data.get("alternative_approaches", ["Enfoque alternativo"]),
+                resources_needed=primary_solution_data.get("resources_needed", ["Recurso necesario"])
+            )
+            
+            # Crear soluciones alternativas
+            alternative_solutions = []
+            for solution_data in obstacle_data.get("alternative_solutions", []):
+                if isinstance(solution_data, dict):
+                    alternative_solutions.append(ObstacleSolution(
+                        strategy=solution_data.get("strategy", "Estrategia alternativa"),
+                        implementation=solution_data.get("implementation", "Pasos para implementar"),
+                        expected_outcome=solution_data.get("expected_outcome", "Resultado esperado"),
+                        alternative_approaches=solution_data.get("alternative_approaches", ["Enfoque alternativo"]),
+                        resources_needed=solution_data.get("resources_needed", ["Recurso necesario"])
                     ))
             
-            # Si no hay obstáculos, crear al menos uno predeterminado
-            if not obstacles:
-                obstacles.append(Obstacle(
-                    name="Falta de tiempo",
-                    description="Dificultad para encontrar tiempo para dedicar a la meta",
-                    impact="Alto",
-                    strategies=[
-                        ObstacleStrategy(
-                            description="Priorizar y programar",
-                            implementation="Reservar bloques de tiempo específicos en el calendario",
-                            effectiveness="Alta",
-                            effort_required="Bajo"
-                        )
-                    ]
+            # Si no hay soluciones alternativas, crear al menos una predeterminada
+            if not alternative_solutions:
+                alternative_solutions.append(ObstacleSolution(
+                    strategy="Enfoque alternativo",
+                    implementation="Implementación alternativa",
+                    expected_outcome="Resultado esperado alternativo",
+                    alternative_approaches=["Otro enfoque posible"],
+                    resources_needed=["Recurso adicional"]
                 ))
             
-            # Devolver directamente el objeto ObstacleManagementOutput
+            # Crear la salida de la skill
             return ObstacleManagementOutput(
-                goal=obstacle_data.get("goal", "Meta relacionada"),
-                obstacles=obstacles,
-                general_approach=obstacle_data.get("general_approach", "Enfoque general para manejar obstáculos"),
+                obstacle_analysis=obstacle_analysis,
+                primary_solution=primary_solution,
+                alternative_solutions=alternative_solutions,
                 prevention_strategies=obstacle_data.get("prevention_strategies", ["Estrategia de prevención"]),
-                contingency_plan=obstacle_data.get("contingency_plan", "Plan de contingencia general")
+                mindset_adjustments=obstacle_data.get("mindset_adjustments", ["Ajuste de mentalidad recomendado"])
             )
+            
         except Exception as e:
-            logger.error(f"Error en _skill_obstacle_management: {str(e)}")
-            # Devolver un objeto ObstacleManagementOutput con valores predeterminados en caso de error
+            logger.error(f"Error en skill '_skill_obstacle_management': {e}", exc_info=True)
+            # En caso de error, devolver estrategias básicas
             return ObstacleManagementOutput(
-                goal="Meta no especificada",
-                obstacles=[
-                    Obstacle(
-                        name="Error en la generación",
-                        description=f"No se pudo generar el plan debido a: {str(e)}",
-                        impact="Alto",
-                        strategies=[
-                            ObstacleStrategy(
-                                description="Intenta nuevamente con más detalles",
-                                implementation="Proporciona información más específica sobre el obstáculo",
-                                effectiveness="Media",
-                                effort_required="Bajo"
-                            )
-                        ]
+                obstacle_analysis=ObstacleAnalysis(
+                    nature="Naturaleza del obstáculo",
+                    impact="Impacto del obstáculo",
+                    frequency="Frecuencia con la que aparece",
+                    triggers=["Desencadenante del obstáculo"],
+                    past_attempts="No hay intentos previos registrados"
+                ),
+                primary_solution=ObstacleSolution(
+                    strategy="Estrategia principal",
+                    implementation="Pasos para implementar",
+                    expected_outcome="Resultado esperado",
+                    alternative_approaches=["Enfoque alternativo"],
+                    resources_needed=["Recurso necesario"]
+                ),
+                alternative_solutions=[
+                    ObstacleSolution(
+                        strategy="Enfoque alternativo",
+                        implementation="Implementación alternativa",
+                        expected_outcome="Resultado esperado alternativo",
+                        alternative_approaches=["Otro enfoque posible"],
+                        resources_needed=["Recurso adicional"]
                     )
                 ],
-                general_approach="Enfoque no disponible debido a un error",
-                prevention_strategies=["Intenta nuevamente con más detalles"],
-                contingency_plan="Plan de contingencia no disponible"
+                prevention_strategies=["Estrategia de prevención"],
+                mindset_adjustments=["Ajuste de mentalidad recomendado"]
             )
     
     async def _generate_obstacle_management_plan(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1476,21 +1209,11 @@ class MotivationBehaviorCoach(ADKAgent):
             f"Genera un plan de manejo de obstáculos basado en la siguiente solicitud:\n\n"
             f"\"{user_input}\"\n\n"
             f"El resultado debe incluir:\n"
-            f"1. Meta relacionada\n"
-            f"2. Lista de obstáculos potenciales (mínimo 3)\n"
-            f"3. Enfoque general para manejar obstáculos\n"
+            f"1. Análisis del obstáculo (naturaleza, impacto, frecuencia, desencadenantes, intentos previos)\n"
+            f"2. Solución principal (estrategia, implementación, resultado esperado, enfoques alternativos, recursos necesarios)\n"
+            f"3. Soluciones alternativas (mínimo 2)\n"
             f"4. Estrategias de prevención\n"
-            f"5. Plan de contingencia general\n\n"
-            f"Para cada obstáculo, incluye:\n"
-            f"- Nombre del obstáculo\n"
-            f"- Descripción detallada\n"
-            f"- Nivel de impacto (Bajo/Medio/Alto)\n"
-            f"- Estrategias específicas para superarlo (mínimo 2 por obstáculo)\n\n"
-            f"Para cada estrategia, incluye:\n"
-            f"- Descripción detallada\n"
-            f"- Pasos para implementarla\n"
-            f"- Nivel de efectividad esperada (Baja/Media/Alta)\n"
-            f"- Nivel de esfuerzo requerido (Bajo/Medio/Alto)\n\n"
+            f"5. Ajustes de mentalidad recomendados\n\n"
             f"Devuelve el resultado en formato JSON estructurado."
         )
         
@@ -1516,73 +1239,44 @@ class MotivationBehaviorCoach(ADKAgent):
                 except Exception:
                     # Si no se puede convertir, crear un diccionario básico
                     response = {
-                        "goal": "Meta relacionada",
-                        "obstacles": [
+                        "nature": "Naturaleza del obstáculo",
+                        "impact": "Alto",
+                        "frequency": "Frecuente",
+                        "triggers": ["Situación estresante", "Falta de tiempo", "Presión social"],
+                        "past_attempts": "Intentos previos con éxito limitado",
+                        "primary_solution": {
+                            "strategy": "Estrategia principal recomendada",
+                            "implementation": "Pasos detallados para implementar la estrategia",
+                            "expected_outcome": "Resultado esperado de la implementación",
+                            "alternative_approaches": ["Variación 1", "Variación 2"],
+                            "resources_needed": ["Tiempo", "Apoyo social", "Herramientas específicas"]
+                        },
+                        "alternative_solutions": [
                             {
-                                "name": "Falta de tiempo",
-                                "description": "Dificultad para encontrar tiempo para dedicar a la meta",
-                                "impact": "Alto",
-                                "strategies": [
-                                    {
-                                        "description": "Priorizar y programar",
-                                        "implementation": "Reservar bloques de tiempo específicos en el calendario",
-                                        "effectiveness": "Alta",
-                                        "effort_required": "Bajo"
-                                    },
-                                    {
-                                        "description": "Eliminar distracciones",
-                                        "implementation": "Identificar y minimizar las actividades que consumen tiempo innecesariamente",
-                                        "effectiveness": "Media",
-                                        "effort_required": "Medio"
-                                    }
-                                ]
+                                "strategy": "Estrategia alternativa 1",
+                                "implementation": "Pasos para implementar esta alternativa",
+                                "expected_outcome": "Resultado esperado de esta alternativa",
+                                "alternative_approaches": ["Variación A", "Variación B"],
+                                "resources_needed": ["Recursos para esta alternativa"]
                             },
                             {
-                                "name": "Falta de motivación",
-                                "description": "Dificultad para mantener la motivación a lo largo del tiempo",
-                                "impact": "Alto",
-                                "strategies": [
-                                    {
-                                        "description": "Establecer recompensas",
-                                        "implementation": "Crear un sistema de recompensas para celebrar los logros",
-                                        "effectiveness": "Alta",
-                                        "effort_required": "Bajo"
-                                    },
-                                    {
-                                        "description": "Buscar apoyo social",
-                                        "implementation": "Compartir metas con amigos o familiares para aumentar la responsabilidad",
-                                        "effectiveness": "Alta",
-                                        "effort_required": "Medio"
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "Falta de conocimiento",
-                                "description": "Carencia de habilidades o conocimientos necesarios para lograr la meta",
-                                "impact": "Medio",
-                                "strategies": [
-                                    {
-                                        "description": "Buscar educación",
-                                        "implementation": "Identificar recursos educativos relevantes y dedicar tiempo al aprendizaje",
-                                        "effectiveness": "Alta",
-                                        "effort_required": "Alto"
-                                    },
-                                    {
-                                        "description": "Buscar mentoría",
-                                        "implementation": "Encontrar un mentor o coach que pueda proporcionar orientación",
-                                        "effectiveness": "Alta",
-                                        "effort_required": "Medio"
-                                    }
-                                ]
+                                "strategy": "Estrategia alternativa 2",
+                                "implementation": "Pasos para implementar esta segunda alternativa",
+                                "expected_outcome": "Resultado esperado de esta segunda alternativa",
+                                "alternative_approaches": ["Variación X", "Variación Y"],
+                                "resources_needed": ["Recursos para esta segunda alternativa"]
                             }
                         ],
-                        "general_approach": "Enfoque proactivo para identificar obstáculos potenciales y desarrollar estrategias para superarlos antes de que ocurran",
                         "prevention_strategies": [
-                            "Planificación regular y revisión de progreso",
-                            "Mantener una mentalidad flexible y adaptable",
-                            "Construir un sistema de apoyo sólido"
+                            "Estrategia preventiva 1",
+                            "Estrategia preventiva 2",
+                            "Estrategia preventiva 3"
                         ],
-                        "contingency_plan": "Si se encuentra con un obstáculo imprevisto, tomar un paso atrás, evaluar la situación, ajustar el plan según sea necesario y continuar avanzando"
+                        "mindset_adjustments": [
+                            "Ajuste de mentalidad 1",
+                            "Ajuste de mentalidad 2",
+                            "Ajuste de mentalidad 3"
+                        ]
                     }
             
             return response
@@ -1590,213 +1284,27 @@ class MotivationBehaviorCoach(ADKAgent):
             logger.error(f"Error en _generate_obstacle_management_plan: {str(e)}")
             # Devolver un plan básico en caso de error
             return {
-                "goal": "Meta relacionada",
-                "obstacles": [
+                "nature": "Naturaleza del obstáculo",
+                "impact": "Impacto del obstáculo",
+                "frequency": "Frecuencia con la que aparece",
+                "triggers": ["Desencadenante del obstáculo"],
+                "past_attempts": "No hay intentos previos registrados",
+                "primary_solution": {
+                    "strategy": "Estrategia principal",
+                    "implementation": "Pasos para implementar",
+                    "expected_outcome": "Resultado esperado",
+                    "alternative_approaches": ["Enfoque alternativo"],
+                    "resources_needed": ["Recurso necesario"]
+                },
+                "alternative_solutions": [
                     {
-                        "name": "Falta de tiempo",
-                        "description": "Dificultad para encontrar tiempo para dedicar a la meta",
-                        "impact": "Alto",
-                        "strategies": [
-                            {
-                                "description": "Priorizar y programar",
-                                "implementation": "Reservar bloques de tiempo específicos en el calendario",
-                                "effectiveness": "Alta",
-                                "effort_required": "Bajo"
-                            }
-                        ]
+                        "strategy": "Estrategia alternativa",
+                        "implementation": "Implementación alternativa",
+                        "expected_outcome": "Resultado esperado alternativo",
+                        "alternative_approaches": ["Otro enfoque posible"],
+                        "resources_needed": ["Recurso adicional"]
                     }
                 ],
-                "general_approach": "Enfoque proactivo para identificar y superar obstáculos",
-                "prevention_strategies": ["Planificación regular"],
-                "contingency_plan": "Ajustar el plan según sea necesario"
+                "prevention_strategies": ["Estrategia de prevención"],
+                "mindset_adjustments": ["Ajuste de mentalidad recomendado"]
             }
-    
-    def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
-        
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada
-        """
-        return self.agent_card.to_dict()
-
-    async def process_async(self, input_text: str, user_id: Optional[str] = None, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """
-        Implementación asíncrona del procesamiento del agente MotivationBehaviorCoach.
-
-        Sobrescribe el método de la clase base para proporcionar la implementación
-        específica del agente especializado en motivación y cambio de comportamiento.
-
-        Args:
-            input_text (str): Texto de entrada del usuario.
-            user_id (Optional[str]): ID del usuario (opcional).
-            session_id (Optional[str]): ID de la sesión (opcional).
-            **kwargs: Argumentos adicionales como context, parameters, etc.
-
-        Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente.
-        """
-        try:
-            start_time = time.time()
-            logger.info(f"Ejecutando MotivationBehaviorCoach con input: {input_text[:50]}...")
-            
-            # Generar session_id si no se proporciona
-            if not session_id:
-                session_id = str(uuid.uuid4())
-                logger.info(f"Generando nuevo session_id: {session_id}")
-            
-            # Obtener el contexto de la conversación
-            context = await self._get_context(user_id, session_id) if user_id else {}
-            
-            # Obtener perfil del usuario si está disponible
-            user_profile = None
-            if user_id:
-                # Intentar obtener el perfil del usuario del contexto primero
-                user_profile = context.get("user_profile", {})
-                if not user_profile:
-                    try:
-                        user_profile = self.supabase_client.get_user_profile(user_id)
-                        if user_profile:
-                            context["user_profile"] = user_profile
-                    except Exception as e:
-                        logger.warning(f"No se pudo obtener el perfil del usuario {user_id}: {e}")
-            
-            # Determinar el tipo de tarea basado en palabras clave
-            lower_input = input_text.lower()
-            
-            # Clasificar la consulta
-            if any(kw in lower_input for kw in ["hábito", "costumbre", "rutina", "consistencia"]):
-                # Generar un plan de hábitos estructurado
-                result = await self._generate_habit_plan(input_text, user_profile)
-                
-                # Generar un resumen textual para la respuesta
-                response = self._summarize_habit_plan(result)
-                
-                # Guardar el plan en el contexto
-                if user_id:
-                    context["habit_plans"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result
-                    })
-                
-                # Guardar el plan en el estado del agente
-                if user_id:
-                    habit_plans = self.get_state("habit_plans", {})
-                    habit_plans[user_id] = habit_plans.get(user_id, []) + [{
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result
-                    }]
-                    self.update_state("habit_plans", habit_plans)
-                    
-                # Preparar artefactos para la respuesta
-                artifacts = [{
-                    "type": "habit_plan",
-                    "content": result
-                }]
-                
-                task_type = "habit_formation"
-                
-            elif any(kw in lower_input for kw in ["meta", "objetivo", "lograr", "alcanzar"]):
-                # Generar un plan de metas estructurado
-                result = await self._generate_goal_plan(input_text, user_profile)
-                
-                # Generar un resumen textual para la respuesta
-                response = self._summarize_goal_plan(result)
-                
-                # Guardar el plan en el contexto
-                if user_id:
-                    context["goal_plans"].append({
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result
-                    })
-                
-                # Guardar el plan en el estado del agente
-                if user_id:
-                    goal_plans = self.get_state("goal_plans", {})
-                    goal_plans[user_id] = goal_plans.get(user_id, []) + [{
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": input_text,
-                        "plan": result
-                    }]
-                    self.update_state("goal_plans", goal_plans)
-                    
-                # Preparar artefactos para la respuesta
-                artifacts = [{
-                    "type": "goal_plan",
-                    "content": result
-                }]
-                
-                task_type = "goal_setting"
-                
-            else:
-                # Para otras consultas, generar una respuesta general sobre motivación
-                prompt = self._build_prompt(input_text, user_profile)
-                response = await self.gemini_client.generate_content(prompt)
-                
-                # Sin artefactos estructurados para respuestas generales
-                artifacts = []
-                
-                # Determinar el tipo de tarea basado en palabras clave
-                if any(kw in lower_input for kw in ["motivación", "inspiración", "animar", "impulso"]):
-                    task_type = "motivation_strategies"
-                elif any(kw in lower_input for kw in ["cambio", "transformación", "modificar", "ajustar"]):
-                    task_type = "behavior_change"
-                elif any(kw in lower_input for kw in ["obstáculo", "barrera", "dificultad", "desafío"]):
-                    task_type = "obstacle_management"
-                else:
-                    task_type = "general_motivation"
-            
-            # Añadir la interacción al historial de conversación
-            if user_id:
-                context["conversation_history"].append({
-                    "user": input_text,
-                    "agent": response,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "task_type": task_type
-                })
-                
-                # Actualizar el contexto en el StateManager
-                await self._update_context(context, user_id, session_id)
-            
-            # Registrar la interacción si hay un usuario identificado
-            if user_id:
-                self.supabase_client.log_interaction(
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    message=input_text,
-                    response=response
-                )
-            
-            # Calcular tiempo de ejecución
-            execution_time = time.time() - start_time
-            
-            # Formatear respuesta según el protocolo ADK
-            metadata = {
-                "status": "success",
-                "agent_id": self.agent_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            payload = {
-                "response": response,
-                "message": response,
-                "artifacts": artifacts
-            }
-            return {"metadata": metadata, "payload": payload}
-            
-        except Exception as e:
-            logger.error(f"Error en MotivationBehaviorCoach: {e}", exc_info=True)
-            execution_time = time.time() - start_time if 'start_time' in locals() else 0.0
-            
-            metadata = {
-                "status": "error",
-                "agent_id": self.agent_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            payload = {
-                "error": str(e),
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre motivación y comportamiento."
-            }
-            return {"metadata": metadata, "payload": payload}

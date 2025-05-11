@@ -80,3 +80,23 @@ def get_logger(name: str) -> logging.Logger:
         Logger configurado
     """
     return logging.getLogger(name)
+
+
+# Alias para compatibilidad con código existente
+def configure_logging(name: str = None) -> logging.Logger:
+    """
+    Alias de setup_logging para compatibilidad con código existente.
+    
+    Si se proporciona un nombre, configura el logging y devuelve un logger para ese módulo.
+    Si no se proporciona nombre, solo configura el logging.
+    
+    Args:
+        name: Nombre del módulo o componente (opcional)
+        
+    Returns:
+        Logger configurado si se proporciona un nombre, None en caso contrario
+    """
+    setup_logging()
+    if name:
+        return get_logger(name)
+    return None

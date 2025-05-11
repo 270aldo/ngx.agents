@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, json_schema_extra={"env": "DEBUG"})
     
     # Configuración de Supabase
-    supabase_url: AnyUrl = Field(..., json_schema_extra={"env": "SUPABASE_URL"})
-    supabase_anon_key: str = Field(..., json_schema_extra={"env": "SUPABASE_ANON_KEY"})
+    supabase_url: Optional[AnyUrl] = Field(default=None, json_schema_extra={"env": "SUPABASE_URL"})
+    supabase_anon_key: Optional[str] = Field(default=None, json_schema_extra={"env": "SUPABASE_ANON_KEY"})
     
     # Configuración de Gemini
     gemini_api_key: str = Field(default="", json_schema_extra={"env": "GEMINI_API_KEY"})

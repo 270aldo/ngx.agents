@@ -7,15 +7,12 @@ import traceback
 import signal
 from typing import Dict, List, Any, Optional, Callable, Union, Type, Tuple, Sequence
 from datetime import datetime
+from pydantic import BaseModel
 
-# Importar componentes de Google ADK directamente
-try:
-    from adk.toolkit import Toolkit
-except ImportError:
-    class Toolkit:
-        """Stub Toolkit si el paquete adk no está instalado."""
-        def __init__(self):
-            pass
+# Importar componentes de Google ADK directamente desde nuestro adaptador
+from adk.agent import Agent as GoogleADKAgent
+from adk.agent import Skill as GoogleADKSkill
+from adk.toolkit import Toolkit
 
 # Stubs básicos para OpenTelemetry si no está disponible o falla la configuración
 class MockTracer:
@@ -71,10 +68,13 @@ from core.contracts import create_task, create_result, validate_task, validate_r
 # Configurar logger
 logger = get_logger(__name__)
 
-class ADKAgent(A2AAgent):
+class ADKAgent(A2AAgent, GoogleADKAgent):
     """
     Clase base unificada para agentes NGX que usan Google ADK y el protocolo A2A.
     Las clases hijas DEBEN definir `self.skills` ANTES de llamar a `super().__init__(...)`.
+    
+    Esta clase hereda tanto de A2AAgent como de GoogleADKAgent para proporcionar
+    compatibilidad con ambos sistemas.
     """
     tracer: Any
     meter: Any
@@ -109,7 +109,12 @@ class ADKAgent(A2AAgent):
             self.state_manager = StateManager(self.supabase_client.client)
         else:
             self.state_manager = None
-        self.adk_toolkit = adk_toolkit
+        
+        # Inicializar el toolkit de ADK si no se proporciona
+        if adk_toolkit is None:
+            self.adk_toolkit = Toolkit()
+        else:
+            self.adk_toolkit = adk_toolkit
 
         if not hasattr(self, 'skills') or not self.skills or not isinstance(self.skills, list):
             logger.warning(f"Agente {name} ({agent_id}) no definió self.skills. No se registrarán skills.")
@@ -118,16 +123,26 @@ class ADKAgent(A2AAgent):
             processed_google_adk_tools, processed_a2a_skills_for_card, skill_names = self._initialize_and_prepare_skills()
         
         final_capabilities = capabilities if capabilities is not None else skill_names
-        if processed_google_adk_tools: kwargs['tools'] = processed_google_adk_tools
-        if self.adk_toolkit: kwargs['toolkit'] = self.adk_toolkit
-
-        super().__init__(
+        
+        # Inicializar A2AAgent
+        A2AAgent.__init__(
+            self,
             agent_id=agent_id, name=name, description=description,
             capabilities=final_capabilities, endpoint=endpoint, version=version,
             skills=processed_a2a_skills_for_card, 
             auto_register_skills=auto_register_skills, a2a_server_url=a2a_server_url,
             model=model, instruction=instruction, **kwargs 
         )
+        
+        # Inicializar GoogleADKAgent
+        GoogleADKAgent.__init__(
+            self,
+            toolkit=self.adk_toolkit,
+            name=name,
+            description=description,
+            **kwargs
+        )
+        
         logger.info(f"ADKAgent '{self.name}' ({self.agent_id}) inicializado.")
 
     def _sanitize_otel_name(self, name: str, max_length: int = 63) -> str:
@@ -181,63 +196,80 @@ class ADKAgent(A2AAgent):
             self.response_time_histogram = self.meter.create_histogram("mock_resp_time_fallback")
 
     def _initialize_and_prepare_skills(self) -> Tuple[List[Callable], List[Dict[str, Any]], List[str]]:
-        google_tools: List[Callable] = []
-        a2a_card_skills: List[Dict[str, Any]] = []
-        skill_names: List[str] = []
+        processed_google_adk_tools = []
+        processed_a2a_skills_for_card = []
+        skill_names_for_card = [] # Nombres para las A2A cards, que podrían ser diferentes
 
-        if not hasattr(self, 'skills') or not self.skills or not isinstance(self.skills, list):
-            logger.warning("ADKAgent.skills no está definido como una lista válida o está vacía. Saltando inicialización de skills.")
-            return google_tools, a2a_card_skills, skill_names
+        if not self.skills:
+            logger.warning("No se han definido skills para este agente.")
+            return [], [], []
 
-        for skill_object in self.skills:
-            # Asumimos que skill_object es un objeto con atributos, 
-            # similar a como EliteTrainingStrategist los define.
-            skill_method = getattr(skill_object, 'method', None)
-            skill_name_attr = getattr(skill_object, 'name', None)
-            skill_description = getattr(skill_object, 'description', 'Descripción no disponible')
-            # Usar skill_id si está presente, si no, generar uno a partir del nombre o del método.
-            explicit_skill_id = getattr(skill_object, 'skill_id', None)
-            s_input_schema = getattr(skill_object, 'input_schema', None)
-            s_output_schema = getattr(skill_object, 'output_schema', None)
+        for skill_object in self.skills: # self.skills es ahora List[Skill]
+            skill_name = skill_object.name
+            skill_description = skill_object.description
+            input_schema_pydantic = skill_object.input_schema
+            output_schema_pydantic = skill_object.output_schema
+            # Usar 'handler' consistentemente, ya que nuestro Skill stub lo usa.
+            skill_callable = getattr(skill_object, 'handler', None)
 
-            if not callable(skill_method):
-                logger.warning(f"Skill '{skill_name_attr or 'NombreDesconocido'}' no tiene un atributo 'method' que sea callable. Saltando.")
-                continue
-            
-            google_tools.append(skill_method)
-            
-            # Determinar el nombre para la tarjeta y el ID de la skill
-            card_name = skill_name_attr or skill_method.__name__.replace('_', ' ').title()
-            # Priorizar explicit_skill_id, luego skill_name_attr (normalizado), luego nombre del método.
-            actual_skill_id = explicit_skill_id or (skill_name_attr.lower().replace(" ", "_") if skill_name_attr else skill_method.__name__)
+            # 1. Registrar en el toolkit de Google ADK
+            try:
+                with self.tracer.start_as_current_span(f"register_skill_{skill_name}"):
+                    if hasattr(self.adk_toolkit, 'register_skill'):
+                        self.adk_toolkit.register_skill(skill_object)
+                    elif hasattr(self.adk_toolkit, 'add_tool'):
+                        self.adk_toolkit.add_tool(skill_object)
+                    else:
+                        logger.warning(f"No se pudo registrar la skill '{skill_name}' en el toolkit de Google ADK.")
+            except Exception as e:
+                logger.error(f"Error registrando skill '{skill_name}': {e}", exc_info=True)
 
-            skill_names.append(card_name) # Este es el nombre para mostrar en la UI/logs
-            
-            entry = {
-                "name": card_name,
+            # 2. Preparar para Google ADK (lista de callables)
+            if skill_callable and callable(skill_callable):
+                processed_google_adk_tools.append(skill_callable)
+            else:
+                logger.warning(f"Skill '{skill_name}' no tiene un atributo 'handler' que sea callable. Saltando para Google ADK tools.")
+
+            # 3. Preparar para A2A Card (lista de diccionarios)
+            skill_name_for_card = skill_name.replace('_', ' ').title()
+            skill_names_for_card.append(skill_name_for_card)
+
+            a2a_skill_def = {
+                "name": skill_name_for_card,
                 "description": skill_description,
-                "skill_id": actual_skill_id
+                "skill_id": skill_name,  # Usar el nombre original como ID único
             }
-            
-            if s_input_schema and hasattr(s_input_schema, 'model_json_schema'):
+
+            if input_schema_pydantic:
                 try:
-                    entry['inputModes'] = [{'format': 'json', 'schema': s_input_schema.model_json_schema()}]
+                    # Asegurarse de que input_schema_pydantic es un modelo Pydantic
+                    if not (isinstance(input_schema_pydantic, type) and issubclass(input_schema_pydantic, BaseModel)):
+                        raise TypeError(f"input_schema para {skill_name} no es un modelo Pydantic.")
+                    a2a_skill_def["inputModes"] = [
+                        {
+                            "format": "json",
+                            "schema": input_schema_pydantic.model_json_schema()
+                        }
+                    ]
                 except Exception as e:
-                    logger.error(f"Error generando JSON schema para input_schema de skill '{card_name}': {e}")
-            else:
-                logger.debug(f"Skill '{card_name}' no tiene un input_schema Pydantic o model_json_schema no está disponible.")
-                        
-            if s_output_schema and hasattr(s_output_schema, 'model_json_schema'):
-                try:
-                    entry['outputModes'] = [{'format': 'json', 'schema': s_output_schema.model_json_schema()}]
-                except Exception as e:
-                    logger.error(f"Error generando JSON schema para output_schema de skill '{card_name}': {e}")
-            else:
-                logger.debug(f"Skill '{card_name}' no tiene un output_schema Pydantic o model_json_schema no está disponible.")
-                        
-            a2a_card_skills.append(entry)
+                    logger.error(f"Error generando JSON schema para input de {skill_name}: {e}")
             
-        return google_tools, a2a_card_skills, skill_names
+            if output_schema_pydantic:
+                try:
+                    if not (isinstance(output_schema_pydantic, type) and issubclass(output_schema_pydantic, BaseModel)):
+                        raise TypeError(f"output_schema para {skill_name} no es un modelo Pydantic.")
+                    a2a_skill_def["outputModes"] = [
+                        {
+                            "format": "json",
+                            "schema": output_schema_pydantic.model_json_schema()
+                        }
+                    ]
+                except Exception as e:
+                    logger.error(f"Error generando JSON schema para output de {skill_name}: {e}")
+
+            processed_a2a_skills_for_card.append(a2a_skill_def)
+
+        return processed_google_adk_tools, processed_a2a_skills_for_card, skill_names_for_card
 
     async def _get_context(self, user_id: str, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
@@ -255,27 +287,26 @@ class ADKAgent(A2AAgent):
         logger.warning(f"_update_context no implementado en ADKAgent base para user_id {user_id}")
         pass
 
-    def _get_program_type_from_profile(self, client_profile: Dict[str, Any]) -> str:
-        """Obtiene el tipo de programa (PRIME/LONGEVITY/GENERAL) del perfil del cliente."""
-        # Obtener el valor de program_type del perfil.
+    def _get_program_type_from_profile(self, client_profile: Optional[Dict[str, Any]]) -> str:
+        """Devuelve el tipo de programa (PRIME/LONGEVITY/GENERAL) a partir del perfil del cliente.
+
+        Si el perfil o el campo ``program_type`` no está disponible, se asume ``"PRIME"``.
+        """
+        # Si no hay perfil o el perfil no es un diccionario válido devolvemos PRIME.
+        if not client_profile or not isinstance(client_profile, dict):
+            return "PRIME"
+
+        # Extraer program_type y normalizar a mayúsculas.
         program_value = client_profile.get("program_type")
 
-        # Si program_type no está presente, es None, o es un string vacío, usar "PRIME" por defecto.
-        if not program_value: # Esto cubre None, '', False, etc.
-            selected_program = "PRIME"
-        else:
-            # Convertir a string (por si acaso) y luego a mayúsculas.
-            selected_program = str(program_value).upper()
-        
-        # Lista de tipos de programa válidos que pueden ser retornados directamente.
+        if not program_value:
+            return "PRIME"
+
+        selected_program = str(program_value).upper()
+
         valid_program_types = ["PRIME", "LONGEVITY", "GENERAL"]
-        
-        # Si el programa seleccionado (después de uppercasing) está en la lista de válidos, retornarlo.
-        # De lo contrario, retornar "GENERAL" como fallback.
-        if selected_program in valid_program_types:
-            return selected_program
-        else:
-            return "GENERAL"
+
+        return selected_program if selected_program in valid_program_types else "GENERAL"
 
     def _extract_profile_details(self, client_profile: Dict[str, Any]) -> str:
         """Convierte detalles clave del perfil en un string formateado."""
@@ -289,6 +320,32 @@ class ADKAgent(A2AAgent):
             if injuries := client_profile.get('injury_history'): details.append(f"- Lesiones: {injuries}")
         return "\n".join(details) if details else "No disponible"
 
-# Nota: Se eliminaron los métodos _handle_adk_*, start, stop, run, _process_messages,
-# ya que se asume que la clase base google.adk.agents.Agent se encarga del ciclo
-# de vida principal y la comunicación, y A2AAgent maneja la lógica A2A.
+    # Método para manejar la ejecución de Google ADK
+    async def run(self, *args, **kwargs):
+        """
+        Ejecuta el agente utilizando la implementación de Google ADK.
+        
+        Este método sobrescribe el método run de GoogleADKAgent para proporcionar
+        compatibilidad con el sistema NGX Agents.
+        """
+        try:
+            # Registrar la solicitud en telemetría
+            self.request_counter.add(1)
+            
+            # Medir el tiempo de respuesta
+            start_time = time.time()
+            
+            # Ejecutar el agente utilizando la implementación de Google ADK
+            with self.tracer.start_as_current_span("adk_agent_run"):
+                result = await GoogleADKAgent.run(self, *args, **kwargs)
+            
+            # Registrar el tiempo de respuesta
+            response_time = time.time() - start_time
+            self.response_time_histogram.record(response_time)
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error en la ejecución del agente ADK: {e}", exc_info=True)
+            with self.tracer.start_as_current_span("adk_agent_run_error") as span:
+                span.record_exception(e)
+            raise

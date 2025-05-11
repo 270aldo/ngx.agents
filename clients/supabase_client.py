@@ -1,470 +1,381 @@
 """
-Cliente para interactuar con Supabase.
+Cliente para Supabase que proporciona acceso a la base de datos.
 
-Proporciona métodos para realizar operaciones CRUD en tablas de Supabase,
-gestionar autenticación y ejecutar consultas SQL personalizadas.
+Este módulo implementa un cliente Singleton para Supabase que se
+encarga de gestionar la conexión y proporcionar métodos para
+interactuar con la base de datos.
 """
-import asyncio
+
+import os
 import logging
-from typing import Any, Dict, List, Optional, Union, TypeVar, Generic
-from datetime import datetime
-import uuid
+import time
+from typing import Dict, Any, Optional, List, Union
+import asyncio
+from contextlib import asynccontextmanager
 
-import httpx
-from supabase import create_client, Client
+# Importar el cliente de Supabase
+try:
+    import supabase
+    from supabase import Client, create_client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    logging.warning("Supabase no está disponible. Se usará un cliente mock.")
 
-from clients.base_client import BaseClient, retry_with_backoff
-from config.secrets import settings
+from core.settings import settings
+from core.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+# Configurar logger
+logger = get_logger(__name__)
 
-# Tipo genérico para los resultados
-T = TypeVar('T')
-
-
-class SupabaseClient(BaseClient):
+class SupabaseClient:
     """
-    Cliente para Supabase con patrón Singleton.
+    Cliente Singleton para Supabase.
     
-    Proporciona métodos para interactuar con la base de datos PostgreSQL
-    y otros servicios de Supabase.
+    Este cliente proporciona métodos para interactuar con la base de datos
+    Supabase y se encarga de gestionar la conexión.
     """
-    
-    # Instancia única (patrón Singleton)
-    _instance = None
-    
-    def __new__(cls, *args: Any, **kwargs: Any) -> "SupabaseClient":
-        """Implementación del patrón Singleton."""
-        if cls._instance is None:
-            cls._instance = super(SupabaseClient, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
     
     def __init__(self):
-        """Inicializa el cliente de Supabase."""
-        # Evitar reinicialización en el patrón Singleton
-        if hasattr(self, '_initialized') and self._initialized:
-            return
-            
-        super().__init__(service_name="supabase")
-        self.client = None
-        self._initialized = True
+        """
+        Inicializa el cliente de Supabase.
+        """
+        self.url = settings.supabase_url
+        self.key = settings.supabase_anon_key
+        self.supabase: Optional[Client] = None
+        self.is_initialized = False
         
-        # Para modo mock en pruebas
-        self.is_mock = False
-        self._mock_users = {}
-        self._mock_conversations = []
+        logger.info("Cliente de Supabase inicializado")
     
     async def initialize(self) -> None:
         """
         Inicializa la conexión con Supabase.
-        
-        Configura las credenciales y prepara el cliente para su uso.
         """
-        if not settings.SUPABASE_URL or not settings.SUPABASE_ANON_KEY:
-            raise ValueError("SUPABASE_URL y SUPABASE_ANON_KEY deben estar configuradas en las variables de entorno")
+        if not SUPABASE_AVAILABLE:
+            logger.warning("Supabase no está disponible. Se usará un cliente mock.")
+            self.supabase = MockSupabaseClient()
+            self.is_initialized = True
+            return
         
-        # Inicializar cliente de Supabase
-        # La biblioteca de Supabase no es asíncrona, pero usamos run_in_executor para no bloquear
-        loop = asyncio.get_event_loop()
-        self.client = await loop.run_in_executor(
-            None,
-            lambda: create_client(settings.SUPABASE_URL, settings.SUPABASE_ANON_KEY)
-        )
-        
-        logger.info(f"Cliente Supabase inicializado para URL: {settings.SUPABASE_URL}")
-    
-    @retry_with_backoff()
-    async def query(
-        self, 
-        table_name: str,
-        select: str = "*",
-        filters: Optional[Dict[str, Any]] = None,
-        order: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Consulta datos de una tabla de Supabase.
-        
-        Args:
-            table_name: Nombre de la tabla
-            select: Columnas a seleccionar (formato PostgreSQL)
-            filters: Diccionario con filtros (columna: valor)
-            order: Columna y dirección para ordenar (formato PostgreSQL)
-            limit: Número máximo de resultados
-            offset: Número de resultados a saltar
+        try:
+            # Crear cliente de Supabase
+            self.supabase = create_client(self.url, self.key)
             
-        Returns:
-            Lista de registros que coinciden con la consulta
+            # Verificar conexión
+            await self.supabase.table("health_check").select("*").limit(1).execute()
+            
+            self.is_initialized = True
+            logger.info("Conexión con Supabase establecida correctamente")
+            
+        except Exception as e:
+            logger.error(f"Error al inicializar conexión con Supabase: {e}")
+            raise
+    
+    async def get_client(self) -> Client:
         """
-        if not self.client:
+        Obtiene el cliente de Supabase.
+        
+        Si no se ha inicializado, lo inicializa.
+        
+        Returns:
+            Client: Cliente de Supabase
+        """
+        if not self.is_initialized:
             await self.initialize()
         
-        self._record_call("query")
-        
-        # Construir la consulta
-        query = self.client.table(table_name).select(select)
-        
-        # Aplicar filtros si se proporcionan
-        if filters:
-            for column, value in filters.items():
-                query = query.eq(column, value)
-        
-        # Aplicar orden si se proporciona
-        if order:
-            query = query.order(order)
-        
-        # Aplicar límite si se proporciona
-        if limit is not None:
-            query = query.limit(limit)
-        
-        # Aplicar offset si se proporciona
-        if offset is not None:
-            query = query.offset(offset)
-        
-        # Ejecutar la consulta
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, query.execute)
-        
-        # Devolver los datos
-        return result.data
+        return self.supabase
     
-    @retry_with_backoff()
-    async def insert(
-        self, 
-        table_name: str,
-        data: Union[Dict[str, Any], List[Dict[str, Any]]],
-        upsert: bool = False
-    ) -> List[Dict[str, Any]]:
+    async def execute_query(self, table: str, query_type: str, **kwargs) -> Dict[str, Any]:
         """
-        Inserta datos en una tabla de Supabase.
+        Ejecuta una consulta en Supabase.
         
         Args:
-            table_name: Nombre de la tabla
-            data: Diccionario o lista de diccionarios con los datos a insertar
-            upsert: Si es True, actualiza registros existentes (upsert)
+            table: Nombre de la tabla
+            query_type: Tipo de consulta (select, insert, update, delete)
+            **kwargs: Argumentos adicionales para la consulta
             
         Returns:
-            Lista de registros insertados
+            Dict[str, Any]: Resultado de la consulta
         """
-        if not self.client:
+        if not self.is_initialized:
             await self.initialize()
         
-        self._record_call("insert")
-        
-        # Convertir a lista si es un solo registro
-        if isinstance(data, dict):
-            data = [data]
-        
-        # Construir la consulta
-        query = self.client.table(table_name).insert(data)
-        
-        # Aplicar upsert si se solicita
-        if upsert:
-            query = query.upsert()
-        
-        # Ejecutar la consulta
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, query.execute)
-        
-        # Devolver los datos insertados
-        return result.data
-    
-    @retry_with_backoff()
-    async def update(
-        self, 
-        table_name: str,
-        data: Dict[str, Any],
-        filters: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Actualiza datos en una tabla de Supabase.
-        
-        Args:
-            table_name: Nombre de la tabla
-            data: Diccionario con los datos a actualizar
-            filters: Diccionario con filtros para identificar registros
+        try:
+            # Construir consulta
+            query = self.supabase.table(table)
             
-        Returns:
-            Lista de registros actualizados
-        """
-        if not self.client:
-            await self.initialize()
-        
-        self._record_call("update")
-        
-        # Construir la consulta
-        query = self.client.table(table_name).update(data)
-        
-        # Aplicar filtros
-        for column, value in filters.items():
-            query = query.eq(column, value)
-        
-        # Ejecutar la consulta
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, query.execute)
-        
-        # Devolver los datos actualizados
-        return result.data
-    
-    @retry_with_backoff()
-    async def delete(
-        self, 
-        table_name: str,
-        filters: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Elimina datos de una tabla de Supabase.
-        
-        Args:
-            table_name: Nombre de la tabla
-            filters: Diccionario con filtros para identificar registros
-            
-        Returns:
-            Lista de registros eliminados
-        """
-        if not self.client:
-            await self.initialize()
-        
-        self._record_call("delete")
-        
-        # Construir la consulta
-        query = self.client.table(table_name).delete()
-        
-        # Aplicar filtros
-        for column, value in filters.items():
-            query = query.eq(column, value)
-        
-        # Ejecutar la consulta
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, query.execute)
-        
-        # Devolver los datos eliminados
-        return result.data
-    
-    @retry_with_backoff()
-    async def execute_sql(self, sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """
-        Ejecuta una consulta SQL personalizada.
-        
-        Args:
-            sql: Consulta SQL a ejecutar
-            params: Parámetros para la consulta (opcional)
-            
-        Returns:
-            Resultados de la consulta
-        """
-        if not self.client:
-            await self.initialize()
-        
-        self._record_call("execute_sql")
-        
-        # Ejecutar la consulta SQL
-        loop = asyncio.get_event_loop()
-        
-        # Usar la función rpc para ejecutar SQL personalizado
-        if params:
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.client.rpc("run_sql", {"query": sql, "params": params}).execute()
-            )
-        else:
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.client.rpc("run_sql", {"query": sql}).execute()
-            )
-        
-        # Devolver los resultados
-        return result.data
-    
-    @retry_with_backoff()
-    async def get_agent_data(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene los datos de un agente específico.
-        
-        Args:
-            agent_id: ID del agente
-            
-        Returns:
-            Datos del agente o None si no existe
-        """
-        self._record_call("get_agent_data")
-        
-        result = await self.query(
-            table_name="agents",
-            filters={"agent_id": agent_id}
-        )
-        
-        return result[0] if result else None
-    
-    @retry_with_backoff()
-    async def log_agent_activity(
-        self, 
-        agent_id: str,
-        activity_type: str,
-        details: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Registra una actividad de un agente.
-        
-        Args:
-            agent_id: ID del agente
-            activity_type: Tipo de actividad (message, task, error, etc.)
-            details: Detalles de la actividad
-            
-        Returns:
-            Registro de actividad creado
-        """
-        self._record_call("log_agent_activity")
-        
-        data = {
-            "agent_id": agent_id,
-            "activity_type": activity_type,
-            "details": details,
-            "timestamp": "now()"  # Función de PostgreSQL para obtener la fecha actual
-        }
-        
-        result = await self.insert(
-            table_name="agent_activities",
-            data=data
-        )
-        
-        return result[0] if result else {}
-
-
-    def get_or_create_user_by_api_key(self, api_key: str) -> Dict[str, Any]:
-        """
-        Obtiene o crea un usuario basado en su API key.
-        
-        Args:
-            api_key: API key del usuario
-            
-        Returns:
-            Datos del usuario
-        """
-        if self.is_mock:
-            # Buscar usuario existente por API key
-            for user_id, user in self._mock_users.items():
-                if user.get("api_key") == api_key:
-                    return user
-            
-            # Crear nuevo usuario
-            user_id = str(uuid.uuid4())
-            user = {
-                "id": user_id,
-                "api_key": api_key,
-                "created_at": datetime.now().isoformat()
-            }
-            self._mock_users[user_id] = user
-            return user
-        else:
-            # Para pruebas en modo no mock
-            # En un entorno real, esto sería asíncrono
-            if not hasattr(self, "client") or self.client is None:
-                return {
-                    "id": str(uuid.uuid4()),
-                    "api_key": api_key,
-                    "created_at": datetime.now().isoformat()
-                }
-            
-            # Si tenemos un cliente mock, usarlo
-            if hasattr(self.client, "table") and callable(self.client.table):
-                try:
-                    # Simulamos la búsqueda (primera llamada a table)
-                    table = self.client.table("users")
-                    # Simulamos que no encontramos el usuario
-                    
-                    # Simulamos la creación (segunda llamada a table)
-                    self.client.table("users")
-                    
-                    return {
-                        "id": str(uuid.uuid4()),
-                        "api_key": api_key,
-                        "created_at": datetime.now().isoformat()
-                    }
-                except Exception as e:
-                    logger.error(f"Error al obtener/crear usuario: {e}")
-                    raise
-    
-    def log_conversation_message(self, user_id: str, role: str, message: str) -> bool:
-        """
-        Registra un mensaje de conversación.
-        
-        Args:
-            user_id: ID del usuario
-            role: Rol del mensaje (user, agent, system)
-            message: Contenido del mensaje
-            
-        Returns:
-            True si se registró correctamente
-        """
-        if self.is_mock:
-            # Crear nuevo mensaje
-            message_data = {
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "role": role,
-                "message": message,
-                "created_at": datetime.now().isoformat()
-            }
-            self._mock_conversations.append(message_data)
-            return True
-        else:
-            # Para pruebas en modo no mock
-            # En un entorno real, esto sería asíncrono
-            if not hasattr(self, "client") or self.client is None:
-                return True
-            
-            # Si tenemos un cliente mock, usarlo
-            if hasattr(self.client, "table") and callable(self.client.table):
-                try:
-                    # Simulamos la inserción
-                    self.client.table("conversations")
-                    return True
-                except Exception as e:
-                    logger.error(f"Error al registrar mensaje: {e}")
-                    return False
-    
-    def get_conversation_history(
-        self, user_id: str, limit: Optional[int] = None, offset: int = 0
-    ) -> List[Dict[str, Any]]:
-        """
-        Obtiene el historial de conversación de un usuario.
-        
-        Args:
-            user_id: ID del usuario
-            limit: Número máximo de mensajes a obtener
-            offset: Número de mensajes a saltar
-            
-        Returns:
-            Lista de mensajes
-        """
-        if self.is_mock:
-            # Filtrar mensajes por usuario
-            messages = [msg for msg in self._mock_conversations if msg["user_id"] == user_id]
-            
-            # Aplicar paginación
-            if limit is not None:
-                return messages[offset:offset + limit]
+            if query_type == "select":
+                if "columns" in kwargs:
+                    query = query.select(kwargs["columns"])
+                else:
+                    query = query.select("*")
+                
+                if "filters" in kwargs:
+                    for filter_key, filter_value in kwargs["filters"].items():
+                        if isinstance(filter_value, dict):
+                            operator = filter_value.get("operator", "eq")
+                            value = filter_value.get("value")
+                            
+                            if operator == "eq":
+                                query = query.eq(filter_key, value)
+                            elif operator == "neq":
+                                query = query.neq(filter_key, value)
+                            elif operator == "gt":
+                                query = query.gt(filter_key, value)
+                            elif operator == "lt":
+                                query = query.lt(filter_key, value)
+                            elif operator == "gte":
+                                query = query.gte(filter_key, value)
+                            elif operator == "lte":
+                                query = query.lte(filter_key, value)
+                            elif operator == "in":
+                                query = query.in_(filter_key, value)
+                            elif operator == "is":
+                                query = query.is_(filter_key, value)
+                        else:
+                            query = query.eq(filter_key, filter_value)
+                
+                if "limit" in kwargs:
+                    query = query.limit(kwargs["limit"])
+                
+                if "order" in kwargs:
+                    for order_key, order_dir in kwargs["order"].items():
+                        if order_dir.lower() == "asc":
+                            query = query.order(order_key, ascending=True)
+                        else:
+                            query = query.order(order_key, ascending=False)
+                
+                # Ejecutar consulta
+                result = await query.execute()
+                
+                return result.dict()
+                
+            elif query_type == "insert":
+                data = kwargs.get("data", {})
+                result = await query.insert(data).execute()
+                return result.dict()
+                
+            elif query_type == "update":
+                data = kwargs.get("data", {})
+                filters = kwargs.get("filters", {})
+                
+                for filter_key, filter_value in filters.items():
+                    if isinstance(filter_value, dict):
+                        operator = filter_value.get("operator", "eq")
+                        value = filter_value.get("value")
+                        
+                        if operator == "eq":
+                            query = query.eq(filter_key, value)
+                        elif operator == "neq":
+                            query = query.neq(filter_key, value)
+                        # ... otros operadores
+                    else:
+                        query = query.eq(filter_key, filter_value)
+                
+                result = await query.update(data).execute()
+                return result.dict()
+                
+            elif query_type == "delete":
+                filters = kwargs.get("filters", {})
+                
+                for filter_key, filter_value in filters.items():
+                    if isinstance(filter_value, dict):
+                        operator = filter_value.get("operator", "eq")
+                        value = filter_value.get("value")
+                        
+                        if operator == "eq":
+                            query = query.eq(filter_key, value)
+                        # ... otros operadores
+                    else:
+                        query = query.eq(filter_key, filter_value)
+                
+                result = await query.delete().execute()
+                return result.dict()
+                
             else:
-                return messages[offset:]
-        else:
-            # Para pruebas en modo no mock
-            # En un entorno real, esto sería asíncrono
-            if not hasattr(self, "client") or self.client is None:
-                return []
+                raise ValueError(f"Tipo de consulta no soportado: {query_type}")
+                
+        except Exception as e:
+            logger.error(f"Error al ejecutar consulta en Supabase: {e}")
+            raise
+
+
+class MockSupabaseClient:
+    """
+    Cliente mock para Supabase cuando no está disponible.
+    
+    Esta clase proporciona un cliente mock que implementa la misma
+    interfaz que el cliente de Supabase, pero no realiza ninguna
+    operación real.
+    """
+    
+    def __init__(self):
+        """
+        Inicializa el cliente mock.
+        """
+        self.tables = {}
+        logger.warning("Usando cliente mock para Supabase")
+    
+    def table(self, name: str):
+        """
+        Selecciona una tabla.
+        
+        Args:
+            name: Nombre de la tabla
             
-            # Si tenemos un cliente mock, usarlo
-            if hasattr(self.client, "table") and callable(self.client.table):
-                try:
-                    # Simulamos la consulta
-                    self.client.table("conversations")
-                    return []
-                except Exception as e:
-                    logger.error(f"Error al obtener historial: {e}")
-                    return []
+        Returns:
+            self: Instancia del cliente para encadenar métodos
+        """
+        self.current_table = name
+        return self
+    
+    def select(self, columns: str = "*"):
+        """
+        Selecciona columnas.
+        
+        Args:
+            columns: Columnas a seleccionar
+            
+        Returns:
+            self: Instancia del cliente para encadenar métodos
+        """
+        self.current_columns = columns
+        return self
+    
+    def eq(self, column: str, value: Any):
+        """
+        Filtro de igualdad.
+        
+        Args:
+            column: Nombre de la columna
+            value: Valor a comparar
+            
+        Returns:
+            self: Instancia del cliente para encadenar métodos
+        """
+        return self
+    
+    def neq(self, column: str, value: Any):
+        """
+        Filtro de desigualdad.
+        
+        Args:
+            column: Nombre de la columna
+            value: Valor a comparar
+            
+        Returns:
+            self: Instancia del cliente para encadenar métodos
+        """
+        return self
+    
+    def limit(self, count: int):
+        """
+        Limita el número de resultados.
+        
+        Args:
+            count: Número máximo de resultados
+            
+        Returns:
+            self: Instancia del cliente para encadenar métodos
+        """
+        return self
+    
+    async def execute(self):
+        """
+        Ejecuta la consulta.
+        
+        Returns:
+            MockSupabaseResult: Resultado mock
+        """
+        # Devolver resultado mock
+        return MockSupabaseResult([])
 
 
-# Instancia global para uso en toda la aplicación
+class MockSupabaseResult:
+    """
+    Resultado mock para Supabase.
+    
+    Esta clase proporciona un resultado mock para simular
+    las respuestas del cliente de Supabase.
+    """
+    
+    def __init__(self, data: List[Dict[str, Any]]):
+        """
+        Inicializa el resultado mock.
+        
+        Args:
+            data: Datos del resultado
+        """
+        self.data = data
+    
+    def dict(self) -> Dict[str, Any]:
+        """
+        Convierte el resultado a diccionario.
+        
+        Returns:
+            Dict[str, Any]: Resultado en formato diccionario
+        """
+        return {"data": self.data, "count": len(self.data)}
+
+
+# Crear instancia del cliente
 supabase_client = SupabaseClient()
+
+
+async def check_database_connection() -> Dict[str, Any]:
+    """
+    Verifica la conexión con la base de datos Supabase.
+    
+    Returns:
+        Dict[str, Any]: Diccionario con el estado de la conexión
+    """
+    try:
+        # Obtener instancia del cliente
+        client = supabase_client
+        
+        # Verificar si el cliente está inicializado
+        if not client.is_initialized:
+            await client.initialize()
+        
+        # Hacer una consulta simple para verificar la conexión
+        # Usamos una consulta que no acceda a datos sensibles
+        result = await client.supabase.table("health_check").select("*").limit(1).execute()
+        
+        # Actualizar estado en el health tracker
+        from core.telemetry import health_tracker
+        health_tracker.update_status(
+            component="database",
+            status=True,
+            details="Conexión a base de datos establecida correctamente",
+            alert_on_degraded=True
+        )
+        
+        return {
+            "status": "ok",
+            "timestamp": time.time(),
+            "details": {
+                "url": client.url,
+                "database_type": "Supabase",
+                "connection_status": "Connected"
+            }
+        }
+    except Exception as e:
+        logging.error(f"Error al verificar conexión con base de datos: {e}")
+        
+        # Actualizar estado en el health tracker
+        from core.telemetry import health_tracker
+        health_tracker.update_status(
+            component="database",
+            status=False,
+            details=f"Error en la conexión a base de datos: {str(e)}",
+            alert_on_degraded=True
+        )
+        
+        return {
+            "status": "error",
+            "timestamp": time.time(),
+            "details": {
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+        }

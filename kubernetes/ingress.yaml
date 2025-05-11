@@ -1,0 +1,59 @@
+---
+# Ingress para exponer la API y el servidor A2A
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ngx-agents-ingress
+  namespace: ngx-agents
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "ngx-agents-ip"
+    networking.gke.io/managed-certificates: "ngx-agents-cert"
+    networking.gke.io/v1beta1.FrontendConfig: "ngx-agents-frontend-config"
+spec:
+  rules:
+  - host: api.ngx-agents.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ngx-agents-api
+            port:
+              number: 80
+  - host: a2a.ngx-agents.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ngx-agents-a2a
+            port:
+              number: 80
+
+---
+# FrontendConfig para configurar HTTPS y redirección
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: ngx-agents-frontend-config
+  namespace: ngx-agents
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
+  sslPolicy: ngx-agents-ssl-policy
+
+---
+# ManagedCertificate para TLS
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: ngx-agents-cert
+  namespace: ngx-agents
+spec:
+  domains:
+  - api.ngx-agents.example.com
+  - a2a.ngx-agents.example.com

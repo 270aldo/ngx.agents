@@ -1,22 +1,434 @@
 import logging
 import uuid
 import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
+import json
 import os
 from google.cloud import aiplatform
+import datetime
+import asyncio
+from pydantic import BaseModel, Field
 
+# Importar componentes de Google ADK
 from adk.toolkit import Toolkit
+from adk.agent import Skill as GoogleADKSkill
+
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
-from agents.base.a2a_agent import A2AAgent
+from agents.base.adk_agent import ADKAgent
 from core.agent_card import AgentCard, Example
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
+from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
+from infrastructure.adapters.a2a_adapter import a2a_adapter
+from core.logging_config import get_logger
 
-# Configurar logging
-logger = logging.getLogger(__name__)
+# Configurar logger
+logger = get_logger(__name__)
 
-class BiohackingInnovator(A2AAgent):
+# Definir esquemas de entrada y salida para las skills
+class BiohackingProtocolInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre biohacking")
+    age: Optional[int] = Field(None, description="Edad del usuario")
+    gender: Optional[str] = Field(None, description="Género del usuario")
+    health_conditions: Optional[List[str]] = Field(None, description="Condiciones de salud del usuario")
+    goals: Optional[List[str]] = Field(None, description="Objetivos del usuario")
+
+class BiohackingProtocolOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre el protocolo de biohacking")
+    protocol: Dict[str, Any] = Field(..., description="Protocolo de biohacking estructurado")
+    resources: Optional[List[Dict[str, Any]]] = Field(None, description="Recursos científicos relevantes")
+
+class LongevityStrategyInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre longevidad")
+    age: Optional[int] = Field(None, description="Edad del usuario")
+    health_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil de salud del usuario")
+
+class LongevityStrategyOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre estrategias de longevidad")
+    strategies: List[Dict[str, Any]] = Field(..., description="Estrategias de longevidad recomendadas")
+    scientific_basis: Optional[str] = Field(None, description="Base científica de las recomendaciones")
+
+class CognitiveEnhancementInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre mejora cognitiva")
+    cognitive_goals: Optional[List[str]] = Field(None, description="Objetivos cognitivos específicos")
+    current_supplements: Optional[List[str]] = Field(None, description="Suplementos actuales del usuario")
+
+class CognitiveEnhancementOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre mejora cognitiva")
+    protocol: Dict[str, Any] = Field(..., description="Protocolo de mejora cognitiva")
+    supplements: Optional[List[Dict[str, Any]]] = Field(None, description="Suplementos recomendados")
+
+class HormonalOptimizationInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre optimización hormonal")
+    age: Optional[int] = Field(None, description="Edad del usuario")
+    gender: Optional[str] = Field(None, description="Género del usuario")
+    hormone_concerns: Optional[List[str]] = Field(None, description="Preocupaciones hormonales específicas")
+
+class HormonalOptimizationOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre optimización hormonal")
+    protocol: Dict[str, Any] = Field(..., description="Protocolo de optimización hormonal")
+    lifestyle_changes: List[str] = Field(..., description="Cambios de estilo de vida recomendados")
+    supplements: Optional[List[Dict[str, Any]]] = Field(None, description="Suplementos recomendados")
+
+# Definir las skills como clases que heredan de GoogleADKSkill
+class BiohackingProtocolSkill(GoogleADKSkill):
+    name = "biohacking_protocol"
+    description = "Desarrolla protocolos personalizados de biohacking basados en la ciencia más reciente"
+    input_schema = BiohackingProtocolInput
+    output_schema = BiohackingProtocolOutput
+    
+    async def handler(self, input_data: BiohackingProtocolInput) -> BiohackingProtocolOutput:
+        """Implementación de la skill de protocolo de biohacking"""
+        query = input_data.query
+        age = input_data.age
+        gender = input_data.gender
+        health_conditions = input_data.health_conditions or []
+        goals = input_data.goals or []
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en biohacking y optimización biológica.
+        
+        El usuario solicita un protocolo de biohacking con la siguiente consulta:
+        "{query}"
+        
+        Información del usuario:
+        - Edad: {age if age else "No especificada"}
+        - Género: {gender if gender else "No especificado"}
+        - Condiciones de salud: {', '.join(health_conditions) if health_conditions else "No especificadas"}
+        - Objetivos: {', '.join(goals) if goals else "No especificados"}
+        
+        Proporciona un protocolo de biohacking detallado y personalizado, basado en evidencia científica.
+        Incluye recomendaciones específicas sobre dieta, suplementos, ejercicio, sueño, y otras intervenciones relevantes.
+        Estructura tu respuesta en secciones claras y proporciona una justificación científica para cada recomendación.
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.7)
+        
+        # Generar protocolo estructurado
+        protocol_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera un protocolo de biohacking estructurado en formato JSON con los siguientes campos:
+        - objective: objetivo principal del protocolo
+        - duration: duración recomendada
+        - interventions: objeto con intervenciones (diet, supplements, exercise, sleep, etc.)
+        - schedule: cronograma diario/semanal
+        - metrics: métricas para seguimiento
+        - precautions: precauciones y contraindicaciones
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        protocol_json = await gemini_client.generate_structured_output(protocol_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(protocol_json, dict):
+            try:
+                protocol_json = json.loads(protocol_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                protocol_json = {
+                    "objective": "Protocolo de biohacking personalizado",
+                    "duration": "4-8 semanas",
+                    "interventions": {
+                        "diet": "Alimentación basada en alimentos enteros con ventana de alimentación de 8 horas",
+                        "supplements": "Omega-3, Vitamina D, Magnesio",
+                        "exercise": "Entrenamiento de alta intensidad 3 veces por semana",
+                        "sleep": "Optimización del sueño con 7-9 horas por noche"
+                    },
+                    "schedule": {
+                        "daily": "Exposición a luz natural por la mañana, ejercicio antes del mediodía, cena 3 horas antes de dormir",
+                        "weekly": "Entrenamiento de fuerza lunes/miércoles/viernes, sauna 2 veces por semana"
+                    },
+                    "metrics": [
+                        "Variabilidad de la frecuencia cardíaca (HRV)",
+                        "Calidad del sueño",
+                        "Niveles de energía (escala 1-10)",
+                        "Rendimiento cognitivo"
+                    ],
+                    "precautions": "Consultar con un profesional de la salud antes de iniciar cualquier protocolo, especialmente si tienes condiciones médicas preexistentes"
+                }
+        
+        # Buscar recursos científicos relevantes (simulado)
+        resources = [
+            {
+                "title": "Effects of Intermittent Fasting on Health, Aging, and Disease",
+                "authors": "de Cabo R, Mattson MP",
+                "journal": "New England Journal of Medicine",
+                "year": 2019,
+                "url": "https://www.nejm.org/doi/full/10.1056/NEJMra1905136",
+                "findings": "El ayuno intermitente puede mejorar la salud metabólica, aumentar la longevidad y reducir el riesgo de enfermedades."
+            },
+            {
+                "title": "Impact of Circadian Rhythms on Metabolic Health and Disease",
+                "authors": "Panda S",
+                "journal": "Cell Metabolism",
+                "year": 2016,
+                "url": "https://www.cell.com/cell-metabolism/fulltext/S1550-4131(16)30250-9",
+                "findings": "La sincronización de la alimentación con los ritmos circadianos puede mejorar significativamente la salud metabólica."
+            }
+        ]
+        
+        return BiohackingProtocolOutput(
+            response=response_text,
+            protocol=protocol_json,
+            resources=resources
+        )
+
+class LongevityStrategySkill(GoogleADKSkill):
+    name = "longevity_strategy"
+    description = "Proporciona estrategias basadas en evidencia científica para extender la vida saludable"
+    input_schema = LongevityStrategyInput
+    output_schema = LongevityStrategyOutput
+    
+    async def handler(self, input_data: LongevityStrategyInput) -> LongevityStrategyOutput:
+        """Implementación de la skill de estrategias de longevidad"""
+        query = input_data.query
+        age = input_data.age
+        health_profile = input_data.health_profile or {}
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en longevidad y medicina antienvejecimiento.
+        
+        El usuario solicita estrategias de longevidad con la siguiente consulta:
+        "{query}"
+        
+        Información del usuario:
+        - Edad: {age if age else "No especificada"}
+        - Perfil de salud: {json.dumps(health_profile, indent=2) if health_profile else "No especificado"}
+        
+        Proporciona estrategias detalladas y basadas en evidencia científica para extender la vida saludable
+        y retrasar los procesos de envejecimiento. Incluye intervenciones respaldadas por estudios científicos
+        y explica los mecanismos biológicos involucrados.
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Crear estrategias de longevidad (simplificadas)
+        strategies = [
+            {
+                "name": "Restricción calórica moderada",
+                "description": "Reducción del 15-20% de calorías sin malnutrición",
+                "evidence_level": "Alta",
+                "mechanisms": ["Activación de sirtuinas", "Reducción de IGF-1", "Autofagia"]
+            },
+            {
+                "name": "Ayuno intermitente",
+                "description": "Ventana de alimentación de 8 horas con 16 horas de ayuno",
+                "evidence_level": "Media-Alta",
+                "mechanisms": ["Autofagia", "Reducción de inflamación", "Mejora de sensibilidad a insulina"]
+            },
+            {
+                "name": "Ejercicio de resistencia",
+                "description": "Entrenamiento con pesas 2-3 veces por semana",
+                "evidence_level": "Alta",
+                "mechanisms": ["Preservación de masa muscular", "Mejora de sensibilidad a insulina", "Aumento de hormona de crecimiento"]
+            }
+        ]
+        
+        scientific_basis = "Las estrategias recomendadas se basan en estudios que demuestran la activación de vías moleculares asociadas con la longevidad, como las sirtuinas, AMPK, y la reducción de mTOR. Estas vías están involucradas en procesos celulares que promueven la reparación del ADN, la autofagia, y la reducción del estrés oxidativo."
+        
+        return LongevityStrategyOutput(
+            response=response_text,
+            strategies=strategies,
+            scientific_basis=scientific_basis
+        )
+
+class CognitiveEnhancementSkill(GoogleADKSkill):
+    name = "cognitive_enhancement"
+    description = "Diseña estrategias personalizadas para optimizar la función cerebral"
+    input_schema = CognitiveEnhancementInput
+    output_schema = CognitiveEnhancementOutput
+    
+    async def handler(self, input_data: CognitiveEnhancementInput) -> CognitiveEnhancementOutput:
+        """Implementación de la skill de mejora cognitiva"""
+        query = input_data.query
+        cognitive_goals = input_data.cognitive_goals or []
+        current_supplements = input_data.current_supplements or []
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en neurociencia y mejora cognitiva.
+        
+        El usuario solicita estrategias de mejora cognitiva con la siguiente consulta:
+        "{query}"
+        
+        Información del usuario:
+        - Objetivos cognitivos: {', '.join(cognitive_goals) if cognitive_goals else "No especificados"}
+        - Suplementos actuales: {', '.join(current_supplements) if current_supplements else "No especificados"}
+        
+        Proporciona un protocolo detallado para optimizar la función cerebral, mejorar la memoria, concentración y claridad mental.
+        Incluye recomendaciones sobre suplementos, ejercicios mentales, nutrición, sueño y otras intervenciones relevantes.
+        Basa tus recomendaciones en evidencia científica y explica los mecanismos neurológicos involucrados.
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Crear protocolo de mejora cognitiva (simplificado)
+        protocol = {
+            "objective": "Optimización de la función cognitiva",
+            "duration": "12 semanas",
+            "interventions": {
+                "nutrition": "Dieta mediterránea con énfasis en ácidos grasos omega-3, antioxidantes y alimentos ricos en colina",
+                "supplements": "Bacopa monnieri, fosfatidilserina, omega-3 DHA/EPA, magnesio L-treonato",
+                "exercise": "Ejercicio cardiovascular de intensidad moderada 30 minutos diarios, 5 días por semana",
+                "sleep": "Optimización del sueño con 7-8 horas de calidad, consistencia en horarios y rutina de relajación",
+                "mental_training": "Meditación de atención plena 20 minutos diarios, entrenamiento cognitivo con aplicaciones como Lumosity o Dual N-Back"
+            },
+            "metrics": [
+                "Pruebas cognitivas estandarizadas (Cambridge Brain Sciences)",
+                "Tiempo de reacción",
+                "Capacidad de memoria de trabajo",
+                "Niveles subjetivos de claridad mental y concentración"
+            ]
+        }
+        
+        # Crear lista de suplementos recomendados
+        supplements = [
+            {
+                "name": "Bacopa Monnieri",
+                "dosage": "300-600 mg diarios",
+                "timing": "Con comidas",
+                "benefits": "Mejora de memoria y reducción de ansiedad",
+                "mechanism": "Aumento de circulación cerebral y modulación de neurotransmisores"
+            },
+            {
+                "name": "Fosfatidilserina",
+                "dosage": "100 mg, 3 veces al día",
+                "timing": "Con comidas",
+                "benefits": "Mejora de memoria y función cognitiva",
+                "mechanism": "Componente estructural de membranas neuronales"
+            },
+            {
+                "name": "Omega-3 DHA/EPA",
+                "dosage": "1-2 g diarios",
+                "timing": "Con comidas",
+                "benefits": "Mejora de función cognitiva y salud cerebral",
+                "mechanism": "Componente estructural de membranas neuronales y reducción de inflamación"
+            }
+        ]
+        
+        return CognitiveEnhancementOutput(
+            response=response_text,
+            protocol=protocol,
+            supplements=supplements
+        )
+
+class HormonalOptimizationSkill(GoogleADKSkill):
+    name = "hormonal_optimization"
+    description = "Desarrolla estrategias para optimizar naturalmente el equilibrio hormonal"
+    input_schema = HormonalOptimizationInput
+    output_schema = HormonalOptimizationOutput
+    
+    async def handler(self, input_data: HormonalOptimizationInput) -> HormonalOptimizationOutput:
+        """Implementación de la skill de optimización hormonal"""
+        query = input_data.query
+        age = input_data.age
+        gender = input_data.gender
+        hormone_concerns = input_data.hormone_concerns or []
+        
+        # Construir el prompt para el modelo
+        prompt = f"""
+        Eres un experto en endocrinología y optimización hormonal natural.
+        
+        El usuario solicita estrategias de optimización hormonal con la siguiente consulta:
+        "{query}"
+        
+        Información del usuario:
+        - Edad: {age if age else "No especificada"}
+        - Género: {gender if gender else "No especificado"}
+        - Preocupaciones hormonales: {', '.join(hormone_concerns) if hormone_concerns else "No especificadas"}
+        
+        Proporciona un protocolo detallado para optimizar naturalmente el equilibrio hormonal y mejorar la salud metabólica.
+        Incluye recomendaciones sobre nutrición, ejercicio, gestión del estrés, sueño, suplementos y otras intervenciones relevantes.
+        Basa tus recomendaciones en evidencia científica y explica los mecanismos endocrinos involucrados.
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Crear protocolo de optimización hormonal (simplificado)
+        protocol = {
+            "objective": "Optimización del equilibrio hormonal natural",
+            "duration": "12 semanas",
+            "target_hormones": ["Testosterona", "Cortisol", "Insulina", "Hormona de crecimiento"],
+            "interventions": {
+                "nutrition": "Dieta rica en grasas saludables, proteínas de calidad y carbohidratos complejos",
+                "supplements": "Zinc, magnesio, vitamina D, ashwagandha",
+                "exercise": "Entrenamiento de fuerza con ejercicios compuestos 3-4 veces por semana",
+                "sleep": "Priorización del sueño con 7-9 horas de calidad en habitación fría y oscura",
+                "stress_management": "Meditación diaria, técnicas de respiración y tiempo en la naturaleza"
+            },
+            "metrics": [
+                "Niveles hormonales en sangre (testosterona total/libre, estradiol, SHBG, cortisol)",
+                "Composición corporal (% grasa corporal, masa muscular)",
+                "Calidad del sueño",
+                "Niveles de energía y estado de ánimo"
+            ]
+        }
+        
+        # Crear lista de cambios de estilo de vida recomendados
+        lifestyle_changes = [
+            "Exposición a luz solar matutina (10-20 min) para regular ritmos circadianos y vitamina D",
+            "Minimización de disruptores endocrinos (plásticos, alimentos ultraprocesados)",
+            "Ayuno intermitente 14-16 horas para optimizar sensibilidad a insulina y hormona de crecimiento",
+            "Técnicas de gestión del estrés para reducir cortisol crónico",
+            "Entrenamiento de fuerza con ejercicios compuestos para optimizar testosterona y hormona de crecimiento",
+            "Optimización del sueño para maximizar la producción hormonal nocturna"
+        ]
+        
+        # Crear lista de suplementos recomendados
+        supplements = [
+            {
+                "name": "Zinc",
+                "dosage": "15-30 mg diarios",
+                "timing": "Con comidas",
+                "benefits": "Soporte de producción de testosterona",
+                "mechanism": "Cofactor en la síntesis de testosterona"
+            },
+            {
+                "name": "Magnesio",
+                "dosage": "200-400 mg diarios",
+                "timing": "Antes de dormir",
+                "benefits": "Mejora de calidad del sueño y reducción de cortisol",
+                "mechanism": "Regulación de GABA y función muscular"
+            },
+            {
+                "name": "Ashwagandha",
+                "dosage": "300-600 mg diarios",
+                "timing": "Mañana y noche",
+                "benefits": "Reducción de cortisol y soporte de testosterona",
+                "mechanism": "Modulación del eje HPA y reducción del estrés"
+            }
+        ]
+        
+        return HormonalOptimizationOutput(
+            response=response_text,
+            protocol=protocol,
+            lifestyle_changes=lifestyle_changes,
+            supplements=supplements
+        )
+
+class BiohackingInnovator(ADKAgent):
     """
     Agente especializado en biohacking y optimización biológica.
     
@@ -25,147 +437,83 @@ class BiohackingInnovator(A2AAgent):
     y estrategias para mejorar la longevidad y el rendimiento biológico.
     """
     
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
-        """
-        Inicializa el agente BiohackingInnovator.
+    def __init__(
+        self,
+        agent_id: str = None,
+        gemini_client: GeminiClient = None,
+        supabase_client: SupabaseClient = None,
+        mcp_toolkit: MCPToolkit = None,
+        state_manager = None,
+        **kwargs
+    ):
+        """Inicializa el agente BiohackingInnovator con sus dependencias"""
         
-        Args:
-            toolkit: Toolkit con herramientas disponibles para el agente
-            a2a_server_url: URL del servidor A2A (opcional)
-            state_manager: Gestor de estado para mantener el contexto entre sesiones (opcional)
-        """
-        # Definir capacidades y habilidades
-        capabilities = [
-            "biohacking", 
-            "longevity", 
-            "cognitive_enhancement", 
-            "hormonal_optimization"
-        ]
+        # Generar ID único si no se proporciona
+        if agent_id is None:
+            agent_id = f"biohacking_innovator_{uuid.uuid4().hex[:8]}"
         
-        # Definir skills siguiendo el formato A2A con mejores prácticas
-        skills = [
-            {
-                "id": "biohacking-innovator-biohacking",
-                "name": "Técnicas de Biohacking",
-                "description": "Desarrolla protocolos personalizados de biohacking basados en la ciencia más reciente para optimizar el rendimiento biológico y la salud",
-                "tags": ["biohacking", "optimization", "personalized-protocols", "self-experimentation", "health"],
-                "examples": [
-                    "Diseña un protocolo de biohacking para optimizar mi rendimiento cognitivo",
-                    "Necesito un plan de biohacking para aumentar mi energía durante el día",
-                    "Técnicas de biohacking para mejorar mi sistema inmunológico"
-                ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
-            },
-            {
-                "id": "biohacking-innovator-longevity",
-                "name": "Estrategias de Longevidad",
-                "description": "Proporciona estrategias basadas en evidencia científica para extender la vida saludable y retrasar los procesos de envejecimiento",
-                "tags": ["longevity", "anti-aging", "lifespan", "healthspan", "rejuvenation"],
-                "examples": [
-                    "¿Qué intervenciones tienen mayor evidencia científica para extender la longevidad?",
-                    "Protocolo de suplementación para retrasar el envejecimiento celular",
-                    "Hábitos diarios para maximizar mi esperanza de vida saludable"
-                ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
-            },
-            {
-                "id": "biohacking-innovator-cognitive-enhancement",
-                "name": "Mejora Cognitiva",
-                "description": "Diseña estrategias personalizadas para optimizar la función cerebral, mejorar la memoria, concentración y claridad mental",
-                "tags": ["nootropics", "brain-optimization", "focus", "memory", "mental-clarity"],
-                "examples": [
-                    "Protocolo de nootrópicos para mejorar la concentración y memoria",
-                    "Técnicas para optimizar la neuroplasticidad y el aprendizaje",
-                    "Cómo mejorar la claridad mental y reducir la niebla cerebral"
-                ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
-            },
-            {
-                "id": "biohacking-innovator-hormonal-optimization",
-                "name": "Optimización Hormonal",
-                "description": "Desarrolla estrategias para optimizar naturalmente el equilibrio hormonal y mejorar la salud metabólica",
-                "tags": ["hormones", "endocrine-system", "metabolism", "testosterone", "estrogen"],
-                "examples": [
-                    "Protocolo natural para optimizar los niveles de testosterona",
-                    "Estrategias para equilibrar las hormonas en mujeres",
-                    "Cómo mejorar la sensibilidad a la insulina a través del estilo de vida"
-                ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "json", "markdown"]
-            }
-        ]
-        
-        # Inicializar agente base con los parámetros definidos
-        super().__init__(
-            agent_id="biohacking_innovator",
-            name="NGX Biohacking Innovator",
-            description="Especialista en técnicas avanzadas de biohacking, optimización biológica, longevidad y mejora cognitiva. Proporciona protocolos personalizados basados en la ciencia más reciente para optimizar el rendimiento humano y la salud.",
-            capabilities=capabilities,
-            toolkit=toolkit,
-            a2a_server_url=a2a_server_url or "https://biohacking-innovator-api.ngx-agents.com/a2a",
-            state_manager=state_manager,
-            version="1.2.0",
-            skills=skills,
-            provider={
-                "organization": "NGX Health & Performance",
-                "url": "https://ngx-agents.com"
-            },
-            documentation_url="https://docs.ngx-agents.com/biohacking-innovator"
+        # Crear tarjeta de agente
+        agent_card = AgentCard(
+            name="BiohackingInnovator",
+            description="Especialista en técnicas avanzadas de biohacking, optimización biológica, longevidad y mejora cognitiva",
+            instructions="""
+            Soy un agente especializado en biohacking y optimización biológica.
+            
+            Puedo ayudarte con:
+            - Protocolos personalizados de biohacking basados en evidencia científica
+            - Estrategias para mejorar la longevidad y retrasar el envejecimiento
+            - Técnicas para optimizar el rendimiento cognitivo y la claridad mental
+            - Métodos para optimizar naturalmente el equilibrio hormonal
+            - Tecnologías y dispositivos para monitoreo biológico
+            
+            Mis recomendaciones se basan en la ciencia más reciente y consideran tu perfil individual,
+            incluyendo edad, género, objetivos y condiciones de salud existentes.
+            """,
+            examples=[
+                Example(
+                    input="¿Puedes recomendarme un protocolo de biohacking para principiantes?",
+                    output="Aquí tienes un protocolo de biohacking para principiantes basado en evidencia científica..."
+                ),
+                Example(
+                    input="¿Qué estrategias puedo implementar para mejorar mi longevidad?",
+                    output="Para mejorar tu longevidad, te recomiendo las siguientes estrategias basadas en evidencia..."
+                ),
+                Example(
+                    input="¿Cómo puedo mejorar mi rendimiento cognitivo de forma natural?",
+                    output="Para optimizar tu rendimiento cognitivo, te recomiendo este protocolo personalizado..."
+                ),
+                Example(
+                    input="¿Qué puedo hacer para optimizar mis niveles hormonales naturalmente?",
+                    output="Para optimizar tu equilibrio hormonal de forma natural, considera estas intervenciones..."
+                )
+            ]
         )
         
-        # Inicializar clientes y herramientas
-        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
-        gcp_region = os.getenv("GCP_REGION", "us-central1")
-        try:
-            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
-            aiplatform.init(project=gcp_project_id, location=gcp_region)
-            logger.info("AI Platform inicializado correctamente.")
-        except Exception as e:
-            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+        # Crear toolkit con las skills del agente
+        toolkit = Toolkit(
+            skills=[
+                BiohackingProtocolSkill(),
+                LongevityStrategySkill(),
+                CognitiveEnhancementSkill(),
+                HormonalOptimizationSkill()
+            ]
+        )
         
-        self.gemini_client = GeminiClient(model_name="gemini-2.0-flash")
-        self.supabase_client = SupabaseClient()
-        self.mcp_toolkit = MCPToolkit()
-        self.state_manager = StateManager(self.supabase_client)
+        # Inicializar la clase base
+        super().__init__(
+            agent_id=agent_id,
+            agent_card=agent_card,
+            toolkit=toolkit,
+            gemini_client=gemini_client,
+            supabase_client=supabase_client,
+            mcp_toolkit=mcp_toolkit,
+            state_manager=None,  # Ya no usamos el state_manager original
+            **kwargs
+        )
         
-        # Inicializar estado del agente
-        self.update_state("user_protocols", {})  # Almacenar protocolos generados por usuario
-        self.update_state("resources_cache", {})  # Caché de recursos científicos
-        
-        # Definir el sistema de instrucciones para el agente
-        self.system_instructions = """
-        Eres NGX Biohacking Innovator, un experto en técnicas avanzadas de biohacking y optimización biológica.
-        
-        Tu objetivo es proporcionar recomendaciones personalizadas sobre:
-        1. Técnicas de optimización hormonal natural
-        2. Estrategias para mejorar la longevidad y retrasar el envejecimiento
-        3. Métodos para mejorar el rendimiento cognitivo y la claridad mental
-        4. Protocolos de biohacking basados en evidencia científica
-        5. Tecnologías y dispositivos para monitoreo biológico
-        
-        Debes basar tus recomendaciones en la ciencia más reciente y considerar el perfil individual 
-        del usuario, incluyendo su edad, género, objetivos y condiciones de salud existentes.
-        
-        Cuando proporciones recomendaciones:
-        - Cita estudios científicos relevantes
-        - Explica los mecanismos biológicos involucrados
-        - Proporciona opciones para diferentes niveles de experiencia (principiante, intermedio, avanzado)
-        - Advierte sobre posibles riesgos y contraindicaciones
-        - Sugiere formas de medir y evaluar los resultados
-        
-        Evita recomendar:
-        - Sustancias ilegales o no aprobadas
-        - Prácticas extremas o potencialmente peligrosas
-        - Intervenciones sin respaldo científico
-        
-        Recuerda que tu objetivo es empoderar a los usuarios con conocimiento basado en evidencia
-        para que puedan optimizar su biología de manera segura y efectiva.
-        """
+        logger.info(f"Agente BiohackingInnovator inicializado con ID: {agent_id}")
     
-    async def _get_context(self, user_id: str, session_id: str) -> Dict[str, Any]:
+    async def _get_context(self, user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Obtiene el contexto de la conversación desde el StateManager.
         
@@ -177,11 +525,11 @@ class BiohackingInnovator(A2AAgent):
             Dict[str, Any]: Contexto de la conversación
         """
         try:
-            # Intentar cargar el contexto desde el StateManager
-            context = await self.state_manager.load_state(user_id, session_id)
+            # Intentar cargar el contexto desde el adaptador del StateManager
+            context = await state_manager_adapter.load_state(user_id, session_id)
             
             if not context or not context.get("state_data"):
-                logger.info(f"No se encontró contexto en StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
+                logger.info(f"No se encontró contexto en el adaptador del StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
                 # Si no hay contexto, crear uno nuevo
                 context = {
                     "conversation_history": [],
@@ -193,7 +541,7 @@ class BiohackingInnovator(A2AAgent):
             else:
                 # Si hay contexto, usar el state_data
                 context = context.get("state_data", {})
-                logger.info(f"Contexto cargado desde StateManager para user_id={user_id}, session_id={session_id}")
+                logger.info(f"Contexto cargado desde el adaptador del StateManager para user_id={user_id}, session_id={session_id}")
             
             return context
         except Exception as e:
@@ -220,15 +568,155 @@ class BiohackingInnovator(A2AAgent):
             # Actualizar la marca de tiempo
             context["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
             
-            # Guardar el contexto en el StateManager
-            await self.state_manager.save_state(context, user_id, session_id)
-            logger.info(f"Contexto actualizado en StateManager para user_id={user_id}, session_id={session_id}")
+            # Guardar el contexto en el adaptador del StateManager
+            await state_manager_adapter.save_state(user_id, session_id, context)
+            logger.info(f"Contexto actualizado en el adaptador del StateManager para user_id={user_id}, session_id={session_id}")
         except Exception as e:
             logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
-
-    async def run(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    
+    async def _classify_query(self, query: str) -> str:
         """
-        Ejecuta el agente con un texto de entrada siguiendo el protocolo ADK oficial.
+        Clasifica el tipo de consulta del usuario utilizando el adaptador del Intent Analyzer.
+        
+        Args:
+            query: Consulta del usuario
+            
+        Returns:
+            str: Tipo de consulta clasificada
+        """
+        try:
+            # Utilizar el adaptador del Intent Analyzer para analizar la intención
+            intent_analysis = await intent_analyzer_adapter.analyze_intent(query)
+            
+            # Mapear la intención primaria a los tipos de consulta del agente
+            primary_intent = intent_analysis.get("primary_intent", "").lower()
+            
+            # Mapeo de intenciones a tipos de consulta
+            intent_to_query_type = {
+                "hormonal": "hormonal_optimization",
+                "hormonal_optimization": "hormonal_optimization",
+                "cognitive": "cognitive_enhancement",
+                "cognitive_enhancement": "cognitive_enhancement",
+                "longevity": "longevity",
+                "biohacking": "biohacking"
+            }
+            
+            # Buscar coincidencias exactas
+            if primary_intent in intent_to_query_type:
+                return intent_to_query_type[primary_intent]
+            
+            # Buscar coincidencias parciales
+            for intent, query_type in intent_to_query_type.items():
+                if intent in primary_intent:
+                    return query_type
+            
+            # Si no hay coincidencias, usar el método de palabras clave como fallback
+            return self._classify_query_by_keywords(query)
+        except Exception as e:
+            logger.error(f"Error al clasificar consulta con Intent Analyzer: {e}", exc_info=True)
+            # En caso de error, usar el método de palabras clave como fallback
+            return self._classify_query_by_keywords(query)
+    
+    def _classify_query_by_keywords(self, query: str) -> str:
+        """
+        Clasifica el tipo de consulta del usuario utilizando palabras clave.
+        
+        Args:
+            query: Consulta del usuario
+            
+        Returns:
+            str: Tipo de consulta clasificada
+        """
+        query_lower = query.lower()
+        
+        # Palabras clave para biohacking general
+        biohacking_keywords = [
+            "biohacking", "protocolo", "optimización", "rendimiento", "mejora", 
+            "monitoreo", "dispositivos", "wearables", "autoexperimentación"
+        ]
+        
+        # Palabras clave para longevidad
+        longevity_keywords = [
+            "longevidad", "envejecimiento", "antienvejecimiento", "vida saludable", 
+            "esperanza de vida", "telómeros", "sirtuinas", "senolíticos"
+        ]
+        
+        # Palabras clave para mejora cognitiva
+        cognitive_keywords = [
+            "cognitivo", "cerebro", "memoria", "concentración", "claridad mental", 
+            "nootropicos", "rendimiento mental", "niebla mental", "focus"
+        ]
+        
+        # Palabras clave para optimización hormonal
+        hormonal_keywords = [
+            "hormonal", "testosterona", "estrógeno", "cortisol", "tiroides", 
+            "insulina", "hormona de crecimiento", "equilibrio hormonal"
+        ]
+        
+        # Verificar coincidencias con palabras clave
+        for keyword in hormonal_keywords:
+            if keyword in query_lower:
+                return "hormonal_optimization"
+                
+        for keyword in cognitive_keywords:
+            if keyword in query_lower:
+                return "cognitive_enhancement"
+                
+        for keyword in longevity_keywords:
+            if keyword in query_lower:
+                return "longevity"
+                
+        for keyword in biohacking_keywords:
+            if keyword in query_lower:
+                return "biohacking"
+                
+        # Si no hay coincidencias, devolver tipo general
+        return "biohacking"
+    
+    async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Consulta a otro agente utilizando el adaptador de A2A.
+        
+        Args:
+            agent_id: ID del agente a consultar
+            query: Consulta a enviar al agente
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            context: Contexto adicional para la consulta
+            
+        Returns:
+            Dict[str, Any]: Respuesta del agente consultado
+        """
+        try:
+            # Crear contexto para la consulta
+            task_context = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "additional_context": context or {}
+            }
+            
+            # Llamar al agente utilizando el adaptador de A2A
+            response = await a2a_adapter.call_agent(
+                agent_id=agent_id,
+                user_input=query,
+                context=task_context
+            )
+            
+            logger.info(f"Respuesta recibida del agente {agent_id}")
+            return response
+        except Exception as e:
+            logger.error(f"Error al consultar al agente {agent_id}: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "error": str(e),
+                "output": f"Error al consultar al agente {agent_id}",
+                "agent_id": agent_id,
+                "agent_name": agent_id
+            }
+    
+    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """
+        Implementación asíncrona del método run. Procesa la entrada del usuario y genera una respuesta.
         
         Args:
             input_text: Texto de entrada del usuario
@@ -238,649 +726,172 @@ class BiohackingInnovator(A2AAgent):
         Returns:
             Dict[str, Any]: Respuesta estandarizada del agente según el protocolo ADK
         """
-        try:
-            start_time = time.time()
-            logger.info(f"Ejecutando BiohackingInnovator con input: {input_text[:50]}...")
-            
-            # Obtener session_id de los kwargs o generar uno nuevo
-            session_id = kwargs.get("session_id", str(uuid.uuid4()))
-            
-            # Obtener el contexto de la conversación
-            context = await self._get_context(user_id, session_id) if user_id else {}
-            
-            # Obtener perfil del usuario si está disponible
-            user_profile = None
-            if user_id:
+        start_time = time.time()
+        logger.info(f"Ejecutando BiohackingInnovator con input: {input_text[:50]}...")
+        
+        # Obtener session_id de los kwargs o generar uno nuevo
+        session_id = kwargs.get("session_id", str(uuid.uuid4()))
+        
+        # Obtener el contexto de la conversación
+        context = await self._get_context(user_id, session_id) if user_id else {}
+        
+        # Obtener perfil del usuario si está disponible
+        user_profile = None
+        if user_id:
+            # Intentar obtener el perfil del usuario del contexto primero
+            user_profile = context.get("user_profile", {})
+            if not user_profile:
                 user_profile = self.supabase_client.get_user_profile(user_id)
-                # Actualizar el perfil en el contexto si existe
                 if user_profile:
                     context["user_profile"] = user_profile
-            
-            # Determinar qué capacidad utilizar basado en palabras clave
-            capabilities_used = []
-            
-            # Generar respuesta principal
-            prompt = self._build_prompt(input_text, user_profile)
-            response = await self.gemini_client.generate_response(prompt, temperature=0.7)
-            
-            # Generar protocolo de biohacking estructurado
-            protocol = await self._generate_biohacking_protocol(input_text, user_profile)
-            protocol_summary = self._summarize_protocol(protocol)
-            
-            # Combinar respuesta principal con el protocolo
-            combined_response = f"{response}\n\n{protocol_summary}"
-            
-            # Buscar recursos científicos relevantes
-            resources = self._find_resources(input_text)
-            
-            # Si hay recursos, añadirlos a la respuesta
-            if resources:
-                resource_text = "\n\nRecursos científicos relevantes:\n"
-                for idx, resource in enumerate(resources[:3], 1):
-                    resource_text += f"\n{idx}. {resource['title']} ({resource['year']}) - {resource['authors']}\n   {resource['findings']}\n"
-                combined_response += resource_text
-            
-            # Añadir la interacción al historial interno del agente
-            self.add_to_history(input_text, combined_response)
-            
-            # Actualizar el contexto con la nueva interacción
-            if user_id:
-                # Añadir la interacción al historial de conversación
-                context["conversation_history"].append({
-                    "user": input_text,
-                    "agent": combined_response,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                })
+        
+        # Clasificar el tipo de consulta utilizando el adaptador del Intent Analyzer
+        query_type = await self._classify_query(input_text)
+        capabilities_used = []
+        
+        # Procesar la consulta según su tipo utilizando las skills ADK
+        if query_type == "biohacking":
+            # Usar la skill de protocolo de biohacking
+            biohacking_skill = next((skill for skill in self.skills if skill.name == "biohacking_protocol"), None)
+            if biohacking_skill:
+                # Extraer información relevante del perfil del usuario si está disponible
+                age = user_profile.get("age") if user_profile else None
+                gender = user_profile.get("gender") if user_profile else None
+                health_conditions = user_profile.get("health_conditions", []) if user_profile else []
+                goals = user_profile.get("goals", []) if user_profile else []
                 
-                # Añadir el protocolo generado a la lista de protocolos
-                context["protocols"].append({
-                    "protocol": protocol,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "query": input_text
-                })
-                
-                # Añadir los recursos utilizados
-                context["resources_used"].extend(resources[:3])
-                
-                # Actualizar el contexto en el StateManager
-                await self._update_context(context, user_id, session_id)
-            
-            # Crear artefactos para la respuesta
-            artifacts = [
-                {
-                    "type": "biohacking_protocol",
-                    "content": protocol,
-                    "metadata": {
-                        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                },
-                {
-                    "type": "scientific_resources",
-                    "content": resources,
-                    "metadata": {
-                        "count": len(resources)
-                    }
-                }
-            ]
-            
-            # Devolver respuesta final
-            return {
-                "status": "success",
-                "response": combined_response,
-                "artifacts": artifacts,
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "protocol_type": protocol.get("objective", "Biohacking Protocol"),
-                    "user_id": user_id,
-                    "session_id": session_id
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error en BiohackingInnovator: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud sobre biohacking.",
-                "error": str(e),
-                "agent_id": self.agent_id
-            }
-
-    def _summarize_protocol(self, protocol: Dict[str, Any]) -> str:
-        """Genera un resumen textual del protocolo de biohacking para la respuesta al usuario."""
-        summary_parts = []
-        
-        if "objective" in protocol:
-            summary_parts.append(f"El objetivo principal es: {protocol['objective']}.")
-        
-        if "duration" in protocol:
-            summary_parts.append(f"Duración recomendada: {protocol['duration']}.")
-        
-        if "interventions" in protocol:
-            interventions = protocol["interventions"]
-            if isinstance(interventions, dict):
-                if "diet" in interventions:
-                    summary_parts.append(f"Dieta: {interventions['diet']}.")
-                if "supplements" in interventions:
-                    summary_parts.append(f"Suplementos: {interventions['supplements']}.")
-        
-        if "precautions" in protocol:
-            summary_parts.append(f"Precauciones importantes: {protocol['precautions']}.")
-        
-        if not summary_parts:
-            return "Revisa el protocolo detallado para más información."
-            
-        return " ".join(summary_parts)
-    
-    def _create_agent_card(self) -> AgentCard:
-        """
-        Crea una tarjeta de agente estandarizada según el protocolo A2A.
-        
-        Returns:
-            AgentCard: Tarjeta del agente estandarizada
-        """
-        # Crear ejemplos para la tarjeta del agente
-        examples = [
-            Example(
-                input={"message": "Diseña un protocolo de biohacking para optimizar mi rendimiento cognitivo"},
-                output={"response": "He diseñado un protocolo de biohacking para optimizar tu rendimiento cognitivo. Incluye: 1) Suplementación con omega-3 (2g/día), fosfatidilserina (300mg/día) y bacopa monnieri (300mg/día); 2) Rutina de ejercicio cardiovascular intermitente 3 veces por semana; 3) Práctica de meditación de atención plena 20 min/día; 4) Exposición a luz natural matutina; 5) Técnica de respiración Wim Hof al despertar; 6) Ayuno intermitente 16/8; 7) Optimización del sueño con rutina nocturna sin pantallas. Seguimiento con pruebas cognitivas Cambridge Brain Sciences semanales."}
-            ),
-            Example(
-                input={"message": "¿Qué intervenciones tienen mayor evidencia científica para extender la longevidad?"},
-                output={"response": "Las intervenciones con mayor evidencia científica para extender la longevidad son: 1) Restricción calórica moderada (15-20% menos de calorías sin malnutrición); 2) Ayuno intermitente, particularmente los protocolos 16/8 o 5:2; 3) Ejercicio regular combinando entrenamiento de resistencia y cardiovascular; 4) Sueño optimizado (7-8 horas de calidad); 5) Gestión del estrés crónico; 6) Dieta rica en polifenoles y antiinflamatorios naturales; 7) Suplementación con NMN o NR (precursores de NAD+); 8) Metformina (bajo supervisión médica); 9) Rapamicina (dosificación intermitente bajo supervisión); 10) Exposición al frío (hormesis). Estas intervenciones activan vías moleculares como AMPK, sirtuinas y autofagia, mientras reducen la inflamación crónica."}
-            ),
-            Example(
-                input={"message": "Protocolo para optimizar mis niveles hormonales de forma natural"},
-                output={"response": "Para optimizar tus niveles hormonales naturalmente, te recomiendo este protocolo: 1) Ejercicio compuesto (sentadillas, peso muerto) 3-4 veces/semana para aumentar testosterona y hormona de crecimiento; 2) Sueño prioritario (7-9 horas/noche) en habitación fría y oscura; 3) Grasas saludables (30-35% de calorías) incluyendo huevos, aguacate y aceite de oliva; 4) Gestión del estrés con meditación diaria; 5) Exposición solar matutina (10-20 min) para vitamina D y regulación circadiana; 6) Minimización de disruptores endocrinos (plásticos, alimentos ultraprocesados); 7) Suplementos: zinc (15-30mg), magnesio (200-400mg), ashwagandha (300-600mg); 8) Ayuno intermitente 14-16 horas. Sugiero medir: testosterona total/libre, estradiol, SHBG, cortisol y vitamina D antes de comenzar y cada 2-3 meses."}
-            ),
-            Example(
-                input={"message": "Técnicas para mejorar mi calidad de sueño y recuperación"},
-                output={"response": "Para optimizar tu calidad de sueño y recuperación, implementa estas técnicas: 1) Consistencia circadiana: acostarte y levantarte a la misma hora todos los días, incluso fines de semana; 2) Exposición a luz solar matutina (15-30 min) para regular melatonina; 3) Protocolo nocturno: eliminar luces azules 2 horas antes de dormir, usar gafas de bloqueo azul si es necesario; 4) Ambiente óptimo: habitación fría (18-19°C), completamente oscura y silenciosa; 5) Suplementación: magnesio glicinato (200-400mg), l-teanina (200mg) y tart cherry 1 hora antes de dormir; 6) Técnica de respiración 4-7-8 antes de acostarte; 7) Bajar temperatura corporal con ducha fría/tibia 60-90 minutos antes de dormir; 8) Evitar estimulantes después del mediodía y comidas pesadas 3 horas antes de dormir. Seguimiento con dispositivos como Oura Ring o Whoop para analizar patrones."}
-            )
-        ]
-        
-        # Crear la tarjeta del agente
-        return AgentCard(
-            title="NGX Biohacking Innovator",
-            description="Especialista en técnicas avanzadas de biohacking, optimización biológica, longevidad y mejora cognitiva.",
-            instructions="Describe tu objetivo de biohacking o la área específica que deseas optimizar (cognición, longevidad, rendimiento físico, hormonal, etc.) e incluye cualquier información relevante sobre tu situación actual, condiciones de salud o limitaciones.",
-            examples=examples,
-            capabilities=[
-                "Diseño de protocolos personalizados de biohacking basados en evidencia científica",
-                "Estrategias de longevidad y anti-envejecimiento",
-                "Técnicas de optimización cognitiva y neuropotenciación",
-                "Optimización hormonal natural",
-                "Recomendación de suplementos y compuestos bioactivos"
-            ],
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string"},
-                    "user_profile": {"type": "object"},
-                    "biological_markers": {"type": "object"}
-                },
-                "required": ["message"]
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "response": {"type": "string"},
-                    "protocol": {"type": "object"},
-                    "scientific_resources": {"type": "array"},
-                    "recommendations": {"type": "array"}
-                },
-                "required": ["response"]
-            }
-        )
-    
-    def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
-        
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada que cumple con las especificaciones
-            del protocolo A2A de Google, incluyendo metadatos enriquecidos, capacidades
-            y habilidades detalladas.
-        """
-        return self._create_agent_card().to_dict()
-    
-    async def execute_task(self, task: Dict[str, Any]) -> Any:
-        """
-        Ejecuta una tarea solicitada por el servidor A2A.
-        
-        Implementa completamente el protocolo A2A, incluyendo el formato de respuesta estandarizado,
-        manejo de errores robusto, y generación de artefactos estructurados.
-        
-        Args:
-            task: Tarea a ejecutar con la estructura definida por el protocolo A2A
-            
-        Returns:
-            Any: Resultado de la tarea siguiendo el protocolo A2A
-        """
-        try:
-            start_time = time.time()
-            
-            # Extraer información de la tarea
-            user_input = task.get("input", "")
-            context = task.get("context", {})
-            user_id = context.get("user_id")
-            session_id = context.get("session_id") or str(uuid.uuid4())
-            
-            logger.info(f"BiohackingInnovator procesando consulta: {user_input[:50]}...")
-            
-            # Obtener perfil del usuario si está disponible
-            user_profile = None
-            if user_id:
-                try:
-                    user_profile = self.supabase_client.get_user_profile(user_id)
-                    logger.info(f"Perfil de usuario obtenido: {user_profile is not None}")
-                except Exception as e:
-                    logger.warning(f"Error al obtener perfil de usuario: {e}")
-            
-            # Construir el prompt para el modelo
-            prompt = self._build_prompt(user_input, user_profile)
-            
-            # Generar respuesta utilizando Gemini con manejo de errores
-            try:
-                response = await self.gemini_client.generate_response(
-                    prompt=prompt,
-                    temperature=0.7
+                input_data = BiohackingProtocolInput(
+                    query=input_text,
+                    age=age,
+                    gender=gender,
+                    health_conditions=health_conditions,
+                    goals=goals
                 )
-            except Exception as gemini_error:
-                logger.error(f"Error en llamada a Gemini: {gemini_error}")
-                response = "No pude generar una respuesta completa debido a un error. Por favor, intenta simplificar tu consulta o proporcionar más contexto."
-            
-            # Registrar la interacción en Supabase si hay ID de usuario
-            if user_id:
-                try:
-                    self.supabase_client.log_interaction(
-                        user_id=user_id,
-                        agent_id=self.agent_id,
-                        message=user_input,
-                        response=response
-                    )
-                except Exception as log_error:
-                    logger.warning(f"Error al registrar interacción: {log_error}")
-            
-            # Determinar capacidades utilizadas
-            capabilities_used = []
-            response_type = "general_information"
-            
-            if any(keyword in user_input.lower() for keyword in ["protocolo", "plan", "rutina", "estrategia"]):
+                result = await biohacking_skill.handler(input_data)
+                response = result.response
                 capabilities_used.append("biohacking")
-                response_type = "biohacking_protocol"
-            
-            if any(keyword in user_input.lower() for keyword in ["cognitivo", "cerebro", "mental", "concentración", "memoria"]):
-                capabilities_used.append("cognitive_enhancement")
-                response_type = "cognitive_enhancement"
-            
-            if any(keyword in user_input.lower() for keyword in ["longevidad", "envejecimiento", "anti-aging", "vejez"]):
+                
+                # Actualizar contexto con el protocolo
+                context["protocols"].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "type": "biohacking",
+                    "query": input_text,
+                    "protocol": result.protocol,
+                    "resources": result.resources
+                })
+                
+        elif query_type == "longevity":
+            # Usar la skill de estrategias de longevidad
+            longevity_skill = next((skill for skill in self.skills if skill.name == "longevity_strategy"), None)
+            if longevity_skill:
+                # Extraer información relevante del perfil del usuario si está disponible
+                age = user_profile.get("age") if user_profile else None
+                health_profile = {
+                    "conditions": user_profile.get("health_conditions", []),
+                    "metrics": user_profile.get("metrics", {}),
+                    "lifestyle": user_profile.get("lifestyle", {})
+                } if user_profile else {}
+                
+                input_data = LongevityStrategyInput(
+                    query=input_text,
+                    age=age,
+                    health_profile=health_profile
+                )
+                result = await longevity_skill.handler(input_data)
+                response = result.response
                 capabilities_used.append("longevity")
-                response_type = "longevity_strategy"
-            
-            if any(keyword in user_input.lower() for keyword in ["hormonal", "testosterona", "estrógeno", "cortisol"]):
-                capabilities_used.append("hormonal_optimization")
-                response_type = "hormonal_optimization"
-            
-            # Si no se detectó ninguna capacidad específica, usar biohacking general
-            if not capabilities_used:
-                capabilities_used.append("biohacking")
-            
-            # Crear artefactos según el protocolo A2A
-            artifacts = []
-            
-            # Buscar recursos adicionales si es necesario
-            if any(keyword in user_input.lower() for keyword in ["recursos", "estudios", "investigación", "papers", "científico"]):
-                try:
-                    resources = await self._find_resources(user_input)
-                    
-                    # Crear un artefacto con los recursos
-                    artifact_id = f"scientific_resources_{uuid.uuid4().hex[:8]}"
-                    artifact = self.create_artifact(
-                        artifact_id=artifact_id,
-                        artifact_type="scientific_resources",
-                        parts=[
-                            self.create_data_part(resources)
-                        ]
-                    )
-                    artifacts.append(artifact)
-                except Exception as resource_error:
-                    logger.warning(f"Error al generar recursos científicos: {resource_error}")
-            
-            # Si se menciona protocolos o planes, crear un artefacto de protocolo
-            if any(keyword in user_input.lower() for keyword in ["protocolo", "plan", "rutina", "estrategia"]):
-                try:
-                    protocol = await self._generate_biohacking_protocol(user_input, user_profile)
-                    
-                    artifact_id = f"biohacking_protocol_{uuid.uuid4().hex[:8]}"
-                    artifact = self.create_artifact(
-                        artifact_id=artifact_id,
-                        artifact_type="biohacking_protocol",
-                        parts=[
-                            self.create_data_part(protocol)
-                        ]
-                    )
-                    artifacts.append(artifact)
-                except Exception as protocol_error:
-                    logger.warning(f"Error al generar protocolo de biohacking: {protocol_error}")
-            
-            # Crear mensaje de respuesta según el protocolo A2A
-            response_message = self.create_message(
-                role="agent",
-                parts=[self.create_text_part(response)]
-            )
-            
-            # Añadir artefactos al mensaje si existen
-            for artifact in artifacts:
-                if "parts" in artifact:
-                    response_message.parts.extend(artifact["parts"])
-                else:
-                    response_message.parts.append(artifact)
-            
-            # Calcular tiempo de ejecución
-            execution_time = time.time() - start_time
-            
-            # Devolver respuesta estructurada según el protocolo A2A
-            return {
-                "status": "success",
-                "response": response,
-                "message": response_message,
-                "artifacts": artifacts,
-                "agent_id": self.agent_id,
-                "execution_time": execution_time,
-                "metadata": {
-                    "capabilities_used": capabilities_used,
-                    "response_type": response_type,
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "protocol": "a2a",
-                    "agent_version": "1.2.0"
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error en BiohackingInnovator: {e}", exc_info=True)
-            
-            # Crear mensaje de error según el protocolo A2A
-            error_message = self.create_message(
-                role="agent",
-                parts=[self.create_text_part("Lo siento, ha ocurrido un error al procesar tu solicitud de biohacking. Por favor, intenta con una consulta diferente o contacta con soporte.")]
-            )
-            
-            return {
-                "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud de biohacking.",
-                "message": error_message,
-                "error": str(e),
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "error_type": type(e).__name__,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            }
-    
-    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
-        """
-        Procesa un mensaje recibido de otro agente según el protocolo A2A.
-        
-        Esta implementación cumple completamente con el estándar A2A para la comunicación
-        entre agentes, incluyendo formato de respuesta correcto, manejo de errores
-        y metadatos enriquecidos.
-        
-        Args:
-            from_agent: ID del agente que envió el mensaje
-            content: Contenido del mensaje en formato A2A
-            
-        Returns:
-            Any: Respuesta al mensaje en formato A2A
-        """
-        try:
-            start_time = time.time()
-            
-            # Extraer información del mensaje
-            message_text = content.get("text", "")
-            if not message_text and "message" in content:
-                # Buscar texto en la estructura de mensaje A2A
-                message = content.get("message", {})
-                parts = message.get("parts", [])
-                for part in parts:
-                    if part.get("type") == "text":
-                        message_text = part.get("text", "")
-                        break
-            
-            context = content.get("context", {})
-            session_id = context.get("session_id", str(uuid.uuid4()))
-            
-            logger.info(f"BiohackingInnovator procesando mensaje de agente {from_agent}: {message_text[:50]}...")
-            
-            # Determinar qué capacidad está involucrada en la consulta
-            capabilities_used = []
-            response_type = "agent_collaboration"
-            
-            if any(keyword in message_text.lower() for keyword in ["cognitivo", "cerebro", "mental", "concentración"]):
+                
+                # Actualizar contexto con las estrategias de longevidad
+                context["protocols"].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "type": "longevity",
+                    "query": input_text,
+                    "strategies": result.strategies,
+                    "scientific_basis": result.scientific_basis
+                })
+                
+        elif query_type == "cognitive_enhancement":
+            # Usar la skill de mejora cognitiva
+            cognitive_skill = next((skill for skill in self.skills if skill.name == "cognitive_enhancement"), None)
+            if cognitive_skill:
+                # Extraer información relevante del perfil del usuario si está disponible
+                cognitive_goals = user_profile.get("cognitive_goals", []) if user_profile else []
+                current_supplements = user_profile.get("supplements", []) if user_profile else []
+                
+                input_data = CognitiveEnhancementInput(
+                    query=input_text,
+                    cognitive_goals=cognitive_goals,
+                    current_supplements=current_supplements
+                )
+                result = await cognitive_skill.handler(input_data)
+                response = result.response
                 capabilities_used.append("cognitive_enhancement")
-                response_type = "cognitive_advice"
-            elif any(keyword in message_text.lower() for keyword in ["longevidad", "envejecimiento", "anti-aging"]):
-                capabilities_used.append("longevity")
-                response_type = "longevity_advice"
-            elif any(keyword in message_text.lower() for keyword in ["hormonal", "testosterona", "estrógeno"]):
+                
+                # Actualizar contexto con el protocolo de mejora cognitiva
+                context["protocols"].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "type": "cognitive_enhancement",
+                    "query": input_text,
+                    "protocol": result.protocol,
+                    "supplements": result.supplements
+                })
+                
+        elif query_type == "hormonal_optimization":
+            # Usar la skill de optimización hormonal
+            hormonal_skill = next((skill for skill in self.skills if skill.name == "hormonal_optimization"), None)
+            if hormonal_skill:
+                # Extraer información relevante del perfil del usuario si está disponible
+                age = user_profile.get("age") if user_profile else None
+                gender = user_profile.get("gender") if user_profile else None
+                hormone_concerns = user_profile.get("hormone_concerns", []) if user_profile else []
+                
+                input_data = HormonalOptimizationInput(
+                    query=input_text,
+                    age=age,
+                    gender=gender,
+                    hormone_concerns=hormone_concerns
+                )
+                result = await hormonal_skill.handler(input_data)
+                response = result.response
                 capabilities_used.append("hormonal_optimization")
-                response_type = "hormonal_advice"
-            else:
-                capabilities_used.append("biohacking")
-            
-            # Generar respuesta basada en el contenido del mensaje con manejo de errores
-            try:
-                # Construir un prompt más elaborado adaptado al tipo de consulta
-                prompt = f"""
-                Has recibido un mensaje del agente {from_agent}:
                 
-                "{message_text}"
-                
-                Responde como un experto en biohacking y optimización biológica. 
-                Proporciona información precisa, basada en evidencia científica y 
-                relevante para la consulta. Mantente enfocado en el tema específico 
-                de la consulta y ofrece recomendaciones prácticas y accionables.
-                
-                Si la consulta está relacionada con {response_type}, enfatiza ese aspecto 
-                en tu respuesta.
-                """
-                
-                response = await self.gemini_client.generate_response(prompt, temperature=0.7)
-            except Exception as gemini_error:
-                logger.error(f"Error en llamada a Gemini durante process_message: {gemini_error}")
-                response = "Lo siento, no pude generar una respuesta completa debido a un error técnico. Por favor, intenta de nuevo con una consulta más clara."
-            
-            # Crear mensaje de respuesta según protocolo A2A
-            response_message = self.create_message(
-                role="agent",
-                parts=[self.create_text_part(response)]
-            )
-            
-            # Calcular tiempo de ejecución
-            execution_time = time.time() - start_time
-            
-            # Crear respuesta estructurada según protocolo A2A
-            return {
-                "status": "success",
-                "response": response,
-                "message": response_message,
-                "agent_id": self.agent_id,
+                # Actualizar contexto con el protocolo de optimización hormonal
+                context["protocols"].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "type": "hormonal_optimization",
+                    "query": input_text,
+                    "protocol": result.protocol,
+                    "lifestyle_changes": result.lifestyle_changes,
+                    "supplements": result.supplements
+                })
+        
+        # Actualizar el historial de conversación
+        context["conversation_history"].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "role": "user",
+            "content": input_text
+        })
+        context["conversation_history"].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "role": "assistant",
+            "content": response
+        })
+        
+        # Actualizar el contexto en el StateManager
+        if user_id:
+            await self._update_context(context, user_id, session_id)
+        
+        # Calcular tiempo de ejecución
+        execution_time = time.time() - start_time
+        logger.info(f"BiohackingInnovator completó la ejecución en {execution_time:.2f} segundos")
+        
+        # Preparar respuesta según el protocolo ADK
+        return {
+            "response": response,
+            "capabilities_used": capabilities_used,
+            "metadata": {
+                "query_type": query_type,
                 "execution_time": execution_time,
-                "metadata": {
-                    "capabilities_used": capabilities_used,
-                    "response_type": response_type,
-                    "from_agent": from_agent,
-                    "session_id": session_id,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "protocol": "a2a",
-                    "agent_version": "1.2.0"
-                }
+                "session_id": session_id
             }
-        except Exception as e:
-            logger.error(f"Error al procesar mensaje de agente: {e}", exc_info=True)
-            
-            # Crear mensaje de error según el protocolo A2A
-            error_message = self.create_message(
-                role="agent",
-                parts=[self.create_text_part("Lo siento, ha ocurrido un error al procesar el mensaje. Por favor, intenta con una consulta diferente.")]
-            )
-            
-            return {
-                "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar el mensaje entre agentes.",
-                "message": error_message,
-                "error": str(e),
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "error_type": type(e).__name__,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "from_agent": from_agent
-                }
-            }
-    
-    def _build_prompt(self, user_input: str, user_profile: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Construye el prompt para el modelo de Gemini.
-        
-        Args:
-            user_input: La consulta del usuario
-            user_profile: Perfil del usuario con datos relevantes
-            
-        Returns:
-            str: Prompt completo para el modelo
-        """
-        prompt = f"{self.system_instructions}\n\n"
-        
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += "Información del usuario:\n"
-            prompt += f"- Edad: {user_profile.get('age', 'No disponible')}\n"
-            prompt += f"- Género: {user_profile.get('gender', 'No disponible')}\n"
-            prompt += f"- Objetivos: {user_profile.get('goals', 'No disponible')}\n"
-            prompt += f"- Condiciones de salud: {user_profile.get('health_conditions', 'No disponible')}\n\n"
-        
-        prompt += f"Consulta del usuario: {user_input}\n\n"
-        prompt += "Proporciona una respuesta detallada y personalizada basada en evidencia científica."
-        
-        return prompt
-    
-    async def _find_resources(self, query: str) -> List[Dict[str, Any]]:
-        """
-        Busca recursos científicos relacionados con la consulta.
-        
-        Args:
-            query: La consulta del usuario
-            
-        Returns:
-            List[Dict[str, Any]]: Lista de recursos relevantes
-        """
-        # TODO: Implementar búsqueda real usando RAG (Vertex AI Search) sobre bases de datos científicas (PubMed, etc.) o documentos internos NGX.
-        # TODO: Usar mcp7_query para buscar recursos curados en Supabase.
-        logger.info(f"Buscando recursos para: {query[:50]}...")
-        
-        # Lógica de simulación para la búsqueda de recursos
-        resources = [
-            {
-                "title": "Effects of Intermittent Fasting on Health, Aging, and Disease",
-                "authors": "de Cabo R, Mattson MP",
-                "journal": "New England Journal of Medicine",
-                "year": 2019,
-                "url": "https://www.nejm.org/doi/full/10.1056/NEJMra1905136",
-                "findings": "El ayuno intermitente puede mejorar la salud metabólica, aumentar la longevidad y reducir el riesgo de enfermedades."
-            },
-            {
-                "title": "Impact of Circadian Rhythms on Metabolic Health and Disease",
-                "authors": "Panda S",
-                "journal": "Cell Metabolism",
-                "year": 2016,
-                "url": "https://www.cell.com/cell-metabolism/fulltext/S1550-4131(16)30250-9",
-                "findings": "La sincronización de la alimentación con los ritmos circadianos puede mejorar significativamente la salud metabólica."
-            },
-            {
-                "title": "Cognitive Enhancement Through Stimulation of the Non-Invasive Peripheral Nervous System",
-                "authors": "Tyler WJ, et al.",
-                "journal": "Frontiers in Neuroscience",
-                "year": 2018,
-                "url": "https://www.frontiersin.org/articles/10.3389/fnins.2018.00095/full",
-                "findings": "La estimulación no invasiva del sistema nervioso periférico puede mejorar la función cognitiva y el rendimiento mental."
-            }
-        ]
-        
-        return resources
-    
-    async def _generate_biohacking_protocol(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Genera un protocolo de biohacking estructurado.
-        
-        Args:
-            user_input: Texto de entrada del usuario
-            user_profile: Perfil del usuario
-            
-        Returns:
-            Dict[str, Any]: Protocolo de biohacking estructurado
-        """
-        # TODO: Integrar RAG para acceder a la base de conocimientos de NGX sobre protocolos específicos.
-        # TODO: Usar mcp7_query para obtener datos biométricos relevantes del usuario (ej. Oura, Whoop) desde Supabase.
-        # TODO: Usar mcp8_think para diseñar protocolos complejos o multi-etapa.
-        prompt = f"""
-        Genera un protocolo de biohacking estructurado basado en la siguiente solicitud:
-        
-        "{user_input}"
-        
-        El protocolo debe incluir:
-        1. Objetivo principal del protocolo
-        2. Duración recomendada
-        3. Intervenciones principales (dieta, suplementos, ejercicio, sueño, etc.)
-        4. Cronograma diario/semanal
-        5. Métricas para seguimiento
-        6. Precauciones y contraindicaciones
-        7. Referencias científicas
-        
-        Devuelve el protocolo en formato JSON estructurado.
-        """
-        
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += f"""
-            
-            Considera la siguiente información del usuario:
-            - Edad: {user_profile.get('age', 'No disponible')}
-            - Género: {user_profile.get('gender', 'No disponible')}
-            - Objetivos: {user_profile.get('goals', 'No disponible')}
-            - Condiciones de salud: {user_profile.get('health_conditions', 'No disponible')}
-            """
-        
-        # Generar el protocolo de biohacking
-        response = await self.gemini_client.generate_structured_output(prompt)
-        
-        # Si la respuesta no es un diccionario, intentar convertirla
-        if not isinstance(response, dict):
-            try:
-                import json
-                response = json.loads(response)
-            except:
-                # Si no se puede convertir, crear un diccionario básico
-                response = {
-                    "objective": "Protocolo de biohacking personalizado",
-                    "duration": "4-8 semanas",
-                    "interventions": {
-                        "diet": "Alimentación basada en alimentos enteros con ventana de alimentación de 8 horas",
-                        "supplements": "Omega-3, Vitamina D, Magnesio",
-                        "exercise": "Entrenamiento de alta intensidad 3 veces por semana",
-                        "sleep": "Optimización del sueño con 7-9 horas por noche"
-                    },
-                    "schedule": {
-                        "daily": "Exposición a luz natural por la mañana, ejercicio antes del mediodía, cena 3 horas antes de dormir",
-                        "weekly": "Entrenamiento de fuerza lunes/miércoles/viernes, sauna 2 veces por semana"
-                    },
-                    "metrics": [
-                        "Variabilidad de la frecuencia cardíaca (HRV)",
-                        "Calidad del sueño",
-                        "Niveles de energía (escala 1-10)",
-                        "Rendimiento cognitivo"
-                    ],
-                    "precautions": "Consultar con un profesional de la salud antes de iniciar cualquier protocolo, especialmente si tienes condiciones médicas preexistentes"
-                }
-        
-        return response
+        }

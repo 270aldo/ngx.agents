@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "ngx-tools"
+version = "0.1.0"
+description = "Componente tools del sistema NGX Agents"
+authors = ["NGX Team"]
+packages = [{include = "tools"}]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.13"
+# Dependencias específicas para herramientas
+supabase = ">=2.3.0,<3.0.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.3.0"
+isort = "^5.13.2"
+mypy = "^1.10.0"
+ruff = "^0.4.7"
+
+[tool.poetry.group.test.dependencies]
+pytest = ">=8.2.0,<9.0.0"
+pytest-asyncio = ">=0.23.0,<0.24.0"
+pytest-cov = ">=4.1.0,<5.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

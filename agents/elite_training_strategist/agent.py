@@ -14,8 +14,9 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from agents.base.adk_agent import ADKAgent 
+from agents.base.adk_agent import ADKAgent
 from adk.agent import Skill 
+from adk.toolkit import Toolkit
 from core.contracts import create_result 
 
 from agents.elite_training_strategist.schemas import (
@@ -36,164 +37,105 @@ from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
 from tools.mcp_client import MCPClient
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
+from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
+from infrastructure.adapters.a2a_adapter import a2a_adapter
 from core.logging_config import get_logger
 from google.cloud import aiplatform
 
 # Configurar logger
 logger = get_logger(__name__)
 
-# Configurar OpenTelemetry para observabilidad
-try:
-    from opentelemetry import trace, metrics
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.exporter.prometheus import PrometheusMetricReader
-    
-    # Configurar TracerProvider para trazas
-    tracer_provider = TracerProvider()
-    trace.set_tracer_provider(tracer_provider)
-    tracer = trace.get_tracer("elite_training_strategist")
-    
-    # Configurar MeterProvider para métricas
-    prometheus_reader = PrometheusMetricReader()
-    meter_provider = MeterProvider(metric_readers=[prometheus_reader])
-    metrics.set_meter_provider(meter_provider)
-    meter = metrics.get_meter("elite_training_strategist")
-    
-    # Crear contadores y medidores
-    request_counter = meter.create_counter(
-        name="agent_requests",
-        description="Número de solicitudes recibidas por el agente",
-        unit="1"
-    )
-    
-    response_time = meter.create_histogram(
-        name="agent_response_time",
-        description="Tiempo de respuesta del agente en segundos",
-        unit="s"
-    )
-    
-    error_count = meter.create_counter(
-        name="agent_errors",
-        description="Número de errores en el agente",
-        unit="1"
-    )
-    
-    has_telemetry = True
-except ImportError:
-    # Fallback si OpenTelemetry no está disponible
-    has_telemetry = False
-    tracer = None
-    request_counter = None
-    response_time = None
-    error_count = None
-
 class EliteTrainingStrategist(ADKAgent):
     """
     Agente especializado en el diseño y periodización de programas de entrenamiento
     para atletas de élite y usuarios avanzados, integrando análisis de rendimiento y
     prescripción de ejercicios.
+    
+    Esta implementación utiliza la integración oficial con Google ADK.
     """
+
+    AGENT_ID = "elite_training_strategist"
+    AGENT_NAME = "Elite Training Strategist"
+    AGENT_DESCRIPTION = "Specializes in designing and periodizing training programs for elite athletes."
+    DEFAULT_INSTRUCTION = "Eres un estratega experto en entrenamiento deportivo."
+    DEFAULT_MODEL = "gemini-1.5-flash" # o settings.ELITE_TRAINING_STRATEGIST_MODEL_ID
 
     def __init__(
         self,
-        agent_id: str = "elite_training_strategist",
-        name: str = "Elite Training Strategist",
-        description: str = "Specializes in designing and periodizing training programs for elite athletes.",
-        program_type: str = "PRIME",
-        mcp_toolkit: Optional[Any] = None,
-        a2a_server_url: Optional[str] = None,
-        state_manager: Optional[Any] = None,
-        model: str = "gemini-1.5-flash",
-        instruction: str = "Eres un estratega experto en entrenamiento deportivo.",
-        **kwargs
+        state_manager = None, 
+        mcp_toolkit: Optional[MCPToolkit] = None, 
+        model: Optional[str] = None,
+        instruction: Optional[str] = None,
+        agent_id: str = AGENT_ID,
+        name: str = AGENT_NAME,
+        description: str = AGENT_DESCRIPTION,
+        **kwargs 
     ):
-        agent_id_val = agent_id
-        name_val = name
-        description_val = description
-        
-        # Capacidades para BaseAgent y A2A
-        capabilities_val = [
-            "generate_training_plan", 
-            "adapt_training_program", 
-            "analyze_performance_data", 
-            "set_training_intensity_volume", 
-            "prescribe_exercise_routines"
+        _model = model or self.DEFAULT_MODEL
+        _instruction = instruction or self.DEFAULT_INSTRUCTION
+        _mcp_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
+
+        # Definir las skills antes de llamar al constructor de ADKAgent
+        self.skills = [
+            Skill(
+                name="generate_training_plan",
+                description="Genera un plan de entrenamiento completo basado en el perfil y objetivos del usuario.",
+                handler=self._skill_generate_training_plan,
+                input_schema=GenerateTrainingPlanInput,
+                output_schema=GenerateTrainingPlanOutput
+            ),
+            Skill(
+                name="adapt_training_program",
+                description="Adapta un programa de entrenamiento existente basado en nuevos inputs o feedback.",
+                handler=self._skill_adapt_training_program,
+                input_schema=AdaptTrainingProgramInput,
+                output_schema=AdaptTrainingProgramOutput
+            ),
+            Skill(
+                name="analyze_performance_data",
+                description="Analiza datos de rendimiento para proporcionar insights y recomendaciones.",
+                handler=self._skill_analyze_performance_data,
+                input_schema=AnalyzePerformanceDataInput,
+                output_schema=AnalyzePerformanceDataOutput
+            ),
+            Skill(
+                name="set_training_intensity_volume",
+                description="Establece o ajusta la intensidad y volumen de entrenamiento basado en la periodización y estado del usuario.",
+                handler=self._skill_set_training_intensity_volume,
+                input_schema=SetTrainingIntensityVolumeInput,
+                output_schema=SetTrainingIntensityVolumeOutput
+            ),
+            Skill(
+                name="prescribe_exercise_routines",
+                description="Prescribe rutinas de ejercicios específicas, incluyendo variaciones y progresiones.",
+                handler=self._skill_prescribe_exercise_routines,
+                input_schema=PrescribeExerciseRoutinesInput,
+                output_schema=PrescribeExerciseRoutinesOutput
+            )
         ]
-        
-        # Herramientas para Google ADK
-        google_adk_tools_val = [
-            # Aquí irían las herramientas específicas de Google ADK si se necesitan
-        ]
-        
-        # Skills para A2A
-        a2a_skills_val = [
-            {
-                "name": "generate_training_plan",
-                "description": "Genera un plan de entrenamiento completo basado en el perfil y objetivos del usuario.",
-                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "goals": {"type": "array"}, "preferences": {"type": "object"} }, "required": ["input_text"] },
-                "output_schema": { "type": "object", "properties": { "training_plan": {"type": "object"} } }
-            },
-            {
-                "name": "adapt_training_program",
-                "description": "Adapta un programa de entrenamiento existente basado en nuevos inputs o feedback.",
-                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "existing_plan_id": {"type": "string"}, "adaptation_reason": {"type": "string"} }, "required": ["input_text", "existing_plan_id"] },
-                "output_schema": { "type": "object", "properties": { "adapted_plan": {"type": "object"} } }
-            },
-            {
-                "name": "analyze_performance_data",
-                "description": "Analiza datos de rendimiento para proporcionar insights y recomendaciones.",
-                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "performance_data": {"type": "object"} }, "required": ["input_text", "performance_data"] },
-                "output_schema": { "type": "object", "properties": { "performance_analysis": {"type": "object"} } }
-            },
-            {
-                "name": "set_training_intensity_volume",
-                "description": "Establece o ajusta la intensidad y volumen de entrenamiento basado en la periodización y estado del usuario.",
-                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "current_phase": {"type": "string"}, "athlete_feedback": {"type": "object"} }, "required": ["input_text"] },
-                "output_schema": { "type": "object", "properties": { "intensity_volume_settings": {"type": "object"} } }
-            },
-            {
-                "name": "prescribe_exercise_routines",
-                "description": "Prescribe rutinas de ejercicios específicas, incluyendo variaciones y progresiones.",
-                "input_schema": { "type": "object", "properties": { "input_text": {"type": "string"}, "focus_area": {"type": "string"}, "equipment_available": {"type": "array"} }, "required": ["input_text"] },
-                "output_schema": { "type": "object", "properties": { "exercise_routines": {"type": "object"} } }
-            }
-        ]
-        
-        # Instanciar MCPToolkit si no se provee
-        actual_adk_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
-        
-        # Asegurar que state_manager se pasa a través de kwargs si está presente
-        if state_manager:
-            kwargs['state_manager'] = state_manager
-            
+
+        # Crear un toolkit de ADK
+        adk_toolkit = Toolkit()
+
+        # Inicializar el agente ADK
         super().__init__(
-            agent_id=agent_id_val,
-            name=name_val,
-            description=description_val,
-            capabilities=capabilities_val,
-            model=model,
-            instruction=instruction,
-            google_adk_tools=google_adk_tools_val,
-            a2a_skills=a2a_skills_val,
-            adk_toolkit=actual_adk_toolkit,
-            a2a_server_url=a2a_server_url,
-            endpoint=f"/agents/{agent_id_val}",
-            program_type=program_type,
+            agent_id=agent_id,
+            name=name,
+            description=description,
+            model=_model,
+            instruction=_instruction,
+            state_manager=None,  # Ya no usamos el state_manager original
+            adk_toolkit=adk_toolkit,
+            capabilities=[skill.name for skill in self.skills],
             **kwargs
         )
         
-        # Inicializar clientes específicos del agente
-        self.gemini_client = GeminiClient(model_name=self.model)
+        # Configurar clientes adicionales
+        self.gemini_client = GeminiClient(model_name=self.model) 
         self.supabase_client = SupabaseClient()
         
-        # Configurar telemetría
-        self.tracer = tracer
-        self.request_counter = request_counter
-        self.response_time_metric = response_time
-        
-        # Inicializar AI Platform si es necesario
+        # Inicializar Vertex AI
         gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
         gcp_region = os.getenv("GCP_REGION", "us-central1")
         try:
@@ -203,89 +145,351 @@ class EliteTrainingStrategist(ADKAgent):
         except Exception as e:
             logger.error(f"Error al inicializar AI Platform para ETS: {e}", exc_info=True)
             
-        if has_telemetry:
-            logger.info("OpenTelemetry configurado para EliteTrainingStrategist.")
-        else:
-            logger.warning("OpenTelemetry no está disponible. EliteTrainingStrategist funcionará sin telemetría detallada.")
-            
-        # Definir skills
-        self.skills = {
-            "generate_training_plan": Skill(
-                name="generate_training_plan",
-                description="Genera un plan de entrenamiento completo basado en el perfil y objetivos del usuario.",
-                handler=self._skill_generate_training_plan,
-                input_schema=GenerateTrainingPlanInput,
-                output_schema=GenerateTrainingPlanOutput,
-            ),
-            "adapt_training_program": Skill(
-                name="adapt_training_program",
-                description="Adapta un programa de entrenamiento existente basado en nuevos inputs o feedback.",
-                handler=self._skill_adapt_training_program,
-                input_schema=AdaptTrainingProgramInput,
-                output_schema=AdaptTrainingProgramOutput,
-            ),
-            "analyze_performance_data": Skill(
-                name="analyze_performance_data",
-                description="Analiza datos de rendimiento para proporcionar insights y recomendaciones.",
-                handler=self._skill_analyze_performance_data,
-                input_schema=AnalyzePerformanceDataInput,
-                output_schema=AnalyzePerformanceDataOutput,
-            ),
-            "set_training_intensity_volume": Skill(
-                name="set_training_intensity_volume",
-                description="Establece o ajusta la intensidad y volumen de entrenamiento basado en la periodización y estado del usuario.",
-                handler=self._skill_set_training_intensity_volume,
-                input_schema=SetTrainingIntensityVolumeInput,
-                output_schema=SetTrainingIntensityVolumeOutput,
-            ),
-            "prescribe_exercise_routines": Skill(
-                name="prescribe_exercise_routines",
-                description="Prescribe rutinas de ejercicios específicas, incluyendo variaciones y progresiones.",
-                handler=self._skill_prescribe_exercise_routines,
-                input_schema=PrescribeExerciseRoutinesInput,
-                output_schema=PrescribeExerciseRoutinesOutput,
-            ),
+        logger.info(f"{self.name} ({self.agent_id}) inicializado con integración oficial de Google ADK.")
+
+    # --- Métodos de Habilidades (Skills) ---
+    async def _skill_generate_training_plan(self, input_data: GenerateTrainingPlanInput) -> GenerateTrainingPlanOutput:
+        logger.info(f"Ejecutando habilidad: _skill_generate_training_plan con input: {input_data}")
+        # Aquí iría la lógica real, por ahora un mock
+        # Ejemplo: plan_details = await self._generate_training_plan(input_data.user_query, input_data.user_profile)
+        # return GenerateTrainingPlanOutput(training_plan=TrainingPlanArtifact(**plan_details))
+        mock_plan_details = {
+            "plan_name": "Mock Plan", 
+            "description": "Plan de entrenamiento simulado",
+            "duration_weeks": 4,
+            "sessions_per_week": 3,
+            "daily_sessions": [],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
         }
-        logger.info(f"Agente {self.name} inicializado con {len(self.skills)} skills: {list(self.skills.keys())}")
+        return GenerateTrainingPlanOutput(
+            plan_name="Mock Plan",
+            program_type="PRIME",
+            duration_weeks=4,
+            description="Plan de entrenamiento simulado",
+            phases=[],
+            artifacts=None,
+            response="Este es un plan de entrenamiento simulado"
+        )
 
-    async def _skill_generate_training_plan(self, params: GenerateTrainingPlanInput) -> GenerateTrainingPlanOutput:
+    async def _skill_adapt_training_program(self, input_data: AdaptTrainingProgramInput) -> AdaptTrainingProgramOutput:
+        logger.info(f"Ejecutando habilidad: _skill_adapt_training_program con input: {input_data}")
+        # Lógica de adaptación...
+        return AdaptTrainingProgramOutput(
+            adapted_plan_name="Mock Adapted Plan",
+            program_type="PRIME",
+            adaptation_summary="Adaptación simulada",
+            duration_weeks=4,
+            description="Plan adaptado simulado",
+            phases=[]
+        )
+
+    async def _skill_analyze_performance_data(self, input_data: AnalyzePerformanceDataInput) -> AnalyzePerformanceDataOutput:
+        logger.info(f"Ejecutando habilidad: _skill_analyze_performance_data con input: {input_data}")
+        # Lógica de análisis...
+        return AnalyzePerformanceDataOutput(
+            analysis_summary="Análisis de rendimiento simulado.",
+            key_observations=[{"metric": "metric1", "value": 100, "observation": "Bueno"}],
+            recommendations=[{"recommendation_type": "Entrenamiento", "description": "Continuar con el buen trabajo"}]
+        )
+
+    async def _skill_set_training_intensity_volume(self, input_data: SetTrainingIntensityVolumeInput) -> SetTrainingIntensityVolumeOutput:
+        logger.info(f"Ejecutando habilidad: _skill_set_training_intensity_volume con input: {input_data}")
+        # Lógica de ajuste de intensidad/volumen...
+        return SetTrainingIntensityVolumeOutput(
+            adjustment_summary="Ajustes simulados",
+            recommended_intensity={"intensity_level": "Alto"},
+            recommended_volume={"volume_description": "Volumen moderado"},
+            notes="Ajustes basados en la fase actual y feedback."
+        )
+
+    async def _skill_prescribe_exercise_routines(self, input_data: PrescribeExerciseRoutinesInput) -> PrescribeExerciseRoutinesOutput:
+        logger.info(f"Ejecutando habilidad: _skill_prescribe_exercise_routines con input: {input_data}")
+        # Lógica de prescripción de rutinas...
+        return PrescribeExerciseRoutinesOutput(
+            routine_name="Rutina de Fuerza General",
+            focus_area=input_data.focus_area,
+            exercise_type=input_data.exercise_type,
+            estimated_duration_minutes=60,
+            exercises=[
+                {"name": "Sentadilla", "sets": 3, "reps": 10},
+                {"name": "Press de Banca", "sets": 3, "reps": 10}
+            ],
+            warm_up=["Movilidad articular general"],
+            cool_down=["Estiramientos estáticos"]
+        )
+
+    # --- Métodos para gestión de estado ---
+    async def _get_context(self, user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Skill para generar un plan de entrenamiento usando modelos Pydantic.
+        Obtiene el contexto de la conversación desde el adaptador del StateManager.
+        
+        Args:
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            
+        Returns:
+            Dict[str, Any]: Contexto de la conversación
         """
-        logger.info(f"Skill '{self._skill_generate_training_plan.__name__}' llamada con objetivos: {params.goals}")
         try:
-            # Llamar a la lógica interna usando los campos del modelo
-            plan_details = await self._generate_training_plan_logic(
-                user_profile={},  # Aquí deberías pasar el perfil de usuario si lo tienes
-                current_goals=params.goals,
-                current_preferences=params.preferences or {},
-                training_history=params.training_history or {},
-                duration_weeks=params.duration_weeks or 8
-            )
-            return GenerateTrainingPlanOutput(**plan_details)
+            # Intentar cargar el contexto desde el adaptador del StateManager
+            context = await state_manager_adapter.load_state(user_id, session_id)
+            
+            if not context or not context.get("state_data"):
+                logger.info(f"No se encontró contexto en el adaptador del StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
+                # Si no hay contexto, crear uno nuevo
+                context = {
+                    "conversation_history": [],
+                    "user_profile": {},
+                    "training_plans": [],
+                    "performance_data": {},
+                    "last_updated": datetime.now().isoformat()
+                }
+            else:
+                # Si hay contexto, usar el state_data
+                context = context.get("state_data", {})
+                logger.info(f"Contexto cargado desde el adaptador del StateManager para user_id={user_id}, session_id={session_id}")
+            
+            return context
         except Exception as e:
-            logger.error(f"Error en skill '{self._skill_generate_training_plan.__name__}': {e}", exc_info=True)
-            # Devuelve una salida mínima en caso de error
-            return GenerateTrainingPlanOutput(
-                plan_name="Error",
-                program_type="GENERAL",
-                duration_weeks=params.duration_weeks or 8,
-                description=f"Error al generar el plan: {str(e)}",
-                phases=[]
-            )
+            logger.error(f"Error al obtener contexto: {e}", exc_info=True)
+            # En caso de error, devolver un contexto vacío
+            return {
+                "conversation_history": [],
+                "user_profile": {},
+                "training_plans": [],
+                "performance_data": {},
+                "last_updated": datetime.now().isoformat()
+            }
 
-    async def _generate_training_plan_logic(
+    async def _update_context(self, context: Dict[str, Any], user_id: str, session_id: str) -> None:
+        """
+        Actualiza el contexto de la conversación en el adaptador del StateManager.
+        
+        Args:
+            context: Contexto actualizado
+            user_id: ID del usuario
+            session_id: ID de la sesión
+        """
+        try:
+            # Actualizar la marca de tiempo
+            context["last_updated"] = datetime.now().isoformat()
+            
+            # Guardar el contexto en el adaptador del StateManager
+            await state_manager_adapter.save_state(context, user_id, session_id)
+            logger.info(f"Contexto actualizado en el adaptador del StateManager para user_id={user_id}, session_id={session_id}")
+        except Exception as e:
+            logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
+    
+    # --- Métodos para análisis de intenciones ---
+    async def _classify_query(self, query: str) -> str:
+        """
+        Clasifica el tipo de consulta del usuario utilizando el adaptador del Intent Analyzer.
+        
+        Args:
+            query: Consulta del usuario
+            
+        Returns:
+            str: Tipo de consulta clasificada
+        """
+        try:
+            # Utilizar el adaptador del Intent Analyzer para analizar la intención
+            intent_analysis = await intent_analyzer_adapter.analyze_intent(query)
+            
+            # Mapear la intención primaria a los tipos de consulta del agente
+            primary_intent = intent_analysis.get("primary_intent", "").lower()
+            
+            # Mapeo de intenciones a tipos de consulta
+            intent_to_query_type = {
+                "training_plan": "generate_training_plan",
+                "adapt_program": "adapt_training_program",
+                "performance_analysis": "analyze_performance_data",
+                "intensity_volume": "set_training_intensity_volume",
+                "exercise_routine": "prescribe_exercise_routines"
+            }
+            
+            # Buscar coincidencias exactas
+            if primary_intent in intent_to_query_type:
+                return intent_to_query_type[primary_intent]
+            
+            # Buscar coincidencias parciales
+            for intent, query_type in intent_to_query_type.items():
+                if intent in primary_intent:
+                    return query_type
+            
+            # Si no hay coincidencias, usar el método de palabras clave como fallback
+            return self._classify_query_by_keywords(query)
+        except Exception as e:
+            logger.error(f"Error al clasificar consulta con Intent Analyzer: {e}", exc_info=True)
+            # En caso de error, usar el método de palabras clave como fallback
+            return self._classify_query_by_keywords(query)
+    
+    def _classify_query_by_keywords(self, query: str) -> str:
+        """
+        Clasifica el tipo de consulta del usuario utilizando palabras clave.
+        
+        Args:
+            query: Consulta del usuario
+            
+        Returns:
+            str: Tipo de consulta clasificada
+        """
+        query_lower = query.lower()
+        
+        # Palabras clave para generar plan de entrenamiento
+        training_plan_keywords = [
+            "plan", "programa", "entrenamiento", "rutina", "crear", "generar", 
+            "diseñar", "nuevo", "comenzar"
+        ]
+        
+        # Palabras clave para adaptar programa
+        adapt_program_keywords = [
+            "adaptar", "modificar", "ajustar", "cambiar", "actualizar", 
+            "revisar", "mejorar", "personalizar"
+        ]
+        
+        # Palabras clave para análisis de rendimiento
+        performance_analysis_keywords = [
+            "analizar", "análisis", "rendimiento", "progreso", "resultados", 
+            "métricas", "datos", "evaluar", "evaluación"
+        ]
+        
+        # Palabras clave para intensidad y volumen
+        intensity_volume_keywords = [
+            "intensidad", "volumen", "carga", "peso", "series", "repeticiones", 
+            "descanso", "recuperación", "periodización"
+        ]
+        
+        # Palabras clave para rutinas de ejercicios
+        exercise_routine_keywords = [
+            "ejercicio", "rutina", "movimiento", "técnica", "forma", 
+            "variación", "alternativa", "sustitución", "progresión"
+        ]
+        
+        # Verificar coincidencias con palabras clave
+        for keyword in exercise_routine_keywords:
+            if keyword in query_lower:
+                return "prescribe_exercise_routines"
+                
+        for keyword in intensity_volume_keywords:
+            if keyword in query_lower:
+                return "set_training_intensity_volume"
+                
+        for keyword in performance_analysis_keywords:
+            if keyword in query_lower:
+                return "analyze_performance_data"
+                
+        for keyword in adapt_program_keywords:
+            if keyword in query_lower:
+                return "adapt_training_program"
+                
+        for keyword in training_plan_keywords:
+            if keyword in query_lower:
+                return "generate_training_plan"
+                
+        # Si no hay coincidencias, devolver tipo general
+        return "generate_training_plan"
+    
+    # --- Métodos para comunicación entre agentes ---
+    async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Consulta a otro agente utilizando el adaptador de A2A.
+        
+        Args:
+            agent_id: ID del agente a consultar
+            query: Consulta a enviar al agente
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            context: Contexto adicional para la consulta
+            
+        Returns:
+            Dict[str, Any]: Respuesta del agente consultado
+        """
+        try:
+            # Crear contexto para la consulta
+            task_context = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "additional_context": context or {}
+            }
+            
+            # Llamar al agente utilizando el adaptador de A2A
+            response = await a2a_adapter.call_agent(
+                agent_id=agent_id,
+                user_input=query,
+                context=task_context
+            )
+            
+            logger.info(f"Respuesta recibida del agente {agent_id}")
+            return response
+        except Exception as e:
+            logger.error(f"Error al consultar al agente {agent_id}: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "error": str(e),
+                "output": f"Error al consultar al agente {agent_id}",
+                "agent_id": agent_id,
+                "agent_name": agent_id
+            }
+    
+    # --- Métodos Internos del Agente --- 
+    def _prepare_context(
         self, 
-        user_profile: Dict[str, Any], 
-        current_goals: List[str],
-        current_preferences: Optional[Dict[str, Any]] = None,
-        training_history: Optional[Dict[str, Any]] = None,
-        duration_weeks: int = 8
-    ) -> Dict[str, Any]:
+        user_input: str, 
+        user_profile: Optional[Dict[str, Any]], 
+        context: Dict[str, Any]
+    ) -> str:
+        """
+        Prepara el contexto para la generación de la respuesta o plan.
+        Combina la instrucción base del agente, detalles del perfil del usuario y contexto adicional.
+        """
+        # Instrucción base específica para EliteTrainingStrategist
+        prompt_context = (
+            "Eres EliteTrainingStrategist, un especialista en diseñar programas de entrenamiento "
+            "para atletas de élite y alto rendimiento. Tu objetivo es crear planes optimizados, "
+            "basados en la ciencia y completamente personalizados para maximizar el potencial del atleta, "
+            "considerando sus metas, nivel actual, y cualquier restricción o preferencia. "
+            "Debes ser preciso, detallado y proponer estrategias innovadoras."
+        )
+
+        # Añadir detalles del perfil del usuario
+        if user_profile:
+            profile_details_str = self._extract_profile_details(user_profile)
+            prompt_context += f"\n\nInformación del Atleta:\n{profile_details_str}"
+        else:
+            prompt_context += "\n\nInformación del Atleta: No disponible."
+        
+        # Añadir contexto adicional si está disponible y es relevante
+        if context:
+            # Filtrar claves que no queremos directamente en el prompt o que ya están en user_profile
+            # Esto es un ejemplo, se puede ajustar según necesidad
+            relevant_context_keys = [k for k in context.keys() if k not in ["user_id", "session_id", "client_profile", "history"]]
+            additional_context_parts = []
+            for key in relevant_context_keys:
+                # Podríamos querer formatear o seleccionar partes específicas del contexto adicional
+                # Por ahora, simplemente añadimos el par clave-valor si el valor no es muy grande
+                value_str = str(context[key])
+                if len(value_str) < 200: # Evitar contextos demasiado largos
+                    additional_context_parts.append(f"- {key}: {value_str}")
+            
+            if additional_context_parts:
+                additional_context_str = "\n".join(additional_context_parts)
+                prompt_context += f"\n\nContexto Adicional Relevante:\n{additional_context_str}"
+
+        # Añadir la entrada del usuario al final como la solicitud específica
+        prompt_context += f"\n\nSolicitud Específica del Usuario:\n{user_input}"
+        
+        logger.debug(f"Contexto preparado para EliteTrainingStrategist: {prompt_context}")
+        return prompt_context
+
+    async def _generate_training_plan(self, user_input: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Lógica interna para generar el plan de entrenamiento.
         """
-        program_type = self._get_program_type_from_profile(user_profile)
+        if context is None:
+            context = {}
+            
+        program_type = self._get_program_type_from_profile(context)
 
         # Construir prompt para Gemini
         prompt_parts = [
@@ -294,24 +498,17 @@ class EliteTrainingStrategist(ADKAgent):
 
         # Información del perfil de usuario
         prompt_parts.append("Considera el siguiente perfil de atleta:")
-        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
-        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
-        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
-        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
-        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
-        if user_profile.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {user_profile.get('experience_level')}")
+        if context.get("age"): prompt_parts.append(f"- Edad: {context.get('age')}")
+        if context.get("gender"): prompt_parts.append(f"- Género: {context.get('gender')}")
+        if context.get("weight_kg"): prompt_parts.append(f"- Peso: {context.get('weight_kg')} kg")
+        if context.get("height_cm"): prompt_parts.append(f"- Altura: {context.get('height_cm')} cm")
+        if context.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {context.get('activity_level')}")
+        if context.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {context.get('experience_level')}")
 
-        prompt_parts.append(f"\nObjetivos Actuales del Atleta: {', '.join(current_goals)}")
-        prompt_parts.append(f"Duración del Plan: {duration_weeks} semanas")
-
-        if current_preferences:
-            prompt_parts.append(f"Preferencias: {json.dumps(current_preferences)}")
-        if training_history:
-            prompt_parts.append(f"Historial de Entrenamiento Relevante: {json.dumps(training_history)}")
-        
+        prompt_parts.append(f"\nObjetivos Actuales del Atleta: {user_input}")
         prompt_parts.append("\nEl plan debe ser estructurado, detallado, y adecuado para el tipo de programa y objetivos.")
         prompt_parts.append("Incluye fases, microciclos, mesociclos si aplica, ejercicios específicos, series, repeticiones, descansos, y notas sobre intensidad y volumen.")
-        prompt_parts.append("Formato de Salida Esperado: JSON con claves como 'plan_name', 'program_type', 'duration_weeks', 'phases' (lista de fases), etc.")
+        prompt_parts.append("Formato de Salida Esperado: JSON con claves como 'plan_name', 'program_type', 'duration_weeks', 'phases' (lista), etc.")
         prompt_parts.append("Cada fase debe tener 'phase_name', 'duration', 'description', y 'weekly_schedule'.")
         prompt_parts.append("Cada 'weekly_schedule' debe ser una lista de días, cada día con 'day_name', 'focus', y 'workouts' (lista de workouts).")
         prompt_parts.append("Cada 'workout' debe tener 'exercise_name', 'sets', 'reps', 'rest_seconds', 'intensity_notes'.")
@@ -371,8 +568,8 @@ class EliteTrainingStrategist(ADKAgent):
             content_type="text/markdown",
             data={
                 "content": plan_text_content,
-                "user_id": user_profile.get("user_id", "unknown_user"),
-                "session_id": user_profile.get("session_id", "unknown_session"),
+                "user_id": context.get("user_id", "unknown_user"),
+                "session_id": context.get("session_id", "unknown_session"),
                 "program_type": generated_plan['program_type'],
                 "duration_weeks": generated_plan['duration_weeks']
             }
@@ -387,43 +584,11 @@ class EliteTrainingStrategist(ADKAgent):
         
         return generated_plan
 
-    async def _skill_adapt_training_program(self, params: AdaptTrainingProgramInput) -> AdaptTrainingProgramOutput:
-        """
-        Skill para adaptar un programa de entrenamiento existente.
-        """
-        logger.info(f"Skill '{self._skill_adapt_training_program.__name__}' llamada con existing_plan_id: {params.existing_plan_id}")
-        try:
-            details = await self._adapt_training_program_logic(
-                user_profile={},
-                existing_plan_id=params.existing_plan_id,
-                adaptation_reason=params.adaptation_reason,
-                feedback=params.feedback or {},
-                new_goals=params.new_goals or []
-            )
-            return AdaptTrainingProgramOutput(**details)
-        except Exception as e:
-            logger.error(f"Error en skill '{self._skill_adapt_training_program.__name__}': {e}", exc_info=True)
-            return AdaptTrainingProgramOutput(
-                adapted_plan_name="Error",
-                program_type="GENERAL",
-                adaptation_summary=str(e),
-                duration_weeks=0,
-                description=f"Error al adaptar el plan: {e}",
-                phases=[]
-            )
-
-    async def _adapt_training_program_logic(
-        self, 
-        user_profile: Dict[str, Any],
-        existing_plan_id: str,
-        adaptation_reason: str,
-        feedback: Optional[Dict[str, Any]] = None,
-        new_goals: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+    async def _adapt_training_program(self, existing_plan_id: str, adaptation_reason: str, feedback: Optional[Dict[str, Any]] = None, new_goals: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Lógica interna para adaptar un programa de entrenamiento.
         """
-        program_type = self._get_program_type_from_profile(user_profile)
+        program_type = self._get_program_type_from_profile({})
 
         prompt_parts = [
             f"Eres un entrenador de élite. Adapta un plan de entrenamiento existente para un programa tipo '{program_type}'.",
@@ -433,12 +598,7 @@ class EliteTrainingStrategist(ADKAgent):
         
         # Información del perfil de usuario
         prompt_parts.append("Considera el siguiente perfil de atleta:")
-        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
-        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
-        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
-        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
-        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
-        if user_profile.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {user_profile.get('experience_level')}")
+        prompt_parts.append("- Sin información disponible.")
 
         if feedback:
             prompt_parts.append(f"Feedback del Atleta sobre el Plan Actual: {json.dumps(feedback)}")
@@ -479,39 +639,11 @@ class EliteTrainingStrategist(ADKAgent):
             
         return adapted_plan
 
-    async def _skill_analyze_performance_data(self, params: AnalyzePerformanceDataInput) -> AnalyzePerformanceDataOutput:
-        """
-        Skill para analizar datos de rendimiento.
-        """
-        logger.info(f"Skill '{self._skill_analyze_performance_data.__name__}' llamada con performance_data keys: {list(params.performance_data.keys())}")
-        try:
-            details = await self._analyze_performance_data_logic(
-                user_profile={},
-                performance_data=params.performance_data,
-                metrics_to_focus=params.metrics_to_focus or [],
-                comparison_period=params.comparison_period or {}
-            )
-            return AnalyzePerformanceDataOutput(**details)
-        except Exception as e:
-            logger.error(f"Error en skill '{self._skill_analyze_performance_data.__name__}': {e}", exc_info=True)
-            return AnalyzePerformanceDataOutput(
-                analysis_summary=f"Error: {e}",
-                key_observations=[],
-                recommendations=[]
-            )
-
-    async def _analyze_performance_data_logic(
-        self, 
-        user_profile: Dict[str, Any],
-        performance_data: Dict[str, Any],
-        metrics_to_focus: Optional[List[str]] = None,
-        comparison_period: Optional[Dict[str, Any]] = None,
-        user_query: Optional[str] = None
-    ) -> Dict[str, Any]:
+    async def _analyze_performance_data(self, performance_data: Dict[str, Any], metrics_to_focus: Optional[List[str]] = None, comparison_period: Optional[Dict[str, Any]] = None, user_query: Optional[str] = None) -> Dict[str, Any]:
         """
         Lógica interna para analizar datos de rendimiento.
         """
-        program_type = self._get_program_type_from_profile(user_profile)
+        program_type = self._get_program_type_from_profile({})
 
         prompt_parts = [
             f"Eres un analista de rendimiento deportivo de élite. Analiza los siguientes datos para un programa '{program_type}'.",
@@ -520,12 +652,7 @@ class EliteTrainingStrategist(ADKAgent):
 
         # Información del perfil de usuario
         prompt_parts.append("Considera el siguiente perfil de atleta:")
-        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
-        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
-        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
-        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
-        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
-        if user_profile.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {user_profile.get('experience_level')}")
+        prompt_parts.append("- Sin información disponible.")
 
         if user_query:
             prompt_parts.append(f"Pregunta Específica del Usuario sobre los Datos: {user_query}")
@@ -567,41 +694,55 @@ class EliteTrainingStrategist(ADKAgent):
 
         return analysis
 
-    async def _skill_set_training_intensity_volume(self, params: SetTrainingIntensityVolumeInput) -> SetTrainingIntensityVolumeOutput:
+    def _get_program_type_from_profile(self, context: Dict[str, Any]) -> str:
         """
-        Skill para establecer o ajustar la intensidad y volumen del entrenamiento.
+        Determina el tipo de programa basado en el perfil del usuario.
+        
+        Args:
+            context: Contexto del usuario
+            
+        Returns:
+            str: Tipo de programa (PRIME, ELITE, PERFORMANCE, etc.)
         """
-        logger.info(f"Skill '{self._skill_set_training_intensity_volume.__name__}' llamada con current_phase: {params.current_phase}")
-        try:
-            details = await self._set_training_intensity_volume_logic(
-                user_profile={},
-                current_phase=params.current_phase,
-                athlete_feedback=params.athlete_feedback,
-                performance_metrics=params.performance_metrics,
-                goal_adjustment_reason=params.goal_adjustment_reason or ""
-            )
-            return SetTrainingIntensityVolumeOutput(**details)
-        except Exception as e:
-            logger.error(f"Error en skill '{self._skill_set_training_intensity_volume.__name__}': {e}", exc_info=True)
-            return SetTrainingIntensityVolumeOutput(
-                adjustment_summary=f"Error: {e}",
-                recommended_intensity={},
-                recommended_volume={},
-                notes=None
-            )
-
-    async def _set_training_intensity_volume_logic(
-        self, 
-        user_profile: Dict[str, Any],
-        current_phase: str,
-        athlete_feedback: Dict[str, Any],
-        performance_metrics: Dict[str, Any],
-        goal_adjustment_reason: str
-    ) -> Dict[str, Any]:
+        # Obtener el tipo de programa del contexto si está disponible
+        program_type = context.get("program_type")
+        if program_type:
+            return program_type
+            
+        # Si no hay tipo de programa en el contexto, intentar determinarlo basado en otros datos
+        experience_level = context.get("experience_level", "").lower()
+        goals = context.get("goals", [])
+        
+        # Mapeo de niveles de experiencia a tipos de programa
+        if experience_level in ["principiante", "beginner", "novice"]:
+            return "FOUNDATION"
+        elif experience_level in ["intermedio", "intermediate"]:
+            return "PERFORMANCE"
+        elif experience_level in ["avanzado", "advanced"]:
+            return "ELITE"
+        elif experience_level in ["profesional", "elite", "professional"]:
+            return "PRIME"
+            
+        # Si no se puede determinar por nivel de experiencia, intentar por objetivos
+        if goals:
+            goal_str = " ".join(goals).lower()
+            if any(kw in goal_str for kw in ["fuerza", "strength", "powerlifting"]):
+                return "STRENGTH"
+            elif any(kw in goal_str for kw in ["hipertrofia", "hypertrophy", "muscle", "músculo"]):
+                return "HYPERTROPHY"
+            elif any(kw in goal_str for kw in ["resistencia", "endurance", "cardio"]):
+                return "ENDURANCE"
+            elif any(kw in goal_str for kw in ["atlético", "athletic", "deporte", "sport"]):
+                return "ATHLETIC"
+                
+        # Valor por defecto
+        return "PERFORMANCE"
+    
+    async def _set_training_intensity_volume(self, current_phase: str, athlete_feedback: Dict[str, Any], performance_metrics: Dict[str, Any], goal_adjustment_reason: str) -> Dict[str, Any]:
         """
         Lógica interna para establecer la intensidad y volumen del entrenamiento.
         """
-        program_type = self._get_program_type_from_profile(user_profile)
+        program_type = self._get_program_type_from_profile({})
 
         prompt_parts = [
             f"Eres un coach experto en periodización. Determina los ajustes óptimos de intensidad y volumen para un atleta en un programa '{program_type}'.",
@@ -613,12 +754,7 @@ class EliteTrainingStrategist(ADKAgent):
 
         # Información del perfil de usuario
         prompt_parts.append("Considera el siguiente perfil de atleta:")
-        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
-        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
-        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
-        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
-        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
-        if user_profile.get("experience_level"): prompt_parts.append(f"- Nivel de Experiencia: {user_profile.get('experience_level')}")
+        prompt_parts.append("- Sin información disponible.")
 
         prompt_parts.append("\nProporciona recomendaciones específicas para porcentajes de 1RM, RPE, series, repeticiones y volumen total semanal para los principales levantamientos o tipo de actividad.")
         prompt_parts.append("Formato de Salida Esperado: JSON con 'adjustment_summary', 'recommended_intensity' (dict), 'recommended_volume' (dict).")
@@ -656,127 +792,3 @@ class EliteTrainingStrategist(ADKAgent):
             return {"error": "Invalid I/V settings structure from LLM", "details": settings}
 
         return settings
-
-    async def _skill_prescribe_exercise_routines(self, params: PrescribeExerciseRoutinesInput) -> PrescribeExerciseRoutinesOutput:
-        """
-        Skill para prescribir rutinas de ejercicios específicas.
-        """
-        logger.info(f"Skill '{self._skill_prescribe_exercise_routines.__name__}' llamada con focus_area: {params.focus_area}")
-        try:
-            details = await self._prescribe_exercise_routines_logic(
-                user_profile={},
-                focus_area=params.focus_area,
-                exercise_type=params.exercise_type,
-                equipment_available=params.equipment_available,
-                experience_level=params.experience_level
-            )
-            return PrescribeExerciseRoutinesOutput(**details)
-        except Exception as e:
-            logger.error(f"Error en skill '{self._skill_prescribe_exercise_routines.__name__}': {e}", exc_info=True)
-            return PrescribeExerciseRoutinesOutput(
-                routine_name="Error",
-                focus_area=params.focus_area,
-                exercise_type=params.exercise_type,
-                estimated_duration_minutes=0,
-                exercises=[],
-                warm_up=None,
-                cool_down=None
-            )
-
-    async def _prescribe_exercise_routines_logic(
-        self, 
-        user_profile: Dict[str, Any],
-        focus_area: str,
-        exercise_type: str,
-        equipment_available: List[str],
-        experience_level: str
-    ) -> Dict[str, Any]:
-        """
-        Lógica interna para prescribir rutinas de ejercicios.
-        """
-        program_type = self._get_program_type_from_profile(user_profile)
-
-        prompt_parts = [
-            f"Eres un especialista en ejercicios. Prescribe rutinas de ejercicios para un programa '{program_type}'.",
-            f"Área de Enfoque: {focus_area}",
-            f"Tipo de Ejercicio: {exercise_type}",
-            f"Equipamiento Disponible: {', '.join(equipment_available)}",
-            f"Nivel de Experiencia del Atleta: {experience_level}",
-        ]
-
-        # Información del perfil de usuario
-        prompt_parts.append("Considera el siguiente perfil de atleta:")
-        if user_profile.get("age"): prompt_parts.append(f"- Edad: {user_profile.get('age')}")
-        if user_profile.get("gender"): prompt_parts.append(f"- Género: {user_profile.get('gender')}")
-        if user_profile.get("weight_kg"): prompt_parts.append(f"- Peso: {user_profile.get('weight_kg')} kg")
-        if user_profile.get("height_cm"): prompt_parts.append(f"- Altura: {user_profile.get('height_cm')} cm")
-        if user_profile.get("activity_level"): prompt_parts.append(f"- Nivel de Actividad: {user_profile.get('activity_level')}")
-
-        prompt_parts.append("\nProporciona una lista de ejercicios con detalles sobre series, repeticiones, tempo, descanso y notas técnicas o de seguridad.")
-        prompt_parts.append("Si es relevante, incluye progresiones o regresiones.")
-        prompt_parts.append("Formato de Salida Esperado: JSON con 'routine_name', 'focus_area', 'exercises' (lista).")
-        prompt_parts.append(
-            "\nEjemplo de la estructura JSON de salida deseada (PrescribeExerciseRoutinesOutput):\n"
-            "{\n"
-            "  \"routine_name\": \"Rutina de Empuje Tren Superior - Intermedio\",\n"
-            "  \"focus_area\": \"Fuerza de tren superior (empuje)\",\n"
-            "  \"exercise_type\": \"compound_isolation_mix\",\n"
-            "  \"estimated_duration_minutes\": 60,\n"
-            "  \"exercises\": [\n"
-            "    { \"exercise_name\": \"Press de Banca con Barra\", \"sets\": 4, \"reps_range\": \"6-8\", \"rest_seconds\": 90, \"tempo\": \"2-0-1-0\", \"notes\": \"Mantener retracción escapular.\" },\n"
-            "    { \"exercise_name\": \"Press Inclinado con Mancuernas\", \"sets\": 3, \"reps_range\": \"8-10\", \"rest_seconds\": 75, \"tempo\": \"2-0-1-0\", \"notes\": \"Ajustar inclinación a 30-45 grados.\" },\n"
-            "    { \"exercise_name\": \"Aperturas con Mancuernas\", \"sets\": 3, \"reps_range\": \"10-12\", \"rest_seconds\": 60, \"tempo\": \"3-0-1-0\", \"notes\": \"Controlar el estiramiento.\" }\n"
-            "  ],\n"
-            "  \"warm_up\": [\"Movilidad articular general\", \"Activación de manguito rotador\"],\n"
-            "  \"cool_down\": [\"Estiramientos estáticos para pectoral, hombros, tríceps\"]\n"
-            "}"
-        )
-        final_prompt = "\n".join(prompt_parts)
-        logger.debug(f"Prompt para Gemini (prescribir ejercicios): {final_prompt[:500]}...")
-
-        # Llamada a Gemini
-        if not self.gemini_client or not hasattr(self.gemini_client, 'generate_structured_output'):
-             logger.error("GeminiClient no está configurado correctamente. No se pueden prescribir rutinas.")
-             return {"error": "GeminiClient not configured", "message": "Unable to prescribe routines."}
-
-        routines = await self.gemini_client.generate_structured_output(final_prompt)
-        
-        # Validar la estructura de la rutina
-        if not isinstance(routines, dict) or "routine_name" not in routines:
-            logger.error(f"La salida de Gemini para la prescripción de rutinas no tiene la estructura esperada. Salida: {routines}")
-            return {"error": "Invalid routine structure from LLM", "details": routines}
-            
-        return routines
-
-    def _get_completion_message(self, skill_name: str, response_data: Dict[str, Any]) -> Optional[str]:
-        """
-        Genera un mensaje de finalización personalizado para la skill, si es necesario.
-        """
-        # Implementación específica si se necesita un mensaje de finalización personalizado
-        # Por ahora, devolvemos None para usar el mensaje por defecto
-        return None
-
-    def _handle_error(self, error: Exception) -> Dict[str, Any]:
-        """
-        Maneja errores y devuelve un resultado formateado.
-        """
-        # Registrar el error
-        logger.error(f"Error en EliteTrainingStrategist: {error}", exc_info=True)
-        
-        # Si hay telemetría disponible, incrementar contador de errores
-        if hasattr(self, 'error_count') and self.error_count:
-            self.error_count.add(1, {"agent": "EliteTrainingStrategist", "error_type": type(error).__name__})
-            
-        # Crear un mensaje de error amigable
-        error_message = str(error)
-        if isinstance(error, ValueError):
-            friendly_message = f"Error de valor: {error_message}"
-        elif isinstance(error, TypeError):
-            friendly_message = f"Error de tipo: {error_message}"
-        elif isinstance(error, KeyError):
-            friendly_message = f"Error de clave: {error_message}"
-        else:
-            friendly_message = f"Error inesperado: {error_message}"
-            
-        # Devolver un resultado formateado con el error
-        return create_result(status="error", error_message=friendly_message)

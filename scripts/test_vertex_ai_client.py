@@ -29,18 +29,34 @@ async def test_vertex_ai_client():
     print(f"Tokens utilizados: {response['usage']['total_tokens']}")
     
     print("\n=== Generación de Embedding ===")
-    embedding = await vertex_ai_client.generate_embedding(
+    embedding_response = await vertex_ai_client.generate_embedding(
         text="Ejemplo de texto para embedding"
     )
-    print(f"Dimensiones del embedding: {len(embedding)}")
-    print(f"Primeros 5 valores: {embedding[:5]}")
+    print(f"Dimensiones del embedding: {embedding_response['dimensions']}")
+    if embedding_response['embedding'] and len(embedding_response['embedding']) > 0:
+        print(f"Primeros 5 valores: {embedding_response['embedding'][:5]}")
+    else:
+        print("No se obtuvieron valores de embedding")
     
     print("\n=== Estadísticas del Cliente ===")
     stats = await vertex_ai_client.get_stats()
-    print(f"Solicitudes de contenido: {stats['content_requests']}")
-    print(f"Solicitudes de embedding: {stats['embedding_requests']}")
-    print(f"Caché - hits: {stats['cache']['hits']}, misses: {stats['cache']['misses']}")
-    print(f"Pool de conexiones - creadas: {stats['connection_pool']['created']}, reutilizadas: {stats['connection_pool']['reused']}")
+    print(f"Solicitudes de contenido: {stats.get('content_requests', 0)}")
+    print(f"Solicitudes de embedding: {stats.get('embedding_requests', 0)}")
+    
+    cache_stats = stats.get('cache', {})
+    print(f"Caché - hits: {cache_stats.get('hits', 0)}, misses: {cache_stats.get('misses', 0)}")
+    
+    pool_stats = stats.get('connection_pool', {})
+    print(f"Pool de conexiones - creadas: {pool_stats.get('created', 0)}, "
+          f"reutilizadas: {pool_stats.get('reused', 0)}")
+    
+    # Mostrar información adicional si está disponible
+    if 'latency_ms' in stats:
+        latency = stats['latency_ms']
+        for op, values in latency.items():
+            if values:
+                avg_latency = sum(values) / len(values)
+                print(f"Latencia promedio para {op}: {avg_latency:.2f}ms")
     
     # Probar caché
     print("\n=== Prueba de Caché ===")

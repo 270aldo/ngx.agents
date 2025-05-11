@@ -117,21 +117,33 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 EOF
 
+    # Crear directorio para el componente
+    mkdir -p "${VENV_BASE_DIR}/${component}"
+    
+    # Copiar el archivo pyproject.toml específico al directorio del componente
+    cp "${component}_pyproject.toml" "${VENV_BASE_DIR}/${component}/pyproject.toml"
+    
     # Crear entorno virtual usando Poetry
     echo -e "${YELLOW}Creando entorno virtual para ${component}...${NC}"
-    POETRY_VIRTUALENVS_IN_PROJECT=true poetry --directory="${VENV_BASE_DIR}" env use python3
+    cd "${VENV_BASE_DIR}/${component}"
+    poetry env use python3
     if [ $? -ne 0 ]; then
         echo -e "${RED}Error al crear el entorno virtual para ${component}.${NC}"
+        cd - > /dev/null
         return 1
     fi
     
     # Instalar dependencias
     echo -e "${YELLOW}Instalando dependencias para ${component}...${NC}"
-    POETRY_VIRTUALENVS_IN_PROJECT=true poetry install --no-root --config="${component}_pyproject.toml"
+    poetry install --no-root
     if [ $? -ne 0 ]; then
         echo -e "${RED}Error al instalar dependencias para ${component}.${NC}"
+        cd - > /dev/null
         return 1
     fi
+    
+    # Volver al directorio original
+    cd - > /dev/null
     
     echo -e "${GREEN}Entorno virtual para ${component} configurado correctamente.${NC}"
     return 0

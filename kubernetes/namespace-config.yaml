@@ -1,0 +1,61 @@
+---
+# Namespace para NGX Agents
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ngx-agents
+  labels:
+    name: ngx-agents
+    environment: production
+
+---
+# ConfigMap para configuración de la aplicación
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngx-agents-config
+  namespace: ngx-agents
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "info"
+  SERVICE_NAME: "ngx-agents-api"
+  VERSION: "1.0.0"
+  ENABLE_MONITORING: "true"
+  ENABLE_TRACING: "true"
+  VERTEX_AI_REGION: "us-central1"
+
+---
+# ResourceQuota para limitar recursos del namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ngx-agents-quota
+  namespace: ngx-agents
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    pods: "30"
+    services: "20"
+    persistentvolumeclaims: "10"
+    secrets: "30"
+    configmaps: "30"
+
+---
+# LimitRange para establecer límites predeterminados
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: ngx-agents-limits
+  namespace: ngx-agents
+spec:
+  limits:
+  - default:
+      memory: 512Mi
+      cpu: 500m
+    defaultRequest:
+      memory: 256Mi
+      cpu: 100m
+    type: Container

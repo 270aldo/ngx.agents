@@ -1,26 +1,45 @@
+"""
+Agente orquestador principal para NGX Nexus.
+
+Este agente analiza la intención del usuario, enruta las solicitudes a agentes especializados
+y sintetiza sus respuestas en una respuesta coherente. Implementa los protocolos oficiales
+A2A y ADK para comunicación entre agentes.
+"""
 import logging
 import json
 import httpx
 import uuid
 import time
 import asyncio
+import os
 from typing import Dict, Any, Optional, List, Tuple, Callable
 
 from core.logging_config import get_logger
-from core.state_manager import StateManager
-from agents.base.base_agent import BaseAgent
-from agents.base.models import AgentResponse, Artifact, Skill
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
+from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
+from infrastructure.adapters.a2a_adapter import a2a_adapter
+from tools.mcp_toolkit import MCPToolkit
+from agents.base.adk_agent import ADKAgent
+from adk.agent import Skill
+from adk.toolkit import Toolkit
 from app.schemas.a2a import A2AProcessRequest, A2AResponse, A2ATaskContext
 from config import settings
 
 logger = get_logger(__name__)
 
-class NGXNexusOrchestrator(BaseAgent):
+class NGXNexusOrchestrator(ADKAgent):
+    """
+    Agente orquestador principal para NGX Nexus.
+    
+    Este agente analiza la intención del usuario, enruta las solicitudes a agentes especializados
+    y sintetiza sus respuestas en una respuesta coherente. Implementa los protocolos oficiales
+    A2A y ADK para comunicación entre agentes.
+    """
     def __init__(
         self,
-        a2a_server_url: str,
-        state_manager: StateManager,
-        model: Optional[Any] = None,
+        mcp_toolkit: Optional[MCPToolkit] = None,
+        a2a_server_url: Optional[str] = None,
+        model: Optional[str] = None,
         instruction: Optional[str] = "Eres el orquestador principal de NGX Nexus. Tu función es analizar la solicitud del usuario, enrutarla a agentes especializados y sintetizar sus respuestas.",
         agent_id: str = "ngx_nexus_orchestrator",
         name: str = "NGX Nexus Orchestrator",
@@ -29,25 +48,51 @@ class NGXNexusOrchestrator(BaseAgent):
         capabilities: Optional[List[str]] = None,
         **kwargs: Any
     ):
-        orchestrator_skills = [
-            Skill(name="analyze_intent", description="Analiza la intención del usuario a partir de su entrada de texto.", parameters={}),
-            Skill(name="synthesize_response", description="Sintetiza una respuesta coherente a partir de las respuestas de múltiples agentes.", parameters={})
+        _model = model or settings.ORCHESTRATOR_DEFAULT_MODEL_ID
+        _mcp_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
+        _a2a_server_url = a2a_server_url or f"http://{settings.A2A_HOST}:{settings.A2A_PORT}"
+
+        # Definir las skills antes de llamar al constructor de ADKAgent
+        self.skills = [
+            Skill(
+                name="analyze_intent",
+                description="Analiza la intención del usuario a partir de su entrada de texto.",
+                handler=self._skill_analyze_intent
+            ),
+            Skill(
+                name="synthesize_response",
+                description="Sintetiza una respuesta coherente a partir de las respuestas de múltiples agentes.",
+                handler=self._skill_synthesize_response
+            )
         ]
 
+        # Definir las capacidades del agente
+        _capabilities = capabilities or [
+            "analyze_user_intent",
+            "route_to_specialized_agents",
+            "synthesize_agent_responses",
+            "manage_conversation_flow"
+        ]
+
+        # Crear un toolkit de ADK
+        adk_toolkit = Toolkit()
+
+        # Inicializar el agente ADK
         super().__init__(
             agent_id=agent_id,
             name=name,
             description=description,
-            version=version,
-            capabilities=capabilities or ["orchestration", "intent_analysis", "response_synthesis"],
+            model=_model,
             instruction=instruction,
-            model=model,
-            skills=orchestrator_skills,
-            state_manager=state_manager,
+            state_manager=None,  # Ya no usamos el state_manager original
+            adk_toolkit=adk_toolkit,
+            capabilities=_capabilities,
+            a2a_server_url=_a2a_server_url,
+            version=version,
             **kwargs
         )
         
-        self.a2a_server_url = a2a_server_url.rstrip('/')
+        self.a2a_server_url = _a2a_server_url.rstrip('/')
 
         self.intent_to_agent_map: Dict[str, List[str]] = {
             "plan_entrenamiento": ["elite_training_strategist"],
@@ -63,19 +108,101 @@ class NGXNexusOrchestrator(BaseAgent):
             "general": ["wellbeing_coach"]
         }
         
-        if self.model is None:
-            try:
-                from core.llm_manager import LLMManager
-                default_model_id = getattr(settings, "ORCHESTRATOR_DEFAULT_MODEL_ID", "gemini/gemini-1.5-flash-latest")
-                self.model = LLMManager().get_model(default_model_id)
-                logger.info(f"NGXNexusOrchestrator: Modelo LLM '{default_model_id}' cargado por defecto para skills internas.")
-            except ImportError as e:
-                logger.warning(f"NGXNexusOrchestrator: No se pudo importar LLMManager o cargar modelo por defecto: {e}. Las skills internas podrían no funcionar.")
-            except Exception as e:
-                logger.error(f"NGXNexusOrchestrator: Error al cargar el modelo LLM por defecto: {e}", exc_info=True)
+        # Inicializar Vertex AI si es necesario
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
+        gcp_region = os.getenv("GCP_REGION", "us-central1")
+        try:
+            from google.cloud import aiplatform
+            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            aiplatform.init(project=gcp_project_id, location=gcp_region)
+            logger.info("AI Platform (Vertex AI SDK) inicializado correctamente para el Orquestador.")
+        except ImportError:
+            logger.warning("Google Cloud AI Platform no está disponible. Algunas funcionalidades podrían estar limitadas.")
+        except Exception as e:
+            logger.error(f"Error al inicializar AI Platform para el Orquestador: {e}", exc_info=True)
+            
+        logger.info(f"{self.name} ({self.agent_id}) inicializado con integración oficial de Google ADK.")
 
-    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, 
-                              session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    async def _skill_analyze_intent(self, prompt: str) -> Dict[str, Any]:
+        """
+        Skill para analizar la intención del usuario a partir de su entrada de texto.
+        
+        Args:
+            prompt: El texto del usuario a analizar.
+            
+        Returns:
+            Un diccionario con la intención primaria, intenciones secundarias y confianza.
+        """
+        try:
+            # Utilizar el adaptador del Intent Analyzer
+            intent_analysis = await intent_analyzer_adapter.analyze_intent(prompt)
+            
+            # Convertir el resultado al formato esperado por el orquestador
+            result = {
+                "primary_intent": intent_analysis.get("primary_intent", "general"),
+                "secondary_intents": intent_analysis.get("secondary_intents", []),
+                "confidence": intent_analysis.get("confidence", 0.5)
+            }
+            
+            logger.debug(f"Análisis de intención para '{prompt[:30]}...': {result}")
+            return result
+        except Exception as e:
+            logger.error(f"Error en skill_analyze_intent: {e}", exc_info=True)
+            return {
+                "primary_intent": "general",
+                "secondary_intents": [],
+                "confidence": 0.5,
+                "error": str(e)
+            }
+
+    async def _skill_synthesize_response(self, prompt: str, agent_responses: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+        """
+        Skill para sintetizar una respuesta coherente a partir de las respuestas de múltiples agentes.
+        
+        Args:
+            prompt: El texto del usuario original.
+            agent_responses: Las respuestas de los agentes consultados.
+            
+        Returns:
+            Una respuesta sintetizada.
+        """
+        try:
+            # Si no hay respuestas de agentes, devolver un mensaje genérico
+            if not agent_responses:
+                return "Lo siento, no tengo suficiente información para responder a tu consulta en este momento."
+            
+            # Aquí iría la lógica real de síntesis de respuestas
+            # Por ahora, un ejemplo simple que concatena las respuestas
+            synthesized_response = ""
+            for agent_id, resp_data in agent_responses.items():
+                if resp_data.get("status") == "success" and resp_data.get("output"):
+                    synthesized_response += f"{resp_data.get('output')}\n\n"
+            
+            if not synthesized_response:
+                return "Lo siento, los agentes consultados no pudieron proporcionar una respuesta clara en este momento."
+            
+            return synthesized_response.strip()
+        except Exception as e:
+            logger.error(f"Error en skill_synthesize_response: {e}", exc_info=True)
+            return "Lo siento, tuve dificultades para consolidar la información. Por favor, intenta de nuevo."
+
+    async def run(self, input_text: str, user_id: Optional[str] = None, 
+                  session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """
+        Ejecuta el agente orquestador utilizando la implementación de Google ADK.
+        
+        Este método sobrescribe el método run de ADKAgent para proporcionar
+        la funcionalidad específica del orquestador.
+        
+        Args:
+            input_text: El texto de entrada del usuario.
+            user_id: El ID del usuario.
+            session_id: El ID de la sesión.
+            **kwargs: Argumentos adicionales.
+            
+        Returns:
+            Un diccionario con la respuesta del orquestador.
+        """
         start_time = time.time()
         try:
             result = await self._process_request(input_text, user_id, session_id, start_time=start_time, **kwargs)
@@ -84,7 +211,7 @@ class NGXNexusOrchestrator(BaseAgent):
             result['metadata']['processing_time'] = result['metadata'].get('processing_time', time.time() - start_time)
             return result
         except Exception as e:
-            logger.error(f"Error crítico en _run_async_impl del orquestador: {e}", exc_info=True)
+            logger.error(f"Error crítico en run del orquestador: {e}", exc_info=True)
             return {
                 "status": "error_orchestrator_critical",
                 "response": "Lo siento, ocurrió un error crítico al procesar tu solicitud.",
@@ -112,14 +239,16 @@ class NGXNexusOrchestrator(BaseAgent):
         try:
             context = await self._get_context(user_id, session_id)
             
-            intent_analysis_prompt = f"""...""" # Prompt de análisis de intención omitido por brevedad
-            intent_analysis_result = await self.execute_skill(skill_name="analyze_intent", prompt=intent_analysis_prompt)
-            intent_analysis = intent_analysis_result.get("output", "") if isinstance(intent_analysis_result, dict) else str(intent_analysis_result)
-
+            # Analizar la intención del usuario utilizando la skill de Google ADK
+            intent_analysis_result = await self.adk_toolkit.execute_skill("analyze_intent", prompt=input_text)
+            
             try:
-                intent_data = json.loads(intent_analysis)
+                if isinstance(intent_analysis_result, str):
+                    intent_data = json.loads(intent_analysis_result)
+                else:
+                    intent_data = intent_analysis_result
             except json.JSONDecodeError:
-                logger.warning(f"No se pudo decodificar JSON del análisis de intención: {intent_analysis}. Usando fallback.")
+                logger.warning(f"No se pudo decodificar JSON del análisis de intención: {intent_analysis_result}. Usando fallback.")
                 intent_data = {"primary_intent": "general", "confidence": 0.5}
             
             primary_intent = intent_data.get("primary_intent", "general").lower()
@@ -139,25 +268,48 @@ class NGXNexusOrchestrator(BaseAgent):
             agent_ids_to_call = list(agent_ids_set)
             
             if not agent_ids_to_call:
-                # ... (manejo de no encontrar agentes, omitido por brevedad) ...
-                no_agent_response = "Lo siento, no estoy seguro de cómo ayudarte..."
+                no_agent_response = "Lo siento, no estoy seguro de cómo ayudarte con esa consulta específica. ¿Podrías reformularla o ser más específico sobre lo que necesitas?"
                 await self._update_context(user_id, session_id, input_text, no_agent_response)
-                return { "status": "success_no_agent_found", "response": no_agent_response, # ... resto ... 
-                       }
+                return {
+                    "status": "success_no_agent_found",
+                    "response": no_agent_response,
+                    "session_id": session_id,
+                    "agents_consulted": [],
+                    "artifacts": [],
+                    "metadata": {
+                        "intent": primary_intent,
+                        "confidence": confidence,
+                        "processing_time": time.time() - start_time
+                    }
+                }
             
             logger.info(f"Intención: {primary_intent}, confianza: {confidence}, agentes: {agent_ids_to_call}")
         except Exception as e:
-            # ... (manejo de error en análisis de intención, omitido por brevedad) ...
-            return { "status": "error_intent_analysis", # ... resto ... 
-                   }
+            logger.error(f"Error en análisis de intención: {e}", exc_info=True)
+            return {
+                "status": "error_intent_analysis",
+                "response": "Lo siento, tuve un problema al entender tu consulta. ¿Podrías intentar expresarla de otra manera?",
+                "session_id": session_id,
+                "details": str(e),
+                "agents_consulted": [],
+                "artifacts": [],
+                "metadata": {"processing_time": time.time() - start_time}
+            }
         
         agent_responses = await self._get_agent_responses(
             user_input=input_text, agent_ids=agent_ids_to_call, user_id=user_id, context=context, session_id=session_id
         )
         
-        synthesized_response, artifacts = await self._synthesize(
-            user_input=input_text, agent_responses=agent_responses, context=context
+        # Sintetizar la respuesta utilizando la skill de Google ADK
+        synthesized_response = await self.adk_toolkit.execute_skill(
+            "synthesize_response", prompt=input_text, agent_responses=agent_responses
         )
+        
+        # Extraer artefactos de las respuestas de los agentes
+        artifacts = []
+        for agent_id, resp_data in agent_responses.items():
+            if resp_data.get("artifacts"):
+                artifacts.extend(resp_data["artifacts"])
         
         await self._update_context(user_id, session_id, input_text, synthesized_response)
         
@@ -166,41 +318,95 @@ class NGXNexusOrchestrator(BaseAgent):
             for aid, data in agent_responses.items()
         ]
         
-        if user_id and self.state_manager:
+        if user_id:
             try:
-                stats = await self.state_manager.get_state_field(user_id, session_id, "agent_usage_stats") or {}
+                # Cargar el estado actual
+                state = await state_manager_adapter.load_state(user_id, session_id)
+                if not state:
+                    state = {}
+                
+                # Obtener o inicializar las estadísticas de uso de agentes
+                stats = state.get("agent_usage_stats", {})
+                
+                # Actualizar las estadísticas
                 for agent_data in agents_consulted_for_response:
                     stats[agent_data["name"]] = stats.get(agent_data["name"], 0) + 1
-                await self.state_manager.update_state_field(user_id, session_id, "agent_usage_stats", stats)
+                
+                # Actualizar el estado con las nuevas estadísticas
+                state["agent_usage_stats"] = stats
+                
+                # Guardar el estado actualizado
+                await state_manager_adapter.save_state(user_id, session_id, state)
             except Exception as e:
-                logger.warning(f"Error al actualizar estadísticas: {e}", exc_info=True)
+                logger.warning(f"Error al actualizar estadísticas en el adaptador del StateManager: {e}", exc_info=True)
         
         return {
-            "status": "success", "response": synthesized_response, "session_id": session_id,
-            "artifacts": artifacts, "agents_consulted": agents_consulted_for_response,
-            "metadata": {"intent": primary_intent, "confidence": confidence, "processing_time": time.time() - start_time}
+            "status": "success", 
+            "response": synthesized_response, 
+            "session_id": session_id,
+            "artifacts": artifacts, 
+            "agents_consulted": agents_consulted_for_response,
+            "metadata": {
+                "intent": primary_intent, 
+                "confidence": confidence, 
+                "processing_time": time.time() - start_time
+            }
         }
 
     async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
-        if not user_id or not session_id or not self.state_manager:
+        if not user_id or not session_id:
             return {"history": []}
         try:
-            history = await self.state_manager.get_conversation_history(user_id, session_id)
-            # Adaptar al formato esperado si es necesario, aunque get_conversation_history ya debería devolver List[Dict[str, str]]
-            return {"history": history} # Ejemplo: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+            # Cargar el estado desde el adaptador del State Manager
+            state = await state_manager_adapter.load_state(user_id, session_id)
+            if not state or "conversation_history" not in state:
+                return {"history": []}
+            
+            # Convertir el formato del historial de conversación al formato esperado
+            history = []
+            for entry in state.get("conversation_history", []):
+                if "role" in entry and "content" in entry:
+                    if entry["role"] == "user":
+                        history.append({"user_input": entry["content"]})
+                    elif entry["role"] == "assistant":
+                        history.append({"bot_response": entry["content"]})
+            
+            return {"history": history}
         except Exception as e:
-            logger.error(f"Error al obtener contexto de StateManager: {e}", exc_info=True)
+            logger.error(f"Error al obtener contexto del adaptador del StateManager: {e}", exc_info=True)
             return {"history": []}
 
     async def _update_context(self, user_id: Optional[str], session_id: Optional[str], user_input: str, bot_response: str):
-        if not user_id or not session_id or not self.state_manager:
+        if not user_id or not session_id:
             return
         try:
-            # Asumiendo que StateManager tiene un método para añadir al historial. 
-            # La estructura de add_to_conversation_history debe ser user_input y luego bot_response.
-            await self.state_manager.add_to_conversation_history(user_id, session_id, user_input, bot_response)
+            # Cargar el estado actual
+            state = await state_manager_adapter.load_state(user_id, session_id)
+            if not state:
+                state = {"conversation_history": []}
+            
+            # Asegurarse de que existe la lista de historial de conversación
+            if "conversation_history" not in state:
+                state["conversation_history"] = []
+            
+            # Añadir la nueva entrada de usuario
+            state["conversation_history"].append({
+                "role": "user",
+                "content": user_input,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            })
+            
+            # Añadir la nueva respuesta del bot
+            state["conversation_history"].append({
+                "role": "assistant",
+                "content": bot_response,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            })
+            
+            # Guardar el estado actualizado
+            await state_manager_adapter.save_state(user_id, session_id, state)
         except Exception as e:
-            logger.error(f"Error al actualizar contexto en StateManager: {e}", exc_info=True)
+            logger.error(f"Error al actualizar contexto en el adaptador del StateManager: {e}", exc_info=True)
 
     async def _get_agent_responses(
         self,
@@ -210,185 +416,54 @@ class NGXNexusOrchestrator(BaseAgent):
         context: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None
     ) -> Dict[str, Dict[str, Any]]:
-        tasks = []
-        a2a_base_url = self.a2a_server_url
+        agent_responses_map: Dict[str, Dict[str, Any]] = {}
         
+        # Crear el contexto de la tarea
         task_context_data = A2ATaskContext(
             session_id=session_id, user_id=user_id, additional_context=context if context else {}
         )
-        process_request_payload_model = A2AProcessRequest(
-            user_input=user_input, context=task_context_data
-        )
-        process_request_payload = process_request_payload_model.dict(exclude_none=True)
-
-        async with httpx.AsyncClient() as client:
-            for agent_path_id in agent_ids:
-                request_url = f"{a2a_base_url}/a2a/{agent_path_id}/process"
-                logger.debug(f"Orquestador llamando al agente {agent_path_id} en {request_url} con payload: {process_request_payload}")
-                tasks.append(
-                    self._make_a2a_call(client, request_url, process_request_payload, agent_path_id)
-                )
-            
-            results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        agent_responses_map: Dict[str, Dict[str, Any]] = {}
-        for i, result in enumerate(results):
-            agent_id_called = agent_ids[i]
-            if isinstance(result, Exception):
-                logger.error(f"Error al contactar al agente {agent_id_called}: {result}")
-                agent_responses_map[agent_id_called] = {
-                    "agent_id": agent_id_called, "agent_name": agent_id_called,
-                    "status": "error_communication", "error": str(result),
-                    "output": "Error de comunicación con el agente.", "artifacts": []
-                }
-            elif isinstance(result, httpx.Response): # Chequeo explícito de tipo
-                if result.status_code == 200:
-                    try:
-                        response_data = result.json()
-                        agent_responses_map[agent_id_called] = {
-                            "agent_id": response_data.get("agent_id", agent_id_called),
-                            "agent_name": response_data.get("agent_name", agent_id_called),
-                            "status": "success",
-                            "output": response_data.get("output"),
-                            "artifacts": response_data.get("artifacts", [])
-                        }
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Error al decodificar JSON del agente {agent_id_called}: {e}. Respuesta: {result.text}")
-                        agent_responses_map[agent_id_called] = {
-                            "agent_id": agent_id_called, "agent_name": agent_id_called,
-                            "status": "error_response_format", "error": f"Respuesta JSON inválida: {e}",
-                            "output": "El agente devolvió una respuesta mal formada.", "artifacts": []
-                        }
-                    except Exception as e: 
-                        logger.error(f"Error al procesar la respuesta del agente {agent_id_called}: {e}. Respuesta: {result.text}")
-                        agent_responses_map[agent_id_called] = {
-                            "agent_id": agent_id_called, "agent_name": agent_id_called,
-                            "status": "error_processing_response", "error": f"Error al procesar respuesta: {e}",
-                            "output": "Error al procesar la respuesta del agente.", "artifacts": []
-                        }
-                else:
-                    logger.error(f"Error del agente {agent_id_called} (status {result.status_code}): {result.text}")
-                    agent_responses_map[agent_id_called] = {
-                        "agent_id": agent_id_called, "agent_name": agent_id_called,
-                        "status": f"error_http_{result.status_code}", "error": result.text,
-                        "output": f"El agente devolvió un error HTTP {result.status_code}.", "artifacts": []
+        # Llamar a múltiples agentes en paralelo utilizando el adaptador de A2A
+        try:
+            logger.info(f"Orquestador llamando a {len(agent_ids)} agentes: {agent_ids}")
+            responses = await a2a_adapter.call_multiple_agents(
+                user_input=user_input,
+                agent_ids=agent_ids,
+                context=task_context_data
+            )
+            
+            # Procesar las respuestas
+            for agent_id, response in responses.items():
+                if response.get("status") == "success":
+                    agent_responses_map[agent_id] = {
+                        "agent_id": response.get("agent_id", agent_id),
+                        "agent_name": response.get("agent_name", agent_id),
+                        "status": "success",
+                        "output": response.get("output"),
+                        "artifacts": response.get("artifacts", [])
                     }
-            else: # Caso inesperado donde result no es ni Exception ni httpx.Response
-                logger.error(f"Resultado inesperado para el agente {agent_id_called}: {type(result)} - {str(result)}")
-                agent_responses_map[agent_id_called] = {
-                    "agent_id": agent_id_called, "agent_name": agent_id_called,
-                    "status": "error_unknown_result_type", "error": "Tipo de resultado desconocido de la llamada A2A",
-                    "output": "Error desconocido al contactar al agente.", "artifacts": []
+                else:
+                    agent_responses_map[agent_id] = {
+                        "agent_id": agent_id,
+                        "agent_name": agent_id,
+                        "status": response.get("status", "error"),
+                        "error": response.get("error", "Error desconocido"),
+                        "output": response.get("output", "Error al procesar la solicitud."),
+                        "artifacts": []
+                    }
+        except Exception as e:
+            logger.error(f"Error al llamar a múltiples agentes: {e}", exc_info=True)
+            for agent_id in agent_ids:
+                agent_responses_map[agent_id] = {
+                    "agent_id": agent_id,
+                    "agent_name": agent_id,
+                    "status": "error_communication",
+                    "error": str(e),
+                    "output": "Error de comunicación con el agente.",
+                    "artifacts": []
                 }
+        
         return agent_responses_map
 
-    async def _make_a2a_call(self, client: httpx.AsyncClient, url: str, payload: Dict[str, Any], agent_id: str) -> httpx.Response:
-        try:
-            response = await client.post(url, json=payload, timeout=settings.AGENT_TIMEOUT)
-            return response
-        except httpx.TimeoutException as e:
-            logger.warning(f"Timeout al llamar a {url} (agente {agent_id}): {e}")
-            error_content = {"error": f"Timeout llamando al agente {agent_id}", "details": str(e), "agent_id": agent_id, "output": "El agente tardó demasiado en responder."}
-            return httpx.Response(status_code=408, json=error_content)
-        except httpx.RequestError as e:
-            logger.warning(f"Error de red al llamar a {url} (agente {agent_id}): {e}")
-            error_content = {"error": f"Error de red llamando al agente {agent_id}", "details": str(e), "agent_id": agent_id, "output": "Error de red al contactar al agente."}
-            return httpx.Response(status_code=503, json=error_content)
-
-    async def _synthesize(self, user_input: str, agent_responses: Dict[str, Dict[str, Any]], context: Dict[str, Any]) -> Tuple[str, List[Artifact]]:
-        if not self.model:
-            logger.warning("Orquestador: No hay modelo LLM para sintetizar respuestas. Devolviendo respuestas concatenadas como fallback.")
-            # Fallback si no hay modelo para síntesis, simplemente concatena las respuestas directas válidas.
-            final_response = ""
-            all_artifacts: List[Artifact] = []
-            for agent_id, resp_data in agent_responses.items():
-                if resp_data.get("status") == "success" and resp_data.get("output"):
-                    final_response += f"{resp_data.get('agent_name', agent_id)}: {resp_data['output']}\n"
-                elif resp_data.get("output"):
-                    final_response += f"{resp_data.get('agent_name', agent_id)} (error): {resp_data['output']}\n"
-                
-                if resp_data.get("artifacts"):
-                    for art_data in resp_data["artifacts"]:
-                        # Asegurarse de que el artifacto sea un dict antes de intentar crear el objeto Artifact
-                        if isinstance(art_data, dict):
-                            try:
-                                all_artifacts.append(Artifact(**art_data))
-                            except Exception as e: # pydantic.error_wrappers.ValidationError u otros
-                                logger.warning(f"No se pudo crear Artifact desde {art_data} para {agent_id}: {e}")
-                        elif isinstance(art_data, Artifact):
-                             all_artifacts.append(art_data)
-                        else:
-                            logger.warning(f"Artefacto de formato inesperado {type(art_data)} de {agent_id}: {art_data}")
-
-            return final_response.strip() if final_response else "No se pudo generar una respuesta consolidada.", all_artifacts
-
-        # Construcción del prompt para el modelo LLM (skill 'synthesize_response')
-        prompt_parts = [f"Consulta original del usuario: {user_input}"]
-        
-        history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in context.get("history", [])])
-        if history_str:
-            prompt_parts.append(f"\nHistorial de conversación previo:\n{history_str}")
-            
-        prompt_parts.append("\nRespuestas de los agentes consultados:")
-        
-        valid_responses_count = 0
-        for agent_id, data in agent_responses.items():
-            agent_name = data.get("agent_name", agent_id)
-            output = data.get("output", "Sin respuesta.")
-            status = data.get("status", "unknown")
-            if status == "success" and output != "Sin respuesta.":
-                valid_responses_count += 1
-            prompt_parts.append(f"- {agent_name} (ID: {agent_id}, Estado: {status}): {output}")
-
-        if valid_responses_count == 0:
-             logger.warning(f"Ningún agente dio una respuesta válida para sintetizar para la entrada: '{user_input[:50]}...'")
-             return "Lo siento, los agentes consultados no pudieron proporcionar una respuesta clara en este momento. Por favor, intenta reformular tu pregunta o inténtalo de nuevo más tarde.", []
-
-        prompt_parts.append(
-            "\nInstrucción: Sintetiza estas respuestas en un mensaje único, coherente y útil para el usuario. "
-            "Evita la redundancia. Si hay errores de algunos agentes, menciónalo sutilmente si es relevante, o ignóralo si la información principal es clara. "
-            "No inventes información. Tu principal objetivo es satisfacer la consulta original del usuario de la manera más directa y completa posible."
-            "No menciones que eres un orquestador ni que estas sintetizando respuestas de otros agentes, simplemente da la respuesta final."
-        )
-        
-        synthesis_prompt = "\n".join(prompt_parts)
-        
-        logger.debug(f"Enviando al LLM para síntesis (skill 'synthesize_response'):\n{synthesis_prompt}")
-        
-        try:
-            # Usar el método execute_skill heredado de BaseAgent
-            # Este método internamente usa self.model y el nombre de la skill.
-            synthesis_skill_result = await self.execute_skill(skill_name="synthesize_response", prompt=synthesis_prompt)
-            
-            # El resultado de execute_skill es un dict que puede contener 'output' y 'artifacts'
-            # o simplemente el string de texto si la skill no produce artefactos o estructura compleja.
-            if isinstance(synthesis_skill_result, dict):
-                final_response_text = synthesis_skill_result.get("output", "No se pudo generar una respuesta final.")
-                # Los artefactos de la síntesis podrían añadirse aquí si la skill los produce
-                # Por ahora, asumimos que los artefactos principales vienen de los agentes individuales.
-            elif isinstance(synthesis_skill_result, str):
-                final_response_text = synthesis_skill_result
-            else:
-                logger.warning(f"Resultado inesperado de la skill de síntesis: {type(synthesis_skill_result)}")
-                final_response_text = "Hubo un problema al generar la respuesta final."
-
-        except Exception as e:
-            logger.error(f"Error durante la síntesis con el LLM (skill 'synthesize_response'): {e}", exc_info=True)
-            final_response_text = "Lo siento, tuve dificultades para consolidar la información. Por favor, intenta de nuevo."
-        
-        # Recolectar artefactos de todas las respuestas de los agentes
-        all_artifacts: List[Artifact] = []
-        for agent_id, resp_data in agent_responses.items():
-            if resp_data.get("artifacts"):
-                for art_data in resp_data["artifacts"]:
-                    if isinstance(art_data, dict):
-                        try:
-                            all_artifacts.append(Artifact(**art_data))
-                        except Exception as e:
-                            logger.warning(f"No se pudo crear Artifact desde {art_data} para {agent_id} durante la síntesis final: {e}")
-                    elif isinstance(art_data, Artifact):
-                        all_artifacts.append(art_data)
-                    else:
-                        logger.warning(f"Artefacto de formato inesperado {type(art_data)} de {agent_id} durante la síntesis final: {art_data}")
-                        
-        return final_response_text, all_artifacts
+    # El método _make_a2a_call ha sido eliminado ya que el adaptador de A2A
+    # se encarga de las llamadas HTTP a través del método call_agent y call_multiple_agents

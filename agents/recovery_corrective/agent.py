@@ -1,1037 +1,1357 @@
 import logging
 import uuid
 import time
-import json
 from typing import Dict, Any, Optional, List, Union
+import json
 import os
 from google.cloud import aiplatform
+import datetime
+import asyncio
+from pydantic import BaseModel, Field
 
-try:
-    from google.adk.toolkit import Toolkit
-except ImportError:
-    from adk.toolkit import Toolkit
+# Importar componentes de Google ADK
+from adk.toolkit import Toolkit
+from adk.agent import Skill as GoogleADKSkill
 
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
-from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
-from agents.base.a2a_agent import A2AAgent
+from agents.base.adk_agent import ADKAgent
+from core.agent_card import AgentCard, Example
 from core.state_manager import StateManager
 from core.logging_config import get_logger
-from core.contracts import create_task, create_result, validate_task, validate_result
 
 # Configurar logger
 logger = get_logger(__name__)
 
+# Definir esquemas de entrada y salida para las skills
+class InjuryPreventionInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre prevención de lesiones")
+    activity_type: Optional[str] = Field(None, description="Tipo de actividad física")
+    injury_history: Optional[List[str]] = Field(None, description="Historial de lesiones previas")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
 
-class RecoveryCorrective(A2AAgent):
-    """
-    Agente Recovery & Corrective Specialist compatible con A2A
-    
-    Prevención / rehab, movilidad, sueño, protocolos de HRV & dolor crónico.
-    """
-    
-    def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
-        # Definir capacidades y habilidades
-        capabilities = [
-            "injury_prevention",
-            "rehabilitation",
-            "mobility_assessment",
-            "sleep_optimization",
-            "hrv_protocols",
-            "chronic_pain_management"
-        ]
-        
-        # Definir skills siguiendo el formato A2A con mejores prácticas
-        skills = [
-            {
-                "id": "injury-prevention-protocols",
-                "name": "Protocolos de Prevención de Lesiones",
-                "description": "Genera protocolos personalizados para prevenir lesiones comunes.",
-                "tags": ["injury", "prevention", "protocol", "safety", "exercise"],
-                "examples": [
-                    "Rutina de calentamiento para corredores para evitar lesiones de rodilla",
-                    "Ejercicios para fortalecer el manguito rotador"
-                ],
-                "inputModes": ["text"],
-                "outputModes": ["text", "markdown"]
-            },
-            {
-                "id": "rehabilitation-guidance",
-                "name": "Guía de Rehabilitación",
-                "description": "Ofrece orientación y planes de rehabilitación basados en el tipo de lesión y la fase de recuperación.",
-                "tags": ["rehabilitation", "recovery", "injury", "physical therapy", "plan"],
-                "examples": [
-                    "Ejercicios para rehabilitar un esguince de tobillo (fase inicial)",
-                    "Plan de recuperación post-cirugía de LCA"
-                ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "markdown", "json"]
-            },
-             {
-                "id": "mobility-flexibility-improvement",
-                "name": "Mejora de Movilidad y Flexibilidad",
-                "description": "Diseña rutinas para mejorar la movilidad articular y la flexibilidad muscular.",
-                "tags": ["mobility", "flexibility", "stretching", "range of motion", "yoga"],
-                "examples": [
-                    "Rutina de movilidad de cadera para oficinistas",
-                    "Estiramientos para mejorar la flexibilidad de isquiotibiales"
-                ],
-                "inputModes": ["text"],
-                "outputModes": ["text", "markdown", "video_suggestion"]
-            },
-            {
-                "id": "sleep-optimization-strategies",
-                "name": "Estrategias de Optimización del Sueño",
-                "description": "Proporciona consejos y técnicas para mejorar la calidad y cantidad del sueño.",
-                "tags": ["sleep", "recovery", "insomnia", "sleep hygiene", "performance"],
-                "examples": [
-                    "Consejos para dormir mejor por la noche",
-                    "Cómo crear una rutina relajante antes de acostarse"
-                ],
-                "inputModes": ["text"],
-                "outputModes": ["text", "markdown"]
-            },
-             {
-                "id": "hrv-analysis-interpretation",
-                "name": "Análisis e Interpretación de VFC (HRV)",
-                "description": "Interpreta los datos de Variabilidad de la Frecuencia Cardíaca (VFC) para evaluar la recuperación y el estrés.",
-                "tags": ["hrv", "vfc", "recovery", "stress", "autonomic nervous system", "biometrics"],
-                "examples": [
-                    "Mi VFC de hoy es 45ms, ¿qué significa?",
-                    "Cómo interpretar las tendencias de mi VFC semanal"
-                ],
-                "inputModes": ["text", "json"],
-                "outputModes": ["text", "markdown", "json"]
-            },
-            {
-                "id": "chronic-pain-management-techniques",
-                "name": "Técnicas de Manejo del Dolor Crónico",
-                "description": "Ofrece estrategias no farmacológicas para manejar el dolor crónico.",
-                "tags": ["pain management", "chronic pain", "non-pharmacological", "mindfulness", "therapy"],
-                "examples": [
-                    "Técnicas de mindfulness para el dolor lumbar crónico",
-                    "Ejercicios suaves para aliviar la fibromialgia"
-                ],
-                "inputModes": ["text"],
-                "outputModes": ["text", "markdown"]
-            }
-            # Añadir más skills detallados si es necesario
-        ]
-        
-        # Llamada al constructor de A2AAgent
-        super().__init__(
-            agent_id="recovery_corrective",
-            name="NGX Recovery & Corrective Specialist",
-            description="Especialista en prevención, rehabilitación, movilidad, sueño, HRV y manejo del dolor crónico.",
-            capabilities=capabilities,
-            toolkit=toolkit,
-            version="1.0.0",
-            skills=skills, # Pasar skills aquí
-            a2a_server_url=a2a_server_url,
-            state_manager=state_manager # Pasar state_manager si A2AAgent lo acepta
-        )
-        
-        # Inicialización de AI Platform (después de super)
-        gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
-        gcp_region = os.getenv("GCP_REGION", "us-central1")
-        try:
-            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
-            aiplatform.init(project=gcp_project_id, location=gcp_region)
-            logger.info("AI Platform inicializado correctamente.")
-        except Exception as e:
-            logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
-        
-        # Inicializar clientes y herramientas (después de super)
-        self.gemini_client = GeminiClient(model_name="gemini-1.5-flash") # Asegúrate que el modelo es correcto
-        # self.supabase_client = SupabaseClient() # Descomentar si se usa
-        # self.mcp_toolkit = MCPToolkit() # Descomentar si se usa
-        
-        # Las skills ya están definidas y pasadas a super(), no es necesario registrarlas de nuevo aquí si A2AAgent lo maneja.
+class InjuryPreventionOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre prevención de lesiones")
+    prevention_plan: Dict[str, Any] = Field(..., description="Plan de prevención estructurado")
+    exercises: Optional[List[Dict[str, Any]]] = Field(None, description="Ejercicios recomendados")
 
-        # AgentCard se crea implícitamente en A2AAgent a partir de los parámetros
-        # o se puede sobreescribir get_agent_card() si se necesita personalización
+class RehabilitationInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre rehabilitación")
+    injury_type: Optional[str] = Field(None, description="Tipo de lesión")
+    injury_phase: Optional[str] = Field(None, description="Fase de la lesión (aguda, subaguda, crónica)")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
 
-        # Configuración adicional específica del agente
-        self.system_instructions = "Eres un especialista experto en recuperación física, prevención de lesiones y manejo del dolor." 
+class RehabilitationOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre rehabilitación")
+    rehab_protocol: Dict[str, Any] = Field(..., description="Protocolo de rehabilitación estructurado")
+    exercises: Optional[List[Dict[str, Any]]] = Field(None, description="Ejercicios recomendados")
 
-        logger.info(f"Agente {self.agent_id} inicializado.")
+class MobilityAssessmentInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre movilidad")
+    target_areas: Optional[List[str]] = Field(None, description="Áreas objetivo para mejorar movilidad")
+    movement_goals: Optional[List[str]] = Field(None, description="Objetivos de movimiento")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
 
-    async def _get_context(self, user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Obtiene el contexto de la conversación desde el StateManager.
-        
-        Args:
-            user_id: ID del usuario
-            session_id: ID de la sesión
-            
-        Returns:
-            Dict[str, Any]: Contexto de la conversación
-        """
-        try:
-            # Intentar cargar el contexto desde el StateManager
-            context = await self.state_manager.load_state(user_id, session_id)
-            
-            if not context or not context.get("state_data"):
-                logger.info(f"No se encontró contexto en StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
-                # Si no hay contexto, crear uno nuevo
-                context = {
-                    "conversation_history": [],
-                    "user_profile": {},
-                    "pain_assessments": [],
-                    "recovery_protocols": [],
-                    "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            else:
-                # Si hay contexto, usar el state_data
-                context = context.get("state_data", {})
-                logger.info(f"Contexto cargado desde StateManager para user_id={user_id}, session_id={session_id}")
-            
-            return context
-        except Exception as e:
-            logger.error(f"Error al obtener contexto: {e}", exc_info=True)
-            # En caso de error, devolver un contexto vacío
-            return {
-                "conversation_history": [],
-                "user_profile": {},
-                "pain_assessments": [],
-                "recovery_protocols": [],
-                "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
+class MobilityAssessmentOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre movilidad")
+    mobility_assessment: Dict[str, Any] = Field(..., description="Evaluación de movilidad estructurada")
+    exercises: Optional[List[Dict[str, Any]]] = Field(None, description="Ejercicios recomendados")
 
-    async def _update_context(self, context: Dict[str, Any], user_id: str, session_id: str) -> None:
-        """
-        Actualiza el contexto de la conversación en el StateManager.
-        
-        Args:
-            context: Contexto actualizado
-            user_id: ID del usuario
-            session_id: ID de la sesión
-        """
-        try:
-            # Actualizar la marca de tiempo
-            context["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Guardar el contexto en el StateManager
-            await self.state_manager.save_state(context, user_id, session_id)
-            logger.info(f"Contexto actualizado en StateManager para user_id={user_id}, session_id={session_id}")
-        except Exception as e:
-            logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
+class SleepOptimizationInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre optimización del sueño")
+    sleep_issues: Optional[List[str]] = Field(None, description="Problemas de sueño reportados")
+    sleep_data: Optional[Dict[str, Any]] = Field(None, description="Datos de sueño del usuario")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
 
-    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, 
-                       session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """
-        Implementación asíncrona del procesamiento del agente RecoveryCorrective.
-        
-        Sobrescribe el método de la clase base para proporcionar la implementación
-        específica del agente especializado en recuperación y corrección.
-        
-        Args:
-            input_text: Texto de entrada del usuario
-            user_id: ID del usuario (opcional)
-            session_id: ID de la sesión (opcional)
-            **kwargs: Argumentos adicionales
-            
-        Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente
-        """
-        # Registrar métrica de solicitud si telemetría está disponible
-        if hasattr(self, "has_telemetry") and self.has_telemetry and hasattr(self, "request_counter"):
-            self.request_counter.add(1, {"agent_id": self.agent_id, "user_id": user_id or "anonymous"})
-        
-        # Crear span para trazar la ejecución si telemetría está disponible
-        if hasattr(self, "has_telemetry") and self.has_telemetry and hasattr(self, "tracer"):
-            with self.tracer.start_as_current_span("recovery_corrective_process_request") as span:
-                span.set_attribute("user_id", user_id or "anonymous")
-                span.set_attribute("session_id", session_id or "none")
-                span.set_attribute("input_length", len(input_text))
-                
-                # Medir tiempo de respuesta
-                start_time = time.time()
-                result = await self._process_request(input_text, user_id, session_id, **kwargs)
-                end_time = time.time()
-                
-                # Registrar métrica de tiempo de respuesta
-                if hasattr(self, "response_time") and self.response_time:
-                    self.response_time.record(end_time - start_time, {"agent_id": self.agent_id})
-                    
-                return result
-        else:
-            # Ejecución sin telemetría
-            return await self._process_request(input_text, user_id, session_id, **kwargs)
-    
-    async def _process_request(self, input_text: str, user_id: Optional[str] = None, 
-                           session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """
-        Procesa la solicitud del usuario y genera una respuesta utilizando las skills adecuadas.
-        
-        Args:
-            input_text: Texto de entrada del usuario
-            user_id: ID del usuario (opcional)
-            session_id: ID de la sesión (opcional)
-            **kwargs: Argumentos adicionales
-            
-        Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente
-        """
-        start_time = time.time()
-        result = {}
-        protocol_id = None
-        response_text = ""
-        response_type = "text"
-        
-        try:
-            # Generar ID de usuario y sesión si no se proporcionan
-            user_id = user_id or str(uuid.uuid4())
-            session_id = session_id or str(uuid.uuid4())
-            
-            # Obtener contexto de la conversación
-            context = await self._get_context(user_id, session_id)
-            
-            # Obtener perfil del usuario si está disponible
-            user_profile = kwargs.get("user_profile", {})
-            
-            # Analizar la entrada del usuario para determinar la skill a utilizar
-            if any(keyword in input_text.lower() for keyword in ["prevenir", "prevención", "evitar lesiones", "proteger"]):
-                # Usar skill de prevención de lesiones
-                try:
-                    result = await self.execute_skill("injury_prevention", 
-                                                   input_text=input_text, 
-                                                   user_profile=user_profile, 
-                                                   context=context)
-                    
-                    # Generar respuesta
-                    if isinstance(result, dict) and "response" in result:
-                        response_text = result["response"]
-                    else:
-                        # Convertir resultado estructurado a texto
-                        response_text = "Plan de prevención de lesiones:\n\n"
-                        if isinstance(result, dict):
-                            for key, value in result.items():
-                                if key != "response":
-                                    response_text += f"**{key.replace('_', ' ').title()}**: {value}\n"
-                        else:
-                            response_text = str(result)
-                    
-                    # Almacenar resultado en el estado
-                    prevention_plans = self._state.get("prevention_plans", {})
-                    protocol_id = str(uuid.uuid4())
-                    prevention_plans[protocol_id] = result
-                    self.update_state("prevention_plans", prevention_plans)
-                    response_type = "prevention_plan"
-                    
-                except Exception as e:
-                    logger.error(f"Error al ejecutar skill injury_prevention: {e}")
-                    response_text = "Lo siento, ha ocurrido un error al generar el plan de prevención de lesiones."
-                    result = {"error": str(e)}
-                    protocol_id = None
-                
-            elif any(keyword in input_text.lower() for keyword in ["rehabilitación", "recuperación", "rehab", "recuperar"]):
-                # Usar skill de rehabilitación
-                try:
-                    result = await self.execute_skill("rehabilitation", 
-                                                   input_text=input_text, 
-                                                   user_profile=user_profile, 
-                                                   context=context)
-                    
-                    # Generar respuesta
-                    if isinstance(result, dict) and "response" in result:
-                        response_text = result["response"]
-                    else:
-                        # Convertir resultado estructurado a texto
-                        response_text = "Protocolo de rehabilitación:\n\n"
-                        if isinstance(result, dict):
-                            for key, value in result.items():
-                                if key != "response":
-                                    response_text += f"**{key.replace('_', ' ').title()}**: {value}\n"
-                        else:
-                            response_text = str(result)
-                    
-                    # Almacenar resultado en el estado
-                    rehab_protocols = self._state.get("recovery_protocols", {})
-                    protocol_id = str(uuid.uuid4())
-                    rehab_protocols[protocol_id] = result
-                    self.update_state("recovery_protocols", rehab_protocols)
-                    response_type = "rehabilitation_protocol"
-                    
-                except Exception as e:
-                    logger.error(f"Error al ejecutar skill rehabilitation: {e}")
-                    response_text = "Lo siento, ha ocurrido un error al generar el protocolo de rehabilitación."
-                    result = {"error": str(e)}
-                    protocol_id = None
-                
-            elif any(keyword in input_text.lower() for keyword in ["dolor", "molestia", "lesión", "lastimado"]):
-                # Generar evaluación de dolor
-                try:
-                    pain_assessment = await self._generate_pain_assessment(input_text, user_profile)
-                    
-                    # Almacenar evaluación en el estado
-                    pain_assessments = self._state.get("pain_assessments", {})
-                    protocol_id = str(uuid.uuid4())
-                    pain_assessments[protocol_id] = pain_assessment
-                    self.update_state("pain_assessments", pain_assessments)
-                    
-                    # Generar respuesta
-                    response_text = await self._summarize_pain_assessment(pain_assessment)
-                    result = pain_assessment
-                    response_type = "pain_assessment"
-                except Exception as e:
-                    logger.error(f"Error al generar evaluación de dolor: {e}")
-                    response_text = "Lo siento, ha ocurrido un error al generar la evaluación de dolor."
-                    result = {"error": str(e)}
-                    protocol_id = None
-            else:
-                # Generar protocolo de recuperación por defecto
-                try:
-                    recovery_protocol = await self._generate_recovery_protocol(input_text, user_profile)
-                    
-                    # Almacenar protocolo en el estado
-                    recovery_protocols = self._state.get("recovery_protocols", {})
-                    protocol_id = str(uuid.uuid4())
-                    recovery_protocols[protocol_id] = recovery_protocol
-                    self.update_state("recovery_protocols", recovery_protocols)
-                    
-                    # Generar respuesta
-                    response_text = await self._summarize_recovery_protocol(recovery_protocol)
-                    result = recovery_protocol
-                    response_type = "recovery_protocol"
-                except Exception as e:
-                    logger.error(f"Error al generar protocolo de recuperación: {e}")
-                    response_text = "Lo siento, ha ocurrido un error al generar el protocolo de recuperación."
-                    result = {"error": str(e)}
-                    protocol_id = None
-            
-            # Crear respuesta base
-            response = {
-                "text": response_text,
-                "data": result
-            }
-            
-            # Añadir la interacción al historial de conversación en el contexto
-            if user_id and "conversation_history" in context:
-                context["conversation_history"].append({
-                    "user": input_text,
-                    "agent": response,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "response_type": response_type
-                })
-                
-                # Actualizar el contexto en el StateManager
-                await self._update_context(context, user_id, session_id)
-            
-            # Crear artefactos para la respuesta según el protocolo A2A
-            artifacts = [
-                {
-                    "type": response_type,
-                    "content": result,
-                    "metadata": {
-                        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                }
-            ]
-            
-            # Devolver respuesta final siguiendo el formato A2A
-            return {
-                "status": "success",
-                "response": response_text,
-                "result": result,
-                "artifacts": artifacts,
-                "agent_id": self.agent_id,
-                "metadata": {
-                    "id": protocol_id,
-                    "created_at": time.time(),
-                    "processing_time": time.time() - start_time,
-                    "response_type": response_type,
-                    "user_id": user_id,
-                    "session_id": session_id
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error en RecoveryCorrective: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud de recuperación.",
-                "error": str(e),
-                "agent_id": self.agent_id
-            }
-    
-    def _summarize_pain_assessment(self, pain_assessment: Dict[str, Any]) -> str:
-        """Genera un resumen textual de la evaluación de dolor para la respuesta al usuario."""
-        summary_parts = []
-        
-        if "location" in pain_assessment:
-            summary_parts.append(f"El dolor se localiza en {pain_assessment['location']}.")
-        
-        if "intensity" in pain_assessment:
-            summary_parts.append(f"La intensidad es de {pain_assessment['intensity']} en una escala de 1-10.")
-        
-        if "recommendations" in pain_assessment and pain_assessment["recommendations"]:
-            recommendations = pain_assessment["recommendations"]
-            if isinstance(recommendations, list) and len(recommendations) > 0:
-                summary_parts.append(f"Te recomiendo: {recommendations[0]}.")
-            elif isinstance(recommendations, str):
-                summary_parts.append(f"Te recomiendo: {recommendations}.")
-        
-        if "seek_medical_attention" in pain_assessment:
-            summary_parts.append(f"Nota importante: {pain_assessment['seek_medical_attention']}.")
-        
-        if not summary_parts:
-            return "Revisa la evaluación detallada para más información."
-            
-        return " ".join(summary_parts)
-    
-    def _summarize_recovery_protocol(self, recovery_protocol: Dict[str, Any]) -> str:
-        """Genera un resumen textual del protocolo de recuperación para la respuesta al usuario."""
-        summary_parts = []
-        
-        if "objective" in recovery_protocol:
-            summary_parts.append(f"El objetivo principal es: {recovery_protocol['objective']}.")
-        
-        if "phases" in recovery_protocol and recovery_protocol["phases"]:
-            phases = recovery_protocol["phases"]
-            if isinstance(phases, list) and len(phases) > 0:
-                phase = phases[0]
-                summary_parts.append(f"Comenzaremos con la fase '{phase.get('name', 'inicial')}' que dura {phase.get('duration', 'un periodo')} y se enfoca en {phase.get('focus', 'recuperación')}.")
-        
-        if "complementary_strategies" in recovery_protocol:
-            strategies = recovery_protocol["complementary_strategies"]
-            if isinstance(strategies, dict) and "sleep" in strategies:
-                summary_parts.append(f"Para el sueño: {strategies['sleep']}.")
-        
-        if not summary_parts:
-            return "Revisa el protocolo detallado para más información."
-            
-        return " ".join(summary_parts)
-    
-    async def _register_skills(self):
-        """
-        Registra las habilidades del agente según el protocolo A2A con metadatos mejorados.
-        """
-        # Registrar skills en el toolkit si está disponible
-        if self.toolkit:
-            try:
-                # Registrar skill de prevención de lesiones
-                await self.register_skill(
-                    "injury_prevention",
-                    "Genera planes personalizados para prevenir lesiones específicas en diferentes actividades físicas y deportes",
-                    self._generate_injury_prevention_plan,
-                    tags=["prevention", "exercise", "safety", "injury", "training"],
-                    examples=[
-                        "Cómo prevenir lesiones en la espalda baja durante el entrenamiento de fuerza",
-                        "Plan de prevención para corredores con historial de lesiones en rodilla",
-                        "Ejercicios preventivos para tenistas con problemas de hombro"
-                    ],
-                    input_modes=["text", "json"],
-                    output_modes=["text", "json", "markdown"]
-                )
-                
-                # Registrar skill de rehabilitación
-                await self.register_skill(
-                    "rehabilitation",
-                    "Desarrolla protocolos de rehabilitación personalizados para diferentes tipos de lesiones y condiciones físicas",
-                    self._generate_rehabilitation_protocol,
-                    tags=["rehab", "recovery", "injury", "therapy", "healing"],
-                    examples=[
-                        "Protocolo de rehabilitación para esguince de tobillo grado 2",
-                        "Plan de recuperación post-quirúrgico para reconstrucción de LCA",
-                        "Programa de rehabilitación para tendinitis rotuliana crónica"
-                    ],
-                    input_modes=["text", "json"],
-                    output_modes=["text", "json", "markdown"]
-                )
-                
-                # Registrar skill de evaluación de movilidad
-                await self.register_skill(
-                    "mobility_assessment",
-                    "Evalúa limitaciones de movilidad y proporciona estrategias específicas para mejorar el rango de movimiento y la función articular",
-                    self._generate_mobility_assessment,
-                    tags=["mobility", "flexibility", "assessment", "range-of-motion", "joints"],
-                    examples=[
-                        "Evaluación de movilidad de cadera para mejorar sentadillas profundas",
-                        "Ejercicios para aumentar la movilidad de hombros en nadadores",
-                        "Protocolo para mejorar la dorsiflexión de tobillo limitada"
-                    ],
-                    input_modes=["text", "json"],
-                    output_modes=["text", "json", "markdown"]
-                )
-                
-                # Registrar skill de optimización del sueño
-                await self.register_skill(
-                    "sleep_optimization",
-                    "Analiza patrones de sueño y proporciona estrategias personalizadas para mejorar la calidad y cantidad del descanso para optimizar la recuperación",
-                    self._generate_sleep_optimization_plan,
-                    tags=["sleep", "recovery", "rest", "circadian-rhythm", "performance"],
-                    examples=[
-                        "Estrategias para mejorar el sueño durante periodos de alto estrés",
-                        "Rutina nocturna para atletas con problemas para conciliar el sueño",
-                        "Plan de optimización del sueño para viajes con cambios de zona horaria"
-                    ],
-                    input_modes=["text", "json"],
-                    output_modes=["text", "json", "markdown"]
-                )
-                
-                # Registrar skill de protocolos HRV
-                await self.register_skill(
-                    "hrv_protocols",
-                    "Interpreta datos de variabilidad de frecuencia cardíaca y desarrolla estrategias de entrenamiento y recuperación basadas en el estado del sistema nervioso autónomo",
-                    self._generate_hrv_protocol,
-                    tags=["hrv", "heart-rate-variability", "recovery", "training", "autonomic-nervous-system"],
-                    examples=[
-                        "Interpretación de tendencias de HRV para periodización del entrenamiento",
-                        "Estrategias de recuperación basadas en valores bajos persistentes de HRV",
-                        "Protocolo de entrenamiento adaptativo basado en lecturas diarias de HRV"
-                    ],
-                    input_modes=["text", "json"],
-                    output_modes=["text", "json", "markdown"]
-                )
-                
-                # Registrar skill de manejo del dolor crónico
-                await self.register_skill(
-                    "chronic_pain_management",
-                    "Desarrolla estrategias integrales para el manejo del dolor agudo y crónico utilizando enfoques multidisciplinarios y basados en evidencia",
-                    self._generate_pain_management_protocol,
-                    tags=["pain", "chronic", "management", "therapy", "relief"],
-                    examples=[
-                        "Estrategias no farmacológicas para manejar el dolor crónico de rodilla",
-                        "Plan integral para reducir el dolor lumbar en trabajadores de oficina",
-                        "Técnicas de autogestión para migrañas recurrentes relacionadas con el estrés"
-                    ],
-                    input_modes=["text", "json"],
-                    output_modes=["text", "json", "markdown"]
-                )
-                
-                logger.info(f"Skills registradas correctamente: {len(self.skills)}")
-            except Exception as e:
-                logger.error(f"Error al registrar skills: {e}")
-        else:
-            logger.warning("No se ha proporcionado un toolkit para registrar skills")
+class SleepOptimizationOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre optimización del sueño")
+    sleep_plan: Dict[str, Any] = Field(..., description="Plan de optimización del sueño estructurado")
+    recommendations: Optional[List[str]] = Field(None, description="Recomendaciones específicas")
 
-            
-            # Usar VertexGeminiGenerateSkill si está disponible
-            try:
-                vertex_skill = VertexGeminiGenerateSkill()
-                result = await vertex_skill.execute({
-                    "prompt": prompt,
-                    "temperature": 0.7,
-                    "model": "gemini-2.0-flash"
-                })
-                response_text = result.get("text", "")
-                
-                # Intentar extraer JSON de la respuesta
-                try:
-                    # Buscar patrón JSON en la respuesta
-                    import re
-                    json_match = re.search(r'({.*})', response_text, re.DOTALL)
-                    if json_match:
-                        return json.loads(json_match.group(1))
-                    else:
-                        # Si no se encuentra JSON, devolver respuesta como texto
-                        return {"response": response_text}
-                except Exception as e:
-                    logger.warning(f"Error al extraer JSON de la respuesta: {e}")
-                    return {"response": response_text}
-            except Exception as e:
-                logger.warning(f"Error al usar VertexGeminiGenerateSkill: {e}")
-                # Fallback a cliente Gemini directo
-                response = await self.gemini_client.generate_structured_output(prompt)
-                return response if isinstance(response, dict) else {"response": str(response)}
-        
-        # Registrar skills
-        await self.register_skill("injury_prevention", injury_prevention)
-        await self.register_skill("rehabilitation", rehabilitation)
-        
-        logger.info(f"Skills registradas para el agente {self.agent_id}")
+class HRVProtocolInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre protocolos HRV")
+    hrv_data: Optional[Dict[str, Any]] = Field(None, description="Datos de HRV del usuario")
+    training_context: Optional[Dict[str, Any]] = Field(None, description="Contexto de entrenamiento")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
+
+class HRVProtocolOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre protocolos HRV")
+    hrv_protocol: Dict[str, Any] = Field(..., description="Protocolo HRV estructurado")
+    recommendations: Optional[List[str]] = Field(None, description="Recomendaciones específicas")
+
+class ChronicPainInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre dolor crónico")
+    pain_location: Optional[str] = Field(None, description="Ubicación del dolor")
+    pain_intensity: Optional[int] = Field(None, description="Intensidad del dolor (1-10)")
+    pain_duration: Optional[str] = Field(None, description="Duración del dolor")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
+
+class ChronicPainOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada sobre manejo del dolor crónico")
+    pain_assessment: Dict[str, Any] = Field(..., description="Evaluación del dolor estructurada")
+    management_plan: Dict[str, Any] = Field(..., description="Plan de manejo del dolor estructurado")
+    recommendations: Optional[List[str]] = Field(None, description="Recomendaciones específicas")
+
+class GeneralRecoveryInput(BaseModel):
+    query: str = Field(..., description="Consulta general del usuario sobre recuperación")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
+
+class GeneralRecoveryOutput(BaseModel):
+    response: str = Field(..., description="Respuesta detallada a la consulta general")
+    recovery_protocol: Optional[Dict[str, Any]] = Field(None, description="Protocolo de recuperación si es aplicable")
+
+# Definir las skills como clases que heredan de GoogleADKSkill
+class InjuryPreventionSkill(GoogleADKSkill):
+    name = "injury_prevention"
+    description = "Genera protocolos personalizados para prevenir lesiones comunes en diferentes actividades físicas"
+    input_schema = InjuryPreventionInput
+    output_schema = InjuryPreventionOutput
     
-    async def get_agent_card(self) -> Dict[str, Any]:
-        """
-        Obtiene el Agent Card del agente según el protocolo A2A oficial.
+    async def handler(self, input_data: InjuryPreventionInput) -> InjuryPreventionOutput:
+        """Implementación de la skill de prevención de lesiones"""
+        query = input_data.query
+        activity_type = input_data.activity_type
+        injury_history = input_data.injury_history or []
+        user_profile = input_data.user_profile or {}
         
-        Returns:
-            Dict[str, Any]: Agent Card estandarizada
-        """
-        return self.agent_card.to_dict()
-    
-    async def execute_task(self, task: Dict[str, Any]) -> Any:
-        """
-        Ejecuta una tarea solicitada por el servidor A2A.
+        # Construir el prompt para el modelo
+        activity_info = f"Actividad: {activity_type}" if activity_type else "Actividad no especificada"
+        history_info = f"Historial de lesiones: {', '.join(injury_history)}" if injury_history else "Sin historial de lesiones conocido"
         
-        Args:
-            task: Tarea a ejecutar
-            
-        Returns:
-            Any: Resultado de la tarea
-        """
-        try:
-            user_input = task.get("input", "")
-            context = task.get("context", {})
-            user_id = context.get("user_id")
-            session_id = context.get("session_id")
-            
-            # Obtener perfil del usuario si está disponible
-            user_profile = None
-            if user_id:
-                user_profile = self.supabase_client.get_user_profile(user_id)
-            
-            # Preparar contexto para la generación de respuesta
-            prompt_context = self._prepare_context(user_input, user_profile, context)
-            
-            # Generar respuesta
-            response = await self.gemini_client.generate_response(
-                user_input, 
-                context=prompt_context,
-                temperature=0.7
-            )
-            
-            # Crear artefactos si es necesario (por ejemplo, un protocolo de recuperación)
-            artifacts = []
-            if any(keyword in user_input.lower() for keyword in ["protocolo", "recuperación", "rehabilitación", "ejercicio", "movilidad"]):
-                # Crear un artefacto de protocolo de recuperación
-                recovery_protocol = await self._generate_recovery_protocol(user_input, user_profile)
-                
-                artifact_id = f"recovery_protocol_{uuid.uuid4().hex[:8]}"
-                artifact = self.create_artifact(
-                    artifact_id=artifact_id,
-                    artifact_type="recovery_protocol",
-                    parts=[
-                        self.create_data_part(recovery_protocol)
-                    ]
-                )
-                artifacts.append(artifact)
-            
-            # Si se menciona dolor o lesiones, crear un artefacto de evaluación
-            if any(keyword in user_input.lower() for keyword in ["dolor", "lesión", "molestia", "inflamación"]):
-                pain_assessment = await self._generate_pain_assessment(user_input, user_profile)
-                
-                artifact_id = f"pain_assessment_{uuid.uuid4().hex[:8]}"
-                artifact = self.create_artifact(
-                    artifact_id=artifact_id,
-                    artifact_type="pain_assessment",
-                    parts=[
-                        self.create_data_part(pain_assessment)
-                    ]
-                )
-                artifacts.append(artifact)
-            
-            # Registrar la interacción
-            if user_id:
-                self.supabase_client.log_interaction(
-                    user_id=user_id,
-                    agent_id="recovery_corrective_specialist",
-                    message=user_input,
-                    response=response
-                )
-            
-            # Crear mensaje de respuesta
-            response_message = self.create_message(
-                role="agent",
-                parts=[
-                    self.create_text_part(response)
-                ]
-            )
-            
-            # Devolver respuesta estructurada según el protocolo A2A
-            return {
-                "response": response,
-                "message": response_message,
-                "artifacts": artifacts
-            }
-            
-        except Exception as e:
-            logger.error(f"Error en Recovery & Corrective Specialist: {e}")
-            return {
-                "error": str(e), 
-                "response": "Lo siento, ha ocurrido un error al procesar tu solicitud de recuperación."
-            }
-    
-    async def process_message(self, from_agent: str, content: Dict[str, Any]) -> Any:
-        """
-        Procesa un mensaje recibido de otro agente.
-        
-        Args:
-            from_agent: ID del agente que envió el mensaje
-            content: Contenido del mensaje
-            
-        Returns:
-            Any: Respuesta al mensaje
-        """
-        try:
-            # Extraer información del mensaje
-            message_text = content.get("text", "")
-            context = content.get("context", {})
-            
-            # Generar respuesta basada en el contenido del mensaje
-            prompt = f"""
-            Has recibido un mensaje del agente {from_agent}:
-            
-            "{message_text}"
-            
-            Responde con información relevante sobre recuperación y corrección relacionada con este mensaje.
-            """
-            
-            response = await self.gemini_client.generate_response(prompt, temperature=0.7)
-            
-            # Crear mensaje de respuesta
-            response_message = self.create_message(
-                role="agent",
-                parts=[
-                    self.create_text_part(response)
-                ]
-            )
-            
-            return {
-                "status": "success",
-                "response": response,
-                "message": response_message
-            }
-        except Exception as e:
-            logger.error(f"Error al procesar mensaje de agente: {e}")
-            return {"error": str(e)}
-    
-    def _prepare_context(self, user_input: str, user_profile: Optional[Dict[str, Any]], context: Dict[str, Any]) -> str:
-        """
-        Prepara el contexto para la generación de respuesta.
-        
-        Args:
-            user_input: Texto de entrada del usuario
-            user_profile: Perfil del usuario
-            context: Contexto adicional
-            
-        Returns:
-            str: Contexto preparado para la generación de respuesta
-        """
-        prompt_context = """
-        Eres el Recovery & Corrective Specialist de NGX, un experto en prevención, rehabilitación, 
-        movilidad, sueño y protocolos para HRV y dolor crónico.
-        
-        Debes proporcionar recomendaciones basadas en evidencia científica para optimizar la recuperación
-        y prevenir lesiones, personalizadas para el usuario.
-        Tus respuestas deben ser claras, concisas y accionables.
-        """
-        
-        # Añadir información del perfil del usuario si está disponible
-        if user_profile:
-            prompt_context += f"""
-            
-            Información del usuario:
-            - Nombre: {user_profile.get('name', 'N/A')}
-            - Edad: {user_profile.get('age', 'N/A')}
-            - Historial de lesiones: {user_profile.get('injury_history', 'N/A')}
-            - Calidad de sueño: {user_profile.get('sleep_quality', 'N/A')}
-            - Nivel de estrés: {user_profile.get('stress_level', 'N/A')}
-            - Áreas de dolor: {user_profile.get('pain_areas', 'N/A')}
-            """
-        
-        # Añadir contexto adicional si está disponible
-        if context:
-            additional_context = "\n".join([f"- {key}: {value}" for key, value in context.items() 
-                                           if key not in ["user_id", "session_id"]])
-            if additional_context:
-                prompt_context += f"""
-                
-                Contexto adicional:
-                {additional_context}
-                """
-        
-        return prompt_context
-    
-    async def _generate_recovery_protocol(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Genera un protocolo de recuperación estructurado.
-        
-        Args:
-            user_input: Texto de entrada del usuario
-            user_profile: Perfil del usuario
-            
-        Returns:
-            Dict[str, Any]: Protocolo de recuperación estructurado
-        """
-        # TODO: Integrar RAG para buscar protocolos estándar de rehabilitación NGX o de la literatura.
-        # TODO: Usar mcp7_query para obtener datos específicos del usuario (ej. tipo de lesión, historial) desde Supabase.
         prompt = f"""
-        Genera un protocolo de recuperación estructurado basado en la siguiente solicitud:
+        Eres un especialista en prevención de lesiones y recuperación física.
         
-        "{user_input}"
+        El usuario solicita información sobre prevención de lesiones:
+        "{query}"
         
-        El protocolo debe incluir:
-        1. Objetivo principal de recuperación
-        2. Duración estimada del protocolo
-        3. Fases de recuperación
-        4. Ejercicios específicos con series, repeticiones y progresión
-        5. Estrategias complementarias (sueño, nutrición, manejo del estrés)
-        6. Métricas de seguimiento
-        7. Señales de alerta para buscar ayuda profesional
+        Información adicional:
+        - {activity_info}
+        - {history_info}
         
-        Devuelve el protocolo en formato JSON estructurado.
+        Proporciona una respuesta detallada sobre cómo prevenir lesiones específicas,
+        incluyendo ejercicios de calentamiento, fortalecimiento, técnica adecuada y señales de alerta.
+        
+        Estructura tu respuesta en secciones:
+        1. Análisis de riesgos específicos
+        2. Estrategias de prevención
+        3. Ejercicios recomendados
+        4. Señales de alerta
+        5. Cuándo buscar ayuda profesional
         """
         
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += f"""
-            
-            Considera la siguiente información del usuario:
-            - Nombre: {user_profile.get('name', 'N/A')}
-            - Edad: {user_profile.get('age', 'N/A')}
-            - Historial de lesiones: {user_profile.get('injury_history', 'N/A')}
-            - Calidad de sueño: {user_profile.get('sleep_quality', 'N/A')}
-            - Nivel de estrés: {user_profile.get('stress_level', 'N/A')}
-            - Áreas de dolor: {user_profile.get('pain_areas', 'N/A')}
-            """
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
         
-        # Generar el protocolo de recuperación
-        response = await self.gemini_client.generate_structured_output(prompt)
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Generar plan de prevención estructurado
+        plan_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera un plan de prevención de lesiones estructurado en formato JSON con los siguientes campos:
+        - target_area: área objetivo (ej. "rodilla", "espalda baja", "hombro")
+        - risk_factors: factores de riesgo identificados
+        - warm_up: rutina de calentamiento recomendada
+        - strengthening: ejercicios de fortalecimiento
+        - technique_tips: consejos de técnica
+        - recovery_strategies: estrategias de recuperación
+        - warning_signs: señales de alerta
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        plan_json = await gemini_client.generate_structured_output(plan_prompt)
         
         # Si la respuesta no es un diccionario, intentar convertirla
-        if not isinstance(response, dict):
+        if not isinstance(plan_json, dict):
             try:
-                import json
-                response = json.loads(response)
+                plan_json = json.loads(plan_json)
             except:
                 # Si no se puede convertir, crear un diccionario básico
-                response = {
-                    "objective": "Protocolo de recuperación personalizado",
-                    "duration": "4-6 semanas",
+                plan_json = {
+                    "target_area": "área no especificada",
+                    "risk_factors": ["Factores de riesgo no especificados"],
+                    "warm_up": "Rutina de calentamiento general de 5-10 minutos",
+                    "strengthening": "Ejercicios de fortalecimiento general",
+                    "technique_tips": ["Mantener buena postura", "Evitar movimientos bruscos"],
+                    "recovery_strategies": ["Descanso adecuado", "Hidratación"],
+                    "warning_signs": ["Dolor persistente", "Inflamación"]
+                }
+        
+        # Generar ejercicios recomendados
+        exercises_prompt = f"""
+        Basándote en la consulta del usuario sobre prevención de lesiones:
+        "{query}"
+        
+        Genera una lista de 3-5 ejercicios específicos en formato JSON array, donde cada ejercicio es un objeto con:
+        - name: nombre del ejercicio
+        - description: descripción breve
+        - sets: número de series
+        - reps: número de repeticiones
+        - frequency: frecuencia recomendada
+        - notes: notas adicionales (opcional)
+        
+        Devuelve SOLO el JSON array, sin explicaciones adicionales.
+        """
+        
+        exercises_json = await gemini_client.generate_structured_output(exercises_prompt)
+        
+        # Si la respuesta no es una lista, intentar convertirla
+        if not isinstance(exercises_json, list):
+            try:
+                exercises_json = json.loads(exercises_json)
+                if not isinstance(exercises_json, list):
+                    exercises_json = []
+            except:
+                # Si no se puede convertir, crear una lista básica
+                exercises_json = [
+                    {
+                        "name": "Ejemplo de ejercicio 1",
+                        "description": "Descripción del ejercicio",
+                        "sets": 3,
+                        "reps": "10-12",
+                        "frequency": "3 veces por semana",
+                        "notes": "Mantener buena forma"
+                    }
+                ]
+        
+        return InjuryPreventionOutput(
+            response=response_text,
+            prevention_plan=plan_json,
+            exercises=exercises_json
+        )
+
+class RehabilitationSkill(GoogleADKSkill):
+    name = "rehabilitation"
+    description = "Desarrolla protocolos de rehabilitación personalizados para diferentes tipos de lesiones"
+    input_schema = RehabilitationInput
+    output_schema = RehabilitationOutput
+    
+    async def handler(self, input_data: RehabilitationInput) -> RehabilitationOutput:
+        """Implementación de la skill de rehabilitación"""
+        query = input_data.query
+        injury_type = input_data.injury_type
+        injury_phase = input_data.injury_phase
+        user_profile = input_data.user_profile or {}
+        
+        # Construir el prompt para el modelo
+        injury_info = f"Tipo de lesión: {injury_type}" if injury_type else "Tipo de lesión no especificado"
+        phase_info = f"Fase de la lesión: {injury_phase}" if injury_phase else "Fase de la lesión no especificada"
+        
+        prompt = f"""
+        Eres un especialista en rehabilitación física y recuperación de lesiones.
+        
+        El usuario solicita información sobre rehabilitación:
+        "{query}"
+        
+        Información adicional:
+        - {injury_info}
+        - {phase_info}
+        
+        Proporciona una respuesta detallada sobre cómo rehabilitar esta lesión específica,
+        incluyendo fases de recuperación, ejercicios recomendados, progresión y señales de alerta.
+        
+        Estructura tu respuesta en secciones:
+        1. Análisis de la lesión
+        2. Fases de rehabilitación
+        3. Ejercicios recomendados por fase
+        4. Progresión y criterios para avanzar
+        5. Señales de alerta
+        6. Cuándo buscar ayuda profesional
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Generar protocolo de rehabilitación estructurado
+        protocol_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera un protocolo de rehabilitación estructurado en formato JSON con los siguientes campos:
+        - injury: lesión objetivo
+        - phase: fase actual de rehabilitación
+        - duration: duración estimada del protocolo
+        - phases: array de fases con nombre, duración, objetivos y ejercicios
+        - progression_criteria: criterios para avanzar entre fases
+        - contraindications: contraindicaciones
+        - warning_signs: señales de alerta
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        protocol_json = await gemini_client.generate_structured_output(protocol_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(protocol_json, dict):
+            try:
+                protocol_json = json.loads(protocol_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                protocol_json = {
+                    "injury": "Lesión no especificada",
+                    "phase": "Fase no especificada",
+                    "duration": "6-8 semanas (estimado)",
                     "phases": [
                         {
-                            "name": "Fase inicial",
+                            "name": "Fase aguda",
                             "duration": "1-2 semanas",
-                            "focus": "Reducir dolor e inflamación"
+                            "objectives": ["Reducir dolor e inflamación", "Proteger la lesión"],
+                            "exercises": ["Reposo relativo", "Movilizaciones suaves"]
                         },
                         {
-                            "name": "Fase intermedia",
-                            "duration": "2-3 semanas",
-                            "focus": "Recuperar movilidad y estabilidad"
+                            "name": "Fase subaguda",
+                            "duration": "2-4 semanas",
+                            "objectives": ["Recuperar rango de movimiento", "Iniciar fortalecimiento"],
+                            "exercises": ["Estiramientos suaves", "Ejercicios isométricos"]
                         },
                         {
-                            "name": "Fase final",
-                            "duration": "1-2 semanas",
-                            "focus": "Fortalecimiento y retorno a la actividad"
+                            "name": "Fase de recuperación",
+                            "duration": "3-6 semanas",
+                            "objectives": ["Fortalecer", "Mejorar función"],
+                            "exercises": ["Fortalecimiento progresivo", "Ejercicios funcionales"]
                         }
                     ],
-                    "exercises": [
-                        {
-                            "name": "Ejemplo de ejercicio",
-                            "sets": 3,
-                            "reps": "8-12",
-                            "frequency": "Diario"
-                        }
+                    "progression_criteria": ["Sin dolor en reposo", "Rango de movimiento adecuado", "Fuerza suficiente"],
+                    "contraindications": ["Dolor agudo", "Inflamación severa", "Inestabilidad articular"],
+                    "warning_signs": ["Aumento de dolor", "Inflamación persistente", "Pérdida de función"]
+                }
+        
+        # Generar ejercicios recomendados
+        exercises_prompt = f"""
+        Basándote en la consulta del usuario sobre rehabilitación:
+        "{query}"
+        
+        Genera una lista de 3-5 ejercicios específicos en formato JSON array, donde cada ejercicio es un objeto con:
+        - name: nombre del ejercicio
+        - description: descripción breve
+        - phase: fase de rehabilitación en que se recomienda
+        - sets: número de series
+        - reps: número de repeticiones
+        - frequency: frecuencia recomendada
+        - progression: cómo progresar el ejercicio
+        
+        Devuelve SOLO el JSON array, sin explicaciones adicionales.
+        """
+        
+        exercises_json = await gemini_client.generate_structured_output(exercises_prompt)
+        
+        # Si la respuesta no es una lista, intentar convertirla
+        if not isinstance(exercises_json, list):
+            try:
+                exercises_json = json.loads(exercises_json)
+                if not isinstance(exercises_json, list):
+                    exercises_json = []
+            except:
+                # Si no se puede convertir, crear una lista básica
+                exercises_json = [
+                    {
+                        "name": "Ejemplo de ejercicio de rehabilitación",
+                        "description": "Descripción del ejercicio",
+                        "phase": "Fase subaguda",
+                        "sets": 3,
+                        "reps": "10-15",
+                        "frequency": "2-3 veces por día",
+                        "progression": "Aumentar resistencia gradualmente"
+                    }
+                ]
+        
+        return RehabilitationOutput(
+            response=response_text,
+            rehab_protocol=protocol_json,
+            exercises=exercises_json
+        )
+
+class MobilityAssessmentSkill(GoogleADKSkill):
+    name = "mobility_assessment"
+    description = "Evalúa limitaciones de movilidad y proporciona estrategias para mejorar el rango de movimiento"
+    input_schema = MobilityAssessmentInput
+    output_schema = MobilityAssessmentOutput
+    
+    async def handler(self, input_data: MobilityAssessmentInput) -> MobilityAssessmentOutput:
+        """Implementación de la skill de evaluación de movilidad"""
+        query = input_data.query
+        target_areas = input_data.target_areas or []
+        movement_goals = input_data.movement_goals or []
+        user_profile = input_data.user_profile or {}
+        
+        # Construir el prompt para el modelo
+        areas_info = f"Áreas objetivo: {', '.join(target_areas)}" if target_areas else "Áreas objetivo no especificadas"
+        goals_info = f"Objetivos de movimiento: {', '.join(movement_goals)}" if movement_goals else "Objetivos no especificados"
+        
+        prompt = f"""
+        Eres un especialista en movilidad, flexibilidad y biomecánica.
+        
+        El usuario solicita información sobre movilidad:
+        "{query}"
+        
+        Información adicional:
+        - {areas_info}
+        - {goals_info}
+        
+        Proporciona una respuesta detallada sobre cómo evaluar y mejorar la movilidad en las áreas específicas,
+        incluyendo evaluaciones, ejercicios, progresiones y consideraciones especiales.
+        
+        Estructura tu respuesta en secciones:
+        1. Evaluación de movilidad
+        2. Limitaciones comunes
+        3. Ejercicios recomendados
+        4. Progresión
+        5. Integración con actividades diarias/deportivas
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Generar evaluación de movilidad estructurada
+        assessment_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera una evaluación de movilidad estructurada en formato JSON con los siguientes campos:
+        - target_areas: áreas objetivo para evaluación
+        - common_limitations: limitaciones comunes en estas áreas
+        - assessment_tests: pruebas para evaluar la movilidad
+        - mobility_goals: objetivos de movilidad recomendados
+        - progression_timeline: cronograma estimado de progresión
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        assessment_json = await gemini_client.generate_structured_output(assessment_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(assessment_json, dict):
+            try:
+                assessment_json = json.loads(assessment_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                assessment_json = {
+                    "target_areas": target_areas if target_areas else ["Cadera", "Hombros", "Columna torácica"],
+                    "common_limitations": {
+                        "Cadera": ["Flexión limitada", "Rotación externa reducida"],
+                        "Hombros": ["Rotación interna limitada", "Elevación reducida"],
+                        "Columna torácica": ["Rotación limitada", "Extensión reducida"]
+                    },
+                    "assessment_tests": [
+                        "Test de sentadilla profunda",
+                        "Test de movilidad de hombro",
+                        "Test de rotación torácica"
                     ],
-                    "complementary_strategies": {
-                        "sleep": "Priorizar 7-9 horas de sueño reparador",
-                        "nutrition": "Enfocarse en alimentos antiinflamatorios",
-                        "stress": "Practicar técnicas de relajación diariamente"
+                    "mobility_goals": [
+                        "Mejorar rango de movimiento funcional",
+                        "Reducir compensaciones",
+                        "Optimizar patrones de movimiento"
+                    ],
+                    "progression_timeline": "4-8 semanas para mejoras significativas con práctica consistente"
+                }
+        
+        # Generar ejercicios recomendados
+        exercises_prompt = f"""
+        Basándote en la consulta del usuario sobre movilidad:
+        "{query}"
+        
+        Genera una lista de 3-5 ejercicios específicos en formato JSON array, donde cada ejercicio es un objeto con:
+        - name: nombre del ejercicio
+        - target_area: área objetivo
+        - description: descripción breve
+        - sets: número de series
+        - reps_duration: repeticiones o duración
+        - frequency: frecuencia recomendada
+        - progression: cómo progresar el ejercicio
+        
+        Devuelve SOLO el JSON array, sin explicaciones adicionales.
+        """
+        
+        exercises_json = await gemini_client.generate_structured_output(exercises_prompt)
+        
+        # Si la respuesta no es una lista, intentar convertirla
+        if not isinstance(exercises_json, list):
+            try:
+                exercises_json = json.loads(exercises_json)
+                if not isinstance(exercises_json, list):
+                    exercises_json = []
+            except:
+                # Si no se puede convertir, crear una lista básica
+                exercises_json = [
+                    {
+                        "name": "Ejemplo de ejercicio de movilidad",
+                        "target_area": "Cadera",
+                        "description": "Descripción del ejercicio",
+                        "sets": 3,
+                        "reps_duration": "30-60 segundos",
+                        "frequency": "Diario",
+                        "progression": "Aumentar rango de movimiento gradualmente"
+                    }
+                ]
+        
+        return MobilityAssessmentOutput(
+            response=response_text,
+            mobility_assessment=assessment_json,
+            exercises=exercises_json
+        )
+
+class SleepOptimizationSkill(GoogleADKSkill):
+    name = "sleep_optimization"
+    description = "Proporciona estrategias personalizadas para mejorar la calidad y cantidad del sueño"
+    input_schema = SleepOptimizationInput
+    output_schema = SleepOptimizationOutput
+    
+    async def handler(self, input_data: SleepOptimizationInput) -> SleepOptimizationOutput:
+        """Implementación de la skill de optimización del sueño"""
+        query = input_data.query
+        sleep_issues = input_data.sleep_issues or []
+        sleep_data = input_data.sleep_data or {}
+        user_profile = input_data.user_profile or {}
+        
+        # Construir el prompt para el modelo
+        issues_info = f"Problemas de sueño: {', '.join(sleep_issues)}" if sleep_issues else "Problemas de sueño no especificados"
+        data_info = "Datos de sueño disponibles" if sleep_data else "Sin datos de sueño específicos"
+        
+        prompt = f"""
+        Eres un especialista en optimización del sueño y recuperación.
+        
+        El usuario solicita información sobre optimización del sueño:
+        "{query}"
+        
+        Información adicional:
+        - {issues_info}
+        - {data_info}
+        
+        Proporciona una respuesta detallada sobre cómo mejorar la calidad y cantidad del sueño,
+        incluyendo estrategias de higiene del sueño, rutinas, entorno óptimo y consideraciones especiales.
+        
+        Estructura tu respuesta en secciones:
+        1. Análisis de los problemas de sueño
+        2. Estrategias de higiene del sueño
+        3. Optimización del entorno
+        4. Rutinas recomendadas
+        5. Suplementos y ayudas naturales (si aplica)
+        6. Cuándo buscar ayuda profesional
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Generar plan de optimización del sueño estructurado
+        plan_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera un plan de optimización del sueño estructurado en formato JSON con los siguientes campos:
+        - sleep_issues: problemas de sueño identificados
+        - sleep_goals: objetivos de mejora del sueño
+        - environment_optimization: optimización del entorno de sueño
+        - pre_sleep_routine: rutina recomendada antes de dormir
+        - morning_routine: rutina matutina recomendada
+        - supplements: suplementos naturales a considerar (si aplica)
+        - tracking_metrics: métricas para seguimiento
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        plan_json = await gemini_client.generate_structured_output(plan_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(plan_json, dict):
+            try:
+                plan_json = json.loads(plan_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                plan_json = {
+                    "sleep_issues": sleep_issues if sleep_issues else ["Dificultad para conciliar el sueño", "Despertares nocturnos"],
+                    "sleep_goals": ["Reducir latencia del sueño", "Mejorar continuidad", "Optimizar calidad"],
+                    "environment_optimization": {
+                        "temperature": "18-20°C (65-68°F)",
+                        "light": "Oscuridad completa, sin luces LED",
+                        "noise": "Silencio o ruido blanco constante",
+                        "bedding": "Colchón y almohada adecuados para postura neutral"
+                    },
+                    "pre_sleep_routine": [
+                        "Apagar pantallas 1 hora antes",
+                        "Luz tenue y cálida",
+                        "Actividad relajante (lectura, meditación)",
+                        "Temperatura corporal: ducha tibia"
+                    ],
+                    "morning_routine": [
+                        "Exposición a luz natural",
+                        "Hidratación inmediata",
+                        "Actividad física ligera",
+                        "Desayuno equilibrado"
+                    ],
+                    "supplements": [
+                        "Magnesio (200-400mg)",
+                        "Melatonina (0.3-1mg, solo temporal)",
+                        "Té de hierbas (manzanilla, valeriana)"
+                    ],
+                    "tracking_metrics": [
+                        "Tiempo total de sueño",
+                        "Latencia del sueño",
+                        "Número de despertares",
+                        "Calidad subjetiva (1-10)",
+                        "Energía matutina (1-10)"
+                    ]
+                }
+        
+        # Generar recomendaciones específicas
+        recommendations_prompt = f"""
+        Basándote en la consulta del usuario sobre optimización del sueño:
+        "{query}"
+        
+        Genera una lista de 5-7 recomendaciones específicas y accionables en formato JSON array.
+        Cada recomendación debe ser concreta, práctica y fácil de implementar.
+        
+        Devuelve SOLO el JSON array de strings, sin explicaciones adicionales.
+        """
+        
+        recommendations_json = await gemini_client.generate_structured_output(recommendations_prompt)
+        
+        # Si la respuesta no es una lista, intentar convertirla
+        if not isinstance(recommendations_json, list):
+            try:
+                recommendations_json = json.loads(recommendations_json)
+                if not isinstance(recommendations_json, list):
+                    recommendations_json = []
+            except:
+                # Si no se puede convertir, crear una lista básica
+                recommendations_json = [
+                    "Mantén un horario constante de sueño, incluso los fines de semana",
+                    "Evita cafeína después del mediodía",
+                    "Crea un ritual nocturno relajante de 30 minutos",
+                    "Mantén tu habitación fresca (18-20°C) y completamente oscura",
+                    "Exponte a luz natural brillante en las primeras horas de la mañana"
+                ]
+        
+        return SleepOptimizationOutput(
+            response=response_text,
+            sleep_plan=plan_json,
+            recommendations=recommendations_json
+        )
+
+class HRVProtocolSkill(GoogleADKSkill):
+    name = "hrv_protocols"
+    description = "Interpreta datos de variabilidad de frecuencia cardíaca y desarrolla estrategias basadas en ellos"
+    input_schema = HRVProtocolInput
+    output_schema = HRVProtocolOutput
+    
+    async def handler(self, input_data: HRVProtocolInput) -> HRVProtocolOutput:
+        """Implementación de la skill de protocolos HRV"""
+        query = input_data.query
+        hrv_data = input_data.hrv_data or {}
+        training_context = input_data.training_context or {}
+        user_profile = input_data.user_profile or {}
+        
+        # Construir el prompt para el modelo
+        data_info = "Datos de HRV disponibles" if hrv_data else "Sin datos de HRV específicos"
+        context_info = "Contexto de entrenamiento disponible" if training_context else "Sin contexto de entrenamiento específico"
+        
+        prompt = f"""
+        Eres un especialista en variabilidad de la frecuencia cardíaca (HRV) y su aplicación para optimizar entrenamiento y recuperación.
+        
+        El usuario solicita información sobre HRV:
+        "{query}"
+        
+        Información adicional:
+        - {data_info}
+        - {context_info}
+        
+        Proporciona una respuesta detallada sobre cómo interpretar y utilizar los datos de HRV,
+        incluyendo su significado, aplicaciones prácticas, estrategias de implementación y consideraciones especiales.
+        
+        Estructura tu respuesta en secciones:
+        1. Interpretación de los datos de HRV
+        2. Implicaciones para entrenamiento/recuperación
+        3. Estrategias recomendadas
+        4. Implementación práctica
+        5. Factores que afectan el HRV
+        6. Seguimiento y ajustes
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Generar protocolo HRV estructurado
+        protocol_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera un protocolo de HRV estructurado en formato JSON con los siguientes campos:
+        - interpretation: interpretación de los valores de HRV
+        - baseline_establishment: cómo establecer una línea base
+        - training_adjustments: ajustes de entrenamiento basados en HRV
+        - recovery_strategies: estrategias de recuperación
+        - lifestyle_factors: factores de estilo de vida que afectan el HRV
+        - measurement_protocol: protocolo de medición recomendado
+        - decision_framework: marco de decisión basado en valores de HRV
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        protocol_json = await gemini_client.generate_structured_output(protocol_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(protocol_json, dict):
+            try:
+                protocol_json = json.loads(protocol_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                protocol_json = {
+                    "interpretation": {
+                        "high_hrv": "Buena recuperación, sistema nervioso equilibrado",
+                        "normal_hrv": "Recuperación adecuada, balance autonómico normal",
+                        "low_hrv": "Recuperación insuficiente, predominio simpático"
+                    },
+                    "baseline_establishment": "Medir diariamente durante 2-3 semanas en las mismas condiciones",
+                    "training_adjustments": {
+                        "high_hrv": "Entrenamiento de alta intensidad/volumen apropiado",
+                        "normal_hrv": "Seguir plan de entrenamiento normal",
+                        "low_hrv": "Reducir intensidad/volumen, priorizar recuperación"
+                    },
+                    "recovery_strategies": [
+                        "Sueño optimizado",
+                        "Nutrición adecuada",
+                        "Manejo del estrés",
+                        "Técnicas de respiración",
+                        "Exposición a frío/calor"
+                    ],
+                    "lifestyle_factors": [
+                        "Calidad del sueño",
+                        "Estrés psicológico",
+                        "Hidratación",
+                        "Nutrición",
+                        "Alcohol y cafeína"
+                    ],
+                    "measurement_protocol": "Medición matutina, en ayunas, después de despertar, posición constante",
+                    "decision_framework": {
+                        "baseline": "Establecer línea base individual",
+                        "daily_comparison": "Comparar con línea base y tendencia reciente",
+                        "thresholds": "Establecer umbrales personalizados para toma de decisiones",
+                        "context": "Considerar factores contextuales (estrés, sueño, etc.)"
                     }
                 }
         
-        return response
+        # Generar recomendaciones específicas
+        recommendations_prompt = f"""
+        Basándote en la consulta del usuario sobre HRV:
+        "{query}"
+        
+        Genera una lista de 5-7 recomendaciones específicas y accionables en formato JSON array.
+        Cada recomendación debe ser concreta, práctica y fácil de implementar.
+        
+        Devuelve SOLO el JSON array de strings, sin explicaciones adicionales.
+        """
+        
+        recommendations_json = await gemini_client.generate_structured_output(recommendations_prompt)
+        
+        # Si la respuesta no es una lista, intentar convertirla
+        if not isinstance(recommendations_json, list):
+            try:
+                recommendations_json = json.loads(recommendations_json)
+                if not isinstance(recommendations_json, list):
+                    recommendations_json = []
+            except:
+                # Si no se puede convertir, crear una lista básica
+                recommendations_json = [
+                    "Mide tu HRV cada mañana al despertar, en la misma posición",
+                    "Establece una línea base con al menos 2 semanas de mediciones",
+                    "Reduce la intensidad del entrenamiento cuando tu HRV esté 10% por debajo de tu línea base",
+                    "Practica técnicas de respiración lenta (6 respiraciones/minuto) para mejorar tu HRV",
+                    "Evita alcohol, comidas pesadas y pantallas antes de dormir para optimizar tu HRV nocturno"
+                ]
+        
+        return HRVProtocolOutput(
+            response=response_text,
+            hrv_protocol=protocol_json,
+            recommendations=recommendations_json
+        )
+
+class ChronicPainSkill(GoogleADKSkill):
+    name = "chronic_pain_management"
+    description = "Desarrolla estrategias integrales para el manejo del dolor agudo y crónico"
+    input_schema = ChronicPainInput
+    output_schema = ChronicPainOutput
     
-    async def _generate_pain_assessment(self, user_input: str, user_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Genera una evaluación de dolor estructurada.
+    async def handler(self, input_data: ChronicPainInput) -> ChronicPainOutput:
+        """Implementación de la skill de manejo del dolor crónico"""
+        query = input_data.query
+        pain_location = input_data.pain_location
+        pain_intensity = input_data.pain_intensity
+        pain_duration = input_data.pain_duration
+        user_profile = input_data.user_profile or {}
         
-        Args:
-            user_input: Texto de entrada del usuario
-            user_profile: Perfil del usuario
-            
-        Returns:
-            Dict[str, Any]: Evaluación de dolor estructurada
-        """
-        # TODO: Integrar RAG para buscar información sobre posibles causas del dolor según literatura/NGX.
-        # TODO: Usar mcp7_query para obtener datos del usuario (ej. actividades recientes, otros síntomas) desde Supabase.
+        # Construir el prompt para el modelo
+        location_info = f"Ubicación del dolor: {pain_location}" if pain_location else "Ubicación del dolor no especificada"
+        intensity_info = f"Intensidad del dolor: {pain_intensity}/10" if pain_intensity else "Intensidad del dolor no especificada"
+        duration_info = f"Duración del dolor: {pain_duration}" if pain_duration else "Duración del dolor no especificada"
+        
         prompt = f"""
-        Genera una evaluación de dolor estructurada basada en la siguiente solicitud:
+        Eres un especialista en manejo del dolor y rehabilitación.
         
-        "{user_input}"
+        El usuario solicita información sobre manejo del dolor:
+        "{query}"
         
-        La evaluación debe incluir:
-        1. Localización del dolor
-        2. Intensidad (escala 1-10)
-        3. Características del dolor (agudo, sordo, pulsante, etc.)
-        4. Factores que aumentan o disminuyen el dolor
-        5. Impacto en actividades diarias
-        6. Posibles causas
-        7. Recomendaciones iniciales
-        8. Cuándo buscar atención médica
+        Información adicional:
+        - {location_info}
+        - {intensity_info}
+        - {duration_info}
         
-        Devuelve la evaluación en formato JSON estructurado.
+        Proporciona una respuesta detallada sobre cómo manejar este dolor específico,
+        incluyendo estrategias no farmacológicas, ejercicios, modificaciones de actividad y consideraciones especiales.
+        
+        Estructura tu respuesta en secciones:
+        1. Evaluación del dolor
+        2. Estrategias de manejo no farmacológicas
+        3. Ejercicios recomendados
+        4. Modificaciones de actividad
+        5. Cuándo buscar ayuda profesional
+        
+        IMPORTANTE: Aclara que tus recomendaciones no reemplazan la atención médica profesional.
         """
         
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += f"""
-            
-            Considera la siguiente información del usuario:
-            - Nombre: {user_profile.get('name', 'N/A')}
-            - Edad: {user_profile.get('age', 'N/A')}
-            - Historial de lesiones: {user_profile.get('injury_history', 'N/A')}
-            - Calidad de sueño: {user_profile.get('sleep_quality', 'N/A')}
-            - Nivel de estrés: {user_profile.get('stress_level', 'N/A')}
-            - Áreas de dolor: {user_profile.get('pain_areas', 'N/A')}
-            """
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
         
-        # Generar la evaluación de dolor
-        response = await self.gemini_client.generate_structured_output(prompt)
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Generar evaluación del dolor estructurada
+        assessment_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Genera una evaluación del dolor estructurada en formato JSON con los siguientes campos:
+        - location: ubicación del dolor
+        - intensity: intensidad estimada (1-10)
+        - characteristics: características del dolor
+        - aggravating_factors: factores que empeoran el dolor
+        - relieving_factors: factores que alivian el dolor
+        - impact: impacto en actividades diarias
+        - possible_causes: posibles causas (aclarar que es educativo, no diagnóstico)
+        - red_flags: señales de alerta que requieren atención médica
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        assessment_json = await gemini_client.generate_structured_output(assessment_prompt)
         
         # Si la respuesta no es un diccionario, intentar convertirla
-        if not isinstance(response, dict):
+        if not isinstance(assessment_json, dict):
             try:
-                import json
-                response = json.loads(response)
+                assessment_json = json.loads(assessment_json)
             except:
                 # Si no se puede convertir, crear un diccionario básico
-                response = {
-                    "location": "Ubicación del dolor no especificada",
-                    "intensity": "Intensidad no especificada",
-                    "characteristics": "Características no especificadas",
-                    "aggravating_factors": ["Factores que aumentan el dolor no especificados"],
-                    "relieving_factors": ["Factores que disminuyen el dolor no especificados"],
-                    "impact": "Impacto en actividades diarias no especificado",
-                    "possible_causes": ["Causas posibles no especificadas"],
-                    "recommendations": ["Recomendaciones generales"],
-                    "seek_medical_attention": "Buscar atención médica si el dolor persiste más de 7 días o empeora"
+                assessment_json = {
+                    "location": pain_location if pain_location else "No especificada",
+                    "intensity": pain_intensity if pain_intensity else "No especificada",
+                    "characteristics": "No especificadas",
+                    "aggravating_factors": ["No especificados"],
+                    "relieving_factors": ["No especificados"],
+                    "impact": "No especificado",
+                    "possible_causes": ["Nota: Esta información es educativa, no diagnóstica"],
+                    "red_flags": [
+                        "Dolor severo que no responde a medidas básicas",
+                        "Entumecimiento o debilidad progresiva",
+                        "Problemas de control de vejiga/intestino",
+                        "Fiebre asociada al dolor"
+                    ]
                 }
         
-        return response
-
-# Bloque de ejecución para pruebas locales (si existe)
-if __name__ == '__main__':
-    import asyncio
-    import json
-    logging.basicConfig(level=logging.INFO)
-
-    async def main():
-        agent = RecoveryCorrective()
-
-        print("--- Prueba ADK (_run_async_impl) --- ")
-        adk_input = "Necesito ejercicios para prevenir el dolor de espalda baja"
-        adk_response = await agent._run_async_impl(adk_input, user_id="test_user_adk")
-        print(f"Entrada ADK: {adk_input}")
-        print(f"Respuesta ADK: {json.dumps(adk_response, indent=2)}\n")
-
-        print("--- Prueba A2A execute_task (usando base A2AAgent) --- ")
-        a2a_task = create_task(
-            skill_id="injury-prevention-protocols", 
-            input_data={"text": "Ejercicios de calentamiento para corredores", "user_id": "test_user_a2a_task"}
+        # Generar plan de manejo del dolor estructurado
+        plan_prompt = f"""
+        Basándote en la consulta del usuario sobre dolor:
+        "{query}"
+        
+        Genera un plan de manejo del dolor estructurado en formato JSON con los siguientes campos:
+        - non_pharmacological: estrategias no farmacológicas
+        - movement_strategies: estrategias de movimiento
+        - lifestyle_modifications: modificaciones de estilo de vida
+        - self_management: técnicas de autogestión
+        - pacing_strategies: estrategias de dosificación de actividad
+        - progression: progresión recomendada
+        
+        Devuelve SOLO el JSON, sin explicaciones adicionales.
+        """
+        
+        management_json = await gemini_client.generate_structured_output(plan_prompt)
+        
+        # Si la respuesta no es un diccionario, intentar convertirla
+        if not isinstance(management_json, dict):
+            try:
+                management_json = json.loads(management_json)
+            except:
+                # Si no se puede convertir, crear un diccionario básico
+                management_json = {
+                    "non_pharmacological": [
+                        "Aplicación de calor/frío",
+                        "Técnicas de relajación",
+                        "Meditación mindfulness"
+                    ],
+                    "movement_strategies": [
+                        "Movimiento gradual y controlado",
+                        "Evitar inmovilización prolongada",
+                        "Ejercicio de baja intensidad"
+                    ],
+                    "lifestyle_modifications": [
+                        "Optimización del sueño",
+                        "Manejo del estrés",
+                        "Nutrición antiinflamatoria"
+                    ],
+                    "self_management": [
+                        "Diario de dolor",
+                        "Técnicas de respiración",
+                        "Establecimiento de objetivos realistas"
+                    ],
+                    "pacing_strategies": [
+                        "Alternar actividad y descanso",
+                        "Incremento gradual de actividad",
+                        "Evitar ciclos de sobreactividad-descanso forzado"
+                    ],
+                    "progression": "Incremento gradual de actividad basado en tiempo, no en dolor"
+                }
+        
+        # Generar recomendaciones específicas
+        recommendations_prompt = f"""
+        Basándote en la consulta del usuario sobre dolor:
+        "{query}"
+        
+        Genera una lista de 5-7 recomendaciones específicas y accionables en formato JSON array.
+        Cada recomendación debe ser concreta, práctica y fácil de implementar.
+        
+        Devuelve SOLO el JSON array de strings, sin explicaciones adicionales.
+        """
+        
+        recommendations_json = await gemini_client.generate_structured_output(recommendations_prompt)
+        
+        # Si la respuesta no es una lista, intentar convertirla
+        if not isinstance(recommendations_json, list):
+            try:
+                recommendations_json = json.loads(recommendations_json)
+                if not isinstance(recommendations_json, list):
+                    recommendations_json = []
+            except:
+                # Si no se puede convertir, crear una lista básica
+                recommendations_json = [
+                    "Comienza con 5-10 minutos de movimiento suave cada mañana",
+                    "Aplica calor húmedo durante 15-20 minutos para aliviar la tensión muscular",
+                    "Practica respiración diafragmática 3 veces al día durante 5 minutos",
+                    "Establece un horario regular de sueño para optimizar la recuperación",
+                    "Lleva un diario de dolor para identificar patrones y desencadenantes"
+                ]
+        
+        return ChronicPainOutput(
+            response=response_text,
+            pain_assessment=assessment_json,
+            management_plan=management_json,
+            recommendations=recommendations_json
         )
-        # La clase base A2AAgent llama a _run_async_impl por defecto si no se sobreescribe execute_task
-        a2a_result = await agent.execute_task(a2a_task) 
-        print(f"Tarea A2A: {json.dumps(a2a_task, indent=2)}")
-        print(f"Resultado A2A: {json.dumps(a2a_result, indent=2)}\n")
 
-        print("--- Prueba A2A process_message (usando base A2AAgent) --- ")
-        # Crear mensaje A2A correctamente
-        a2a_message_content = {
-            "message_id": str(uuid.uuid4()),
-            "role": "user", 
-            "parts": [{"type": "text", "text": "¿Cómo puedo mejorar mi movilidad de hombros?"}],
-            "metadata": {"user_id": "test_user_a2a_msg", "session_id": "session_recov1"}
+class GeneralRecoverySkill(GoogleADKSkill):
+    name = "general_recovery"
+    description = "Proporciona información general sobre recuperación y responde a consultas diversas sobre el tema"
+    input_schema = GeneralRecoveryInput
+    output_schema = GeneralRecoveryOutput
+    
+    async def handler(self, input_data: GeneralRecoveryInput) -> GeneralRecoveryOutput:
+        """Implementación de la skill general de recuperación"""
+        query = input_data.query
+        context = input_data.context or {}
+        user_profile = input_data.user_profile or {}
+        
+        # Construir el prompt para el modelo
+        context_info = "Contexto adicional disponible" if context else "Sin contexto adicional"
+        
+        prompt = f"""
+        Eres un especialista en recuperación física, bienestar y optimización del rendimiento.
+        
+        El usuario solicita información general sobre recuperación:
+        "{query}"
+        
+        Información adicional:
+        - {context_info}
+        
+        Proporciona una respuesta detallada y útil sobre el tema de recuperación,
+        incluyendo principios fundamentales, estrategias prácticas y consideraciones especiales.
+        
+        Estructura tu respuesta de manera clara y organizada, con secciones relevantes al tema consultado.
+        """
+        
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Generar respuesta utilizando Gemini
+        response_text = await gemini_client.generate_response(prompt, temperature=0.4)
+        
+        # Generar protocolo de recuperación estructurado si es aplicable
+        protocol_prompt = f"""
+        Basándote en la consulta del usuario:
+        "{query}"
+        
+        Si la consulta se relaciona con un protocolo específico de recuperación, genera un protocolo estructurado en formato JSON.
+        Si la consulta es demasiado general o no se relaciona con un protocolo específico, devuelve null.
+        
+        El protocolo debe incluir campos relevantes como:
+        - objective: objetivo principal del protocolo
+        - strategies: estrategias principales
+        - timeline: cronograma recomendado
+        - implementation: pasos de implementación
+        - monitoring: métricas de seguimiento
+        
+        Devuelve SOLO el JSON o null, sin explicaciones adicionales.
+        """
+        
+        protocol_json = await gemini_client.generate_structured_output(protocol_prompt)
+        
+        # Si la respuesta no es un diccionario ni None, intentar convertirla
+        if protocol_json is not None and not isinstance(protocol_json, dict):
+            try:
+                protocol_json = json.loads(protocol_json)
+            except:
+                # Si no se puede convertir, establecer como None
+                protocol_json = None
+        
+        return GeneralRecoveryOutput(
+            response=response_text,
+            recovery_protocol=protocol_json
+        )
+
+# Definir la clase principal del agente RecoveryCorrective
+class RecoveryCorrective(ADKAgent):
+    """
+    Agente especializado en recuperación, rehabilitación y corrección de problemas físicos.
+    
+    Este agente proporciona estrategias personalizadas para la prevención y rehabilitación de lesiones,
+    optimización del sueño, manejo del dolor, evaluación de movilidad y protocolos basados en HRV.
+    """
+    
+    def __init__(
+        self,
+        agent_id: str = None,
+        gemini_client: GeminiClient = None,
+        supabase_client: SupabaseClient = None,
+        mcp_toolkit: MCPToolkit = None,
+        state_manager: StateManager = None,
+        **kwargs
+    ):
+        """Inicializa el agente RecoveryCorrective con sus dependencias"""
+        
+        # Generar ID único si no se proporciona
+        if agent_id is None:
+            agent_id = f"recovery_corrective_{uuid.uuid4().hex[:8]}"
+        
+        # Crear tarjeta de agente
+        agent_card = AgentCard(
+            name="RecoveryCorrective",
+            description="Especialista en recuperación, rehabilitación y corrección de problemas físicos",
+            instructions="""
+            Soy un agente especializado en recuperación, rehabilitación y corrección de problemas físicos.
+            
+            Puedo ayudarte con:
+            - Prevención de lesiones
+            - Protocolos de rehabilitación
+            - Evaluación y mejora de movilidad
+            - Optimización del sueño
+            - Interpretación de datos de HRV
+            - Manejo del dolor crónico
+            - Estrategias generales de recuperación
+            
+            Proporciono información basada en evidencia y estrategias personalizadas para mejorar
+            tu recuperación, movilidad y bienestar general.
+            """,
+            examples=[
+                Example(
+                    input="¿Cómo puedo prevenir lesiones al correr?",
+                    output="Aquí tienes un plan de prevención de lesiones para corredores..."
+                ),
+                Example(
+                    input="Tengo dolor en la rodilla después de entrenar, ¿qué puedo hacer?",
+                    output="Basado en tu descripción, aquí hay un protocolo de rehabilitación..."
+                ),
+                Example(
+                    input="¿Cómo puedo mejorar mi movilidad de cadera?",
+                    output="Te proporcionaré una evaluación de movilidad y ejercicios específicos..."
+                ),
+                Example(
+                    input="¿Cómo puedo optimizar mi sueño para recuperarme mejor?",
+                    output="Aquí tienes un plan de optimización del sueño personalizado..."
+                ),
+                Example(
+                    input="¿Qué significan mis datos de HRV y cómo usarlos?",
+                    output="Te explicaré cómo interpretar tus datos de HRV y cómo aplicarlos..."
+                )
+            ]
+        )
+        
+        # Crear toolkit con las skills del agente
+        toolkit = Toolkit(
+            skills=[
+                InjuryPreventionSkill(),
+                RehabilitationSkill(),
+                MobilityAssessmentSkill(),
+                SleepOptimizationSkill(),
+                HRVProtocolSkill(),
+                ChronicPainSkill(),
+                GeneralRecoverySkill()
+            ]
+        )
+        
+        # Inicializar la clase base
+        super().__init__(
+            agent_id=agent_id,
+            agent_card=agent_card,
+            toolkit=toolkit,
+            gemini_client=gemini_client,
+            supabase_client=supabase_client,
+            mcp_toolkit=mcp_toolkit,
+            state_manager=state_manager,
+            **kwargs
+        )
+        
+        logger.info(f"Agente RecoveryCorrective inicializado con ID: {agent_id}")
+    
+    async def process_message(self, message: str, session_id: str = None, **kwargs) -> str:
+        """
+        Procesa un mensaje del usuario y genera una respuesta utilizando las skills apropiadas.
+        
+        Args:
+            message: Mensaje del usuario
+            session_id: ID de la sesión de chat
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Respuesta generada para el usuario
+        """
+        logger.info(f"Procesando mensaje para RecoveryCorrective, session_id: {session_id}")
+        
+        # Analizar la intención del mensaje para determinar qué skill utilizar
+        intent_prompt = f"""
+        Analiza el siguiente mensaje del usuario y determina qué categoría de consulta es:
+        
+        Mensaje: "{message}"
+        
+        Categorías:
+        - injury_prevention: Prevención de lesiones
+        - rehabilitation: Rehabilitación de lesiones
+        - mobility_assessment: Evaluación y mejora de movilidad
+        - sleep_optimization: Optimización del sueño
+        - hrv_protocols: Protocolos basados en HRV
+        - chronic_pain_management: Manejo del dolor crónico
+        - general_recovery: Consulta general sobre recuperación
+        
+        Devuelve SOLO el nombre de la categoría más relevante, sin explicaciones adicionales.
+        """
+        
+        # Determinar la intención utilizando el cliente Gemini
+        intent = await self.gemini_client.generate_response(intent_prompt, temperature=0.1)
+        intent = intent.strip().lower()
+        
+        # Mapear la intención a la skill correspondiente
+        skill_mapping = {
+            "injury_prevention": "injury_prevention",
+            "rehabilitation": "rehabilitation",
+            "mobility_assessment": "mobility_assessment",
+            "mobility": "mobility_assessment",
+            "sleep_optimization": "sleep_optimization",
+            "sleep": "sleep_optimization",
+            "hrv_protocols": "hrv_protocols",
+            "hrv": "hrv_protocols",
+            "chronic_pain_management": "chronic_pain_management",
+            "pain": "chronic_pain_management",
+            "general_recovery": "general_recovery"
         }
-        a2a_response_msg = await agent.process_message(from_agent="other_agent_2", content=a2a_message_content)
-        print(f"Mensaje A2A entrante: {json.dumps(a2a_message_content, indent=2)}")
-        print(f"Respuesta A2A (mensaje): {json.dumps(a2a_response_msg, indent=2) if a2a_response_msg else 'None'}\n")
-
-        print("--- Prueba A2A get_agent_card --- ")
-        agent_card_dict = agent.get_agent_card()
-        print(f"Agent Card: {json.dumps(agent_card_dict, indent=2)}")
-
-    asyncio.run(main())
+        
+        # Obtener el nombre de la skill a utilizar
+        skill_name = skill_mapping.get(intent, "general_recovery")
+        
+        logger.info(f"Intención detectada: {intent}, usando skill: {skill_name}")
+        
+        # Preparar los datos de entrada para la skill
+        if skill_name == "injury_prevention":
+            # Extraer información relevante para prevención de lesiones
+            activity_prompt = f"""
+            Extrae el tipo de actividad física mencionada en el mensaje del usuario:
+            "{message}"
+            
+            Devuelve SOLO el nombre de la actividad, o null si no se menciona ninguna actividad específica.
+            """
+            activity_type = await self.gemini_client.generate_response(activity_prompt, temperature=0.1)
+            activity_type = None if activity_type.lower() in ["null", "none", ""] else activity_type
+            
+            input_data = InjuryPreventionInput(
+                query=message,
+                activity_type=activity_type
+            )
+            
+            # Ejecutar la skill
+            result = await self.toolkit.run_skill(skill_name, input_data)
+            return result.response
+            
+        elif skill_name == "rehabilitation":
+            # Extraer información relevante para rehabilitación
+            injury_prompt = f"""
+            Extrae el tipo de lesión y la fase de la lesión (aguda, subaguda, crónica) mencionada en el mensaje del usuario:
+            "{message}"
+            
+            Devuelve un JSON con dos campos:
+            - injury_type: tipo de lesión, o null si no se menciona
+            - injury_phase: fase de la lesión, o null si no se menciona
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            injury_info = await self.gemini_client.generate_structured_output(injury_prompt)
+            
+            if isinstance(injury_info, str):
+                try:
+                    injury_info = json.loads(injury_info)
+                except:
+                    injury_info = {"injury_type": None, "injury_phase": None}
+            
+            if not isinstance(injury_info, dict):
+                injury_info = {"injury_type": None, "injury_phase": None}
+            
+            input_data = RehabilitationInput(
+                query=message,
+                injury_type=injury_info.get("injury_type"),
+                injury_phase=injury_info.get("injury_phase")
+            )
+            
+            # Ejecutar la skill
+            result = await self.toolkit.run_skill(skill_name, input_data)
+            return result.response
+            
+        elif skill_name == "mobility_assessment":
+            # Extraer información relevante para evaluación de movilidad
+            mobility_prompt = f"""
+            Extrae las áreas objetivo para mejorar movilidad mencionadas en el mensaje del usuario:
+            "{message}"
+            
+            Devuelve un JSON array con las áreas mencionadas, o un array vacío si no se mencionan áreas específicas.
+            
+            Devuelve SOLO el JSON array, sin explicaciones adicionales.
+            """
+            target_areas = await self.gemini_client.generate_structured_output(mobility_prompt)
+            
+            if isinstance(target_areas, str):
+                try:
+                    target_areas = json.loads(target_areas)
+                except:
+                    target_areas = []
+            
+            if not isinstance(target_areas, list):
+                target_areas = []
+            
+            input_data = MobilityAssessmentInput(
+                query=message,
+                target_areas=target_areas
+            )
+            
+            # Ejecutar la skill
+            result = await self.toolkit.run_skill(skill_name, input_data)
+            return result.response
+            
+        elif skill_name == "sleep_optimization":
+            # Extraer información relevante para optimización del sueño
+            sleep_prompt = f"""
+            Extrae los problemas de sueño mencionados en el mensaje del usuario:
+            "{message}"
+            
+            Devuelve un JSON array con los problemas mencionados, o un array vacío si no se mencionan problemas específicos.
+            
+            Devuelve SOLO el JSON array, sin explicaciones adicionales.
+            """
+            sleep_issues = await self.gemini_client.generate_structured_output(sleep_prompt)
+            
+            if isinstance(sleep_issues, str):
+                try:
+                    sleep_issues = json.loads(sleep_issues)
+                except:
+                    sleep_issues = []
+            
+            if not isinstance(sleep_issues, list):
+                sleep_issues = []
+            
+            input_data = SleepOptimizationInput(
+                query=message,
+                sleep_issues=sleep_issues
+            )
+            
+            # Ejecutar la skill
+            result = await self.toolkit.run_skill(skill_name, input_data)
+            return result.response
+            
+        elif skill_name == "hrv_protocols":
+            # Ejecutar directamente la skill de HRV
+            input_data = HRVProtocolInput(
+                query=message
+            )
+            
+            # Ejecutar la skill
+            result = await self.toolkit.run_skill(skill_name, input_data)
+            return result.response
+            
+        elif skill_name == "chronic_pain_management":
+            # Extraer información relevante para manejo del dolor
+            pain_prompt = f"""
+            Extrae información sobre el dolor mencionado en el mensaje del usuario:
+            "{message}"
+            
+            Devuelve un JSON con tres campos:
+            - location: ubicación del dolor, o null si no se menciona
+            - intensity: intensidad del dolor (1-10), o null si no se menciona
+            - duration: duración del dolor, o null si no se menciona
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            pain_info = await self.gemini_client.generate_structured_output(pain_prompt)
+            
+            if isinstance(pain_info, str):
+                try:
+                    pain_info = json.loads(pain_info)
+                except:
+                    pain_info = {"location": None, "intensity": None, "duration": None}
+            
+            if not isinstance(pain_info, dict):
+                pain_info = {"location": None, "intensity": None, "duration": None}
+            
+            # Convertir intensidad a entero si es posible
+            intensity = pain_info.get("intensity")
+            if isinstance(intensity, str) and intensity.isdigit():
+                intensity = int(intensity)
+            elif not isinstance(intensity, int):
+                intensity = None
+            
+            input_data = ChronicPainInput(
+                query=message,
+                pain_location=pain_info.get("location"),
+                pain_intensity=intensity,
+                pain_duration=pain_info.get("duration")
+            )
+            
+            # Ejecutar la skill
+            result = await self.toolkit.run_skill(skill_name, input_data)
+            return result.response
+            
+        else:  # general_recovery
+            # Ejecutar la skill general
+            input_data = GeneralRecoveryInput(
+                query=message
+            )
+            
+            # Ejecutar la skill
+            result = await self.toolkit.run_skill("general_recovery", input_data)
+            return result.response

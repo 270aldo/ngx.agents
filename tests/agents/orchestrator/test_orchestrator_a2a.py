@@ -10,7 +10,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime
 
-from agents.orchestrator.orchestrator import Orchestrator, OrchestratorConfig, TaskResult
+from agents.orchestrator.agent import NGXNexusOrchestrator
 from agents.orchestrator.a2a_adapter import A2AAdapter
 from a2a import AgentStatus
 
@@ -18,13 +18,8 @@ from a2a import AgentStatus
 @pytest.fixture
 def orchestrator():
     """Fixture que proporciona un orquestador con configuración predeterminada."""
-    config = OrchestratorConfig(
-        routing_strategy="skill_match",
-        default_timeout=5.0,
-        confidence_threshold=0.6,
-        use_a2a=True
-    )
-    return Orchestrator(config=config)
+    mock_mcp_toolkit = MagicMock()
+    return NGXNexusOrchestrator(mcp_toolkit=mock_mcp_toolkit)
 
 # Fixture para el adaptador A2A mock
 @pytest.fixture
@@ -397,3 +392,44 @@ async def test_select_best_result_empty(orchestrator):
     
     # Verificar que se devolvió None
     assert best_result is None
+
+# Pruebas para el método _process_request
+@pytest.mark.asyncio
+async def test_orchestrator_initialization(orchestrator):
+    """Testea que el Orchestrator se inicializa correctamente."""
+    assert orchestrator is not None
+    assert isinstance(orchestrator, NGXNexusOrchestrator)
+    # assert isinstance(orchestrator.mcp_toolkit, MagicMock) # Ajustar según la implementación de NGXNexusOrchestrator
+    # assert orchestrator.a2a_server_url is None # Ajustar
+
+@pytest.mark.asyncio
+async def test_orchestrator_process_request_successful_single_agent(orchestrator, mock_user_id, mock_session_id):
+    input_text = "Hola, ¿quién eres?"
+    
+    # Mockear _get_agent_responses para devolver una respuesta simulada de un agente
+    mock_agent_response = {
+        1: { # agent_id
+            "agent_name": "EchoAgent",
+            "response": f"Eco: {input_text}",
+            "artifacts": []
+        }
+    }
+    orchestrator._get_agent_responses = AsyncMock(return_value=mock_agent_response)
+    
+    # Mockear _synthesize para devolver una respuesta sintetizada
+    mock_synthesized_response = f"Respuesta sintetizada para: {input_text}"
+    mock_artifacts = []
+    orchestrator._synthesize = AsyncMock(return_value=(mock_synthesized_response, mock_artifacts))
+    
+    # Mockear _determine_target_agents (asumiendo que existe y devuelve [1] para este test)
+    orchestrator._determine_target_agents = AsyncMock(return_value=([1], 'direct_request')) # Simula la selección de un agente
+
+    # Llamar al método _process_request (o _run_async_impl si es el punto de entrada principal)
+    # Para NGXNexusOrchestrator, _process_request parece ser el método principal de lógica interna
+    result = await orchestrator._process_request(input_text, user_id=mock_user_id, session_id=mock_session_id)
+    
+    assert result is not None
+    assert result["response"] == mock_synthesized_response
+    assert result["agent_id"] == orchestrator.agent_id
+    orchestrator._get_agent_responses.assert_called_once()
+    orchestrator._synthesize.assert_called_once()

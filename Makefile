@@ -1,4 +1,4 @@
-.PHONY: setup dev test test-unit test-integration test-agents test-cov test-cov-html lint format clean
+.PHONY: setup dev test test-unit test-integration test-agents test-cov test-cov-html test-adk lint format clean
 
 # Configuración y desarrollo
 setup:
@@ -19,6 +19,10 @@ test-integration:
 
 test-agents:
 	poetry run pytest -m agents
+
+# Pruebas específicas
+test-adk:
+	./scripts/test_adk_integration.sh
 
 # Cobertura de código
 test-cov:

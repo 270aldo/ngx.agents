@@ -17,6 +17,9 @@ from core.logging_config import get_logger
 from core.state_manager import StateManager
 from app.schemas.agent import AgentRunRequest, AgentRunResponse, AgentInfo, AgentListResponse
 from agents.base.base_agent import BaseAgent
+from tools.mcp_toolkit import MCPToolkit
+from agents.orchestrator.agent import NGXNexusOrchestrator
+from config import settings
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -51,6 +54,16 @@ def discover_agents() -> Dict[str, BaseAgent]:
     
     # Excluir directorios y módulos que no son agentes
     exclude_dirs = ["__pycache__", "base"]
+
+    # Preparar dependencias comunes
+    try:
+        sm_instance = get_state_manager()
+        toolkit_instance = MCPToolkit()
+        a2a_url = f"http://{settings.A2A_HOST}:{settings.A2A_PORT}"
+    except Exception as e:
+        logger.error(f"Error al inicializar dependencias para discover_agents: {e}", exc_info=True)
+        # Si las dependencias fallan, no podemos instanciar agentes
+        return agents
     
     # Recorrer todos los directorios en agents/
     for item in os.listdir(agents_path):
@@ -67,17 +80,30 @@ def discover_agents() -> Dict[str, BaseAgent]:
                     module = importlib.import_module(module_name)
                     
                     # Buscar clases que heredan de BaseAgent
-                    for name, obj in inspect.getmembers(module):
-                        if (inspect.isclass(obj) and 
-                            issubclass(obj, BaseAgent) and 
-                            obj != BaseAgent):
-                            # Instanciar el agente
-                            agent_instance = obj()
+                    for name, obj_class in inspect.getmembers(module):
+                        if (inspect.isclass(obj_class) and 
+                            issubclass(obj_class, BaseAgent) and 
+                            obj_class != BaseAgent):
+                            
+                            # Preparar argumentos del constructor
+                            constructor_args = {
+                                "state_manager": sm_instance,
+                                "mcp_toolkit": toolkit_instance
+                            }
+                            
+                            # Si es el orquestador, añadir a2a_server_url
+                            if obj_class == NGXNexusOrchestrator:
+                                constructor_args["a2a_server_url"] = a2a_url
+                                # Opcional: pasar un model_id específico si es necesario aquí
+                                # constructor_args["model_id"] = settings.ORCHESTRATOR_DEFAULT_MODEL_ID
+
+                            # Instanciar el agente con los argumentos preparados
+                            agent_instance = obj_class(**constructor_args)
                             agents[agent_instance.agent_id] = agent_instance
-                            logger.info(f"Agente descubierto: {agent_instance.agent_id} ({agent_instance.name})")
+                            logger.info(f"Agente descubierto e instanciado: {agent_instance.agent_id} ({agent_instance.name})")
                             
                 except Exception as e:
-                    logger.error(f"Error al cargar agente {item}: {e}")
+                    logger.error(f"Error al cargar o instanciar agente {item} ({module_name if 'module_name' in locals() else 'N/A'}): {e}", exc_info=True)
     
     return agents
 

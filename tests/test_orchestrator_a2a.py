@@ -10,7 +10,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime
 
-from agents.orchestrator.orchestrator import Orchestrator, OrchestratorConfig, TaskResult
+from agents.orchestrator.agent import NGXNexusOrchestrator
 from agents.orchestrator.a2a_adapter import A2AAdapter
 from a2a import AgentStatus
 
@@ -18,13 +18,8 @@ from a2a import AgentStatus
 @pytest.fixture
 def orchestrator():
     """Fixture que proporciona un orquestador con configuración predeterminada."""
-    config = OrchestratorConfig(
-        routing_strategy="skill_match",
-        default_timeout=5.0,
-        confidence_threshold=0.6,
-        use_a2a=True
-    )
-    return Orchestrator(config=config)
+    mock_mcp_toolkit = MagicMock()
+    return NGXNexusOrchestrator(mcp_toolkit=mock_mcp_toolkit)
 
 # Fixture para el adaptador A2A mock
 @pytest.fixture
@@ -362,7 +357,6 @@ async def test_select_best_result(orchestrator):
 async def test_select_best_result_no_valid_results(orchestrator):
     """Prueba que _select_best_result maneja correctamente el caso de no tener resultados válidos."""
     # Crear resultados de prueba con confianza por debajo del umbral
-    orchestrator.config.confidence_threshold = 0.8
     results = {
         "agent1": TaskResult(
             agent_id="agent1",
@@ -397,3 +391,9 @@ async def test_select_best_result_empty(orchestrator):
     
     # Verificar que se devolvió None
     assert best_result is None
+
+@pytest.mark.asyncio
+async def test_orchestrator_initialization(orchestrator):
+    """Testea que el Orchestrator se inicializa correctamente."""
+    assert orchestrator is not None
+    assert isinstance(orchestrator, NGXNexusOrchestrator)

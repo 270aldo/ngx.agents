@@ -42,6 +42,15 @@ httpx = "^0.28.1" # Pin to ADK-required range
 supabase = ">=2.3.0,<3.0.0"
 google-generativeai = "^0.8.5"
 
+# Telemetría OpenTelemetry
+opentelemetry-api = "^1.33.0"
+opentelemetry-sdk = "^1.33.0"
+opentelemetry-instrumentation-fastapi = "^0.54b0"
+opentelemetry-instrumentation-httpx = "^0.54b0"
+opentelemetry-instrumentation-logging = "^0.54b0"
+opentelemetry-instrumentation-aiohttp-client = "^0.54b0"
+opentelemetry-exporter-cloud-trace = "^0.10b1"
+
 [tool.poetry.group.dev.dependencies]
 black = "^24.3.0"
 isort = "^5.13.2"

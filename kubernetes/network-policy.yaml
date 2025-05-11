@@ -1,0 +1,44 @@
+---
+# NetworkPolicy para restringir tráfico
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ngx-agents-network-policy
+  namespace: ngx-agents
+spec:
+  podSelector:
+    matchLabels:
+      app: ngx-agents
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          app: ngx-agents
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8001
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+  - to:
+    - podSelector:
+        matchLabels:
+          app: ngx-agents
