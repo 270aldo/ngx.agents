@@ -13,7 +13,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from agents.progress_tracker.agent import ProgressTracker
 from agents.base.adk_agent import run_agent
 from core.logging_config import setup_logging, get_logger
-from core.state_manager import StateManager
+from core.state_manager import ConversationContext
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter as state_manager
 from clients.supabase_client import SupabaseClient
 
 # Configurar logging

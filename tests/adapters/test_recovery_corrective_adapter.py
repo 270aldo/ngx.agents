@@ -27,26 +27,29 @@ def mock_vertex_client():
 
 
 @pytest.fixture
-async def recovery_adapter(mock_a2a_client, mock_vertex_client):
+async def recovery_adapter(mock_a2a_client):
     """Fixture para crear una instancia del adaptador con mocks."""
-    return RecoveryCorrectiveAdapter(mock_a2a_client, mock_vertex_client)
+    with patch('clients.vertex_ai.vertex_ai_client') as mock_vertex_client:
+        mock_vertex_client.is_initialized = True
+        return RecoveryCorrectiveAdapter(mock_a2a_client)
 
 
 @pytest.mark.asyncio
 async def test_create_method():
     """Prueba el método de fábrica create()."""
     with patch('infrastructure.adapters.a2a_adapter.A2AAdapter.create', new_callable=AsyncMock) as mock_a2a_create:
-        with patch('clients.vertex_ai_client_adapter.VertexAIClientAdapter') as mock_vertex_client_class:
+        with patch('clients.vertex_ai.vertex_ai_client') as mock_vertex_client:
             # Configurar mocks
             mock_a2a_create.return_value = AsyncMock()
-            mock_vertex_client_class.return_value = AsyncMock()
+            mock_vertex_client.is_initialized = False
+            mock_vertex_client.initialize = AsyncMock()
             
             # Llamar al método create
             adapter = await RecoveryCorrectiveAdapter.create()
             
             # Verificar que se llamaron los métodos correctos
             mock_a2a_create.assert_called_once()
-            mock_vertex_client_class.assert_called_once()
+            mock_vertex_client.initialize.assert_called_once()
             
             # Verificar que el adaptador se creó correctamente
             assert isinstance(adapter, RecoveryCorrectiveAdapter)

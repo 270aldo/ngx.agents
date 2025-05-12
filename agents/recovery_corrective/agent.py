@@ -18,7 +18,7 @@ from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
 from agents.base.adk_agent import ADKAgent
 from core.agent_card import AgentCard, Example
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from core.logging_config import get_logger
 
 # Configurar logger

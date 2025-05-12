@@ -567,4 +567,4 @@ class StateManagerAdapter:
 
 
 # Crear instancia global del adaptador
-state_manager_adapter = StateManagerAdapter(use_optimized=False)  # Inicialmente usar el original
+state_manager_adapter = StateManagerAdapter(use_optimized=True)  # Usar el optimizado por defecto

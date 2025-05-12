@@ -23,7 +23,7 @@ from tools.vertex_gemini_tools import (
     VertexGeminiModelsSkill
 )
 from core.agent_card import AgentCard, Example
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from clients.supabase_client import SupabaseClient
 from clients.gemini_client import GeminiClient
 from core.contracts import create_task, create_result, validate_task, validate_result

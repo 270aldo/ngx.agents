@@ -14,7 +14,7 @@ from clients.supabase_client import SupabaseClient
 from tools.mcp_toolkit import MCPToolkit
 from tools.vertex_gemini_tools import VertexGeminiGenerateSkill
 from agents.base.adk_agent import ADKAgent
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result
 
