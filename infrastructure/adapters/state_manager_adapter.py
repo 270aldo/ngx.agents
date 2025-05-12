@@ -11,9 +11,20 @@ import logging
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from core.logging_config import get_logger
-from core.state_manager import ConversationContext, state_manager as original_state_manager
 from core.state_manager_optimized import state_manager as optimized_state_manager
 from core.telemetry import telemetry_manager
+
+# Definición de ConversationContext para mantener compatibilidad
+class ConversationContext:
+    """Contexto de conversación para mantener compatibilidad con el código existente."""
+    
+    def __init__(self, conversation_id: str, user_id: str = None, session_id: str = None, 
+                 messages: List[Dict[str, Any]] = None, metadata: Dict[str, Any] = None):
+        self.conversation_id = conversation_id
+        self.user_id = user_id
+        self.session_id = session_id
+        self.messages = messages or []
+        self.metadata = metadata or {}
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -38,29 +49,24 @@ class StateManagerAdapter:
             cls._instance._initialized = False
         return cls._instance
     
-    def __init__(self, use_optimized: bool = True):
+    def __init__(self):
         """
         Inicializa el adaptador.
-        
-        Args:
-            use_optimized: Si se debe usar el State Manager optimizado
         """
         # Evitar reinicialización en el patrón Singleton
         if getattr(self, "_initialized", False):
             return
         
-        self.use_optimized = use_optimized
         self._initialized = True
         
         # Estadísticas
         self.stats = {
             "operations": 0,
             "optimized_operations": 0,
-            "original_operations": 0,
             "errors": 0
         }
         
-        logger.info(f"StateManagerAdapter inicializado (use_optimized={use_optimized})")
+        logger.info("StateManagerAdapter inicializado con el gestor optimizado")
     
     async def initialize(self) -> None:
         """
@@ -75,11 +81,10 @@ class StateManagerAdapter:
         )
         
         try:
-            # Inicializar ambos gestores
-            await original_state_manager.initialize()
+            # Inicializar solo el gestor optimizado
             await optimized_state_manager.initialize()
             
-            logger.info("StateManagerAdapter: Ambos gestores inicializados correctamente")
+            logger.info("StateManagerAdapter: Gestor optimizado inicializado correctamente")
             telemetry_manager.set_span_attribute(span_id, "success", True)
             
         except Exception as e:
@@ -110,22 +115,15 @@ class StateManagerAdapter:
         try:
             self.stats["operations"] += 1
             
-            if self.use_optimized:
-                self.stats["optimized_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
-                
-                # Obtener estado del gestor optimizado
-                state = await optimized_state_manager.get_conversation_state(conversation_id)
-                
-                # Convertir a formato ConversationContext
-                return self._convert_to_conversation_context(state)
-                
-            else:
-                self.stats["original_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "original")
-                
-                # Usar gestor original
-                return await original_state_manager.get_conversation(conversation_id)
+            # Siempre usar el gestor optimizado
+            self.stats["optimized_operations"] += 1
+            telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
+            
+            # Obtener estado del gestor optimizado
+            state = await optimized_state_manager.get_conversation_state(conversation_id)
+            
+            # Convertir a formato ConversationContext
+            return self._convert_to_conversation_context(state)
                 
         except Exception as e:
             logger.error(f"Error en get_conversation: {str(e)}")
@@ -155,24 +153,17 @@ class StateManagerAdapter:
         try:
             self.stats["operations"] += 1
             
-            if self.use_optimized:
-                self.stats["optimized_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
-                
-                # Convertir a formato del gestor optimizado
-                state = self._convert_from_conversation_context(context)
-                
-                # Guardar en gestor optimizado
-                return await optimized_state_manager.set_conversation_state(
-                    context.conversation_id, state
-                )
-                
-            else:
-                self.stats["original_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "original")
-                
-                # Usar gestor original
-                return await original_state_manager.save_conversation(context)
+            # Siempre usar el gestor optimizado
+            self.stats["optimized_operations"] += 1
+            telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
+            
+            # Convertir a formato del gestor optimizado
+            state = self._convert_from_conversation_context(context)
+            
+            # Guardar en gestor optimizado
+            return await optimized_state_manager.set_conversation_state(
+                context.conversation_id, state
+            )
                 
         except Exception as e:
             logger.error(f"Error en save_conversation: {str(e)}")
@@ -202,19 +193,12 @@ class StateManagerAdapter:
         try:
             self.stats["operations"] += 1
             
-            if self.use_optimized:
-                self.stats["optimized_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
-                
-                # Eliminar de gestor optimizado
-                return await optimized_state_manager.delete_conversation_state(conversation_id)
-                
-            else:
-                self.stats["original_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "original")
-                
-                # Usar gestor original
-                return await original_state_manager.delete_conversation(conversation_id)
+            # Siempre usar el gestor optimizado
+            self.stats["optimized_operations"] += 1
+            telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
+            
+            # Eliminar de gestor optimizado
+            return await optimized_state_manager.delete_conversation_state(conversation_id)
                 
         except Exception as e:
             logger.error(f"Error en delete_conversation: {str(e)}")
@@ -247,33 +231,23 @@ class StateManagerAdapter:
         try:
             self.stats["operations"] += 1
             
-            if self.use_optimized:
-                self.stats["optimized_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
-                
-                # Crear contexto
-                context = ConversationContext(
-                    user_id=user_id,
-                    metadata=metadata or {}
-                )
-                
-                # Guardar en gestor optimizado
-                state = self._convert_from_conversation_context(context)
-                await optimized_state_manager.set_conversation_state(
-                    context.conversation_id, state
-                )
-                
-                return context
-                
-            else:
-                self.stats["original_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "original")
-                
-                # Usar gestor original
-                return await original_state_manager.create_conversation(
-                    user_id=user_id,
-                    metadata=metadata
-                )
+            # Siempre usar el gestor optimizado
+            self.stats["optimized_operations"] += 1
+            telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
+            
+            # Crear contexto
+            context = ConversationContext(
+                user_id=user_id,
+                metadata=metadata or {}
+            )
+            
+            # Guardar en gestor optimizado
+            state = self._convert_from_conversation_context(context)
+            await optimized_state_manager.set_conversation_state(
+                context.conversation_id, state
+            )
+            
+            return context
                 
         except Exception as e:
             logger.error(f"Error en create_conversation: {str(e)}")
@@ -353,10 +327,10 @@ class StateManagerAdapter:
         Returns:
             List[ConversationContext]: Lista de contextos de conversación
         """
-        # Esta función solo está disponible en el gestor original
-        # En una implementación completa, se debería implementar también para el optimizado
-        logger.warning("get_conversations_by_user: Usando siempre el gestor original")
-        return await original_state_manager.get_conversations_by_user(user_id, limit)
+        # Esta función debe implementarse en el gestor optimizado
+        logger.warning("get_conversations_by_user: Esta función no está implementada en el gestor optimizado")
+        # Implementación temporal que devuelve una lista vacía
+        return []
     
     async def add_message_to_conversation(self, 
                                         conversation_id: str,
@@ -380,29 +354,20 @@ class StateManagerAdapter:
         try:
             self.stats["operations"] += 1
             
-            if self.use_optimized:
-                self.stats["optimized_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
-                
-                # Añadir mensaje con gestor optimizado
-                success = await optimized_state_manager.add_message_to_conversation(
-                    conversation_id, message
-                )
-                
-                if success:
-                    # Obtener contexto actualizado
-                    return await self.get_conversation(conversation_id)
-                else:
-                    return None
-                
+            # Siempre usar el gestor optimizado
+            self.stats["optimized_operations"] += 1
+            telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
+            
+            # Añadir mensaje con gestor optimizado
+            success = await optimized_state_manager.add_message_to_conversation(
+                conversation_id, message
+            )
+            
+            if success:
+                # Obtener contexto actualizado
+                return await self.get_conversation(conversation_id)
             else:
-                self.stats["original_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "original")
-                
-                # Usar gestor original
-                return await original_state_manager.add_message_to_conversation(
-                    conversation_id, message
-                )
+                return None
                 
         except Exception as e:
             logger.error(f"Error en add_message_to_conversation: {str(e)}")
@@ -435,36 +400,41 @@ class StateManagerAdapter:
         try:
             self.stats["operations"] += 1
             
-            if self.use_optimized:
-                self.stats["optimized_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
-                
-                # Obtener contexto actual
-                context = await self.get_conversation(conversation_id)
-                if not context:
-                    return None
-                
-                # Añadir intención
+            # Siempre usar el gestor optimizado
+            self.stats["optimized_operations"] += 1
+            telemetry_manager.set_span_attribute(span_id, "manager", "optimized")
+            
+            # Obtener contexto actual
+            context = await self.get_conversation(conversation_id)
+            if not context:
+                return None
+            
+            # Añadir intención
+            if not hasattr(context, "add_intent"):
+                # Agregar método add_intent si no existe
+                if "intents" not in context.metadata:
+                    context.metadata["intents"] = []
+                context.metadata["intents"].append(intent)
+            else:
                 context.add_intent(intent)
-                
-                # Registrar agentes involucrados
-                if "agents" in intent and isinstance(intent["agents"], list):
+            
+            # Registrar agentes involucrados
+            if "agents" in intent and isinstance(intent["agents"], list):
+                if not hasattr(context, "add_agent"):
+                    # Agregar método add_agent si no existe
+                    if "agents" not in context.metadata:
+                        context.metadata["agents"] = []
+                    for agent_id in intent["agents"]:
+                        if agent_id not in context.metadata["agents"]:
+                            context.metadata["agents"].append(agent_id)
+                else:
                     for agent_id in intent["agents"]:
                         context.add_agent(agent_id)
-                
-                # Guardar cambios
-                await self.save_conversation(context)
-                
-                return context
-                
-            else:
-                self.stats["original_operations"] += 1
-                telemetry_manager.set_span_attribute(span_id, "manager", "original")
-                
-                # Usar gestor original
-                return await original_state_manager.add_intent_to_conversation(
-                    conversation_id, intent
-                )
+            
+            # Guardar cambios
+            await self.save_conversation(context)
+            
+            return context
                 
         except Exception as e:
             logger.error(f"Error en add_intent_to_conversation: {str(e)}")
@@ -482,22 +452,19 @@ class StateManagerAdapter:
         Returns:
             Dict[str, Any]: Estadísticas de uso
         """
-        # Obtener estadísticas de ambos gestores
-        original_stats = await original_state_manager.get_stats()
+        # Obtener estadísticas del gestor optimizado
         optimized_stats = await optimized_state_manager.get_stats()
         
         return {
             "adapter": self.stats,
-            "use_optimized": self.use_optimized,
-            "original": original_stats,
             "optimized": optimized_stats
         }
     
     async def clear_cache(self) -> None:
         """Limpia la caché del gestor de estado."""
-        # Limpiar caché de ambos gestores
-        await original_state_manager.clear_cache()
-        # El optimizado no tiene un método clear_cache directo
+        # El gestor optimizado puede no tener un método clear_cache directo
+        # Implementar la limpieza de caché si es necesario
+        logger.info("Limpieza de caché solicitada - implementación pendiente en el gestor optimizado")
     
     def _convert_to_conversation_context(self, state: Dict[str, Any]) -> ConversationContext:
         """
@@ -509,6 +476,9 @@ class StateManagerAdapter:
         Returns:
             ConversationContext: Contexto de conversación
         """
+        if not state:
+            return None
+            
         # Crear contexto base
         context = ConversationContext(
             conversation_id=state.get("conversation_id"),
@@ -519,26 +489,24 @@ class StateManagerAdapter:
         # Añadir mensajes
         context.messages = state.get("messages", [])
         
-        # Añadir intenciones
-        context.intents = state.get("intents", [])
-        
-        # Añadir agentes involucrados
-        context.agents_involved = set(state.get("agents_involved", []))
-        
-        # Añadir timestamps
+        # Añadir datos adicionales al metadata si no podemos añadirlos directamente
+        if "intents" in state:
+            context.metadata["intents"] = state["intents"]
+            
+        if "agents_involved" in state:
+            context.metadata["agents_involved"] = state["agents_involved"]
+            
         if "created_at" in state:
-            context.created_at = state["created_at"]
+            context.metadata["created_at"] = state["created_at"]
+            
         if "updated_at" in state:
-            context.updated_at = state["updated_at"]
-        
-        # Añadir artefactos
-        context.artifacts = state.get("artifacts", [])
-        
-        # Añadir variables
-        context.variables = state.get("variables", {})
-        
-        # Marcar como persistido
-        context.is_persisted = True
+            context.metadata["updated_at"] = state["updated_at"]
+            
+        if "artifacts" in state:
+            context.metadata["artifacts"] = state["artifacts"]
+            
+        if "variables" in state:
+            context.metadata["variables"] = state["variables"]
         
         return context
     
@@ -552,19 +520,49 @@ class StateManagerAdapter:
         Returns:
             Dict[str, Any]: Estado para el gestor optimizado
         """
-        return {
+        state = {
             "conversation_id": context.conversation_id,
             "user_id": context.user_id,
             "metadata": context.metadata,
-            "messages": context.messages,
-            "intents": context.intents,
-            "agents_involved": list(context.agents_involved),
-            "created_at": context.created_at,
-            "updated_at": context.updated_at,
-            "artifacts": context.artifacts,
-            "variables": context.variables
+            "messages": context.messages
         }
+        
+        # Extraer datos adicionales del metadata si existen
+        metadata = context.metadata or {}
+        
+        # Intentar obtener atributos directamente, si no existen, buscar en metadata
+        if hasattr(context, "intents"):
+            state["intents"] = context.intents
+        elif "intents" in metadata:
+            state["intents"] = metadata["intents"]
+            
+        if hasattr(context, "agents_involved"):
+            state["agents_involved"] = list(context.agents_involved) if isinstance(context.agents_involved, set) else context.agents_involved
+        elif "agents_involved" in metadata:
+            state["agents_involved"] = metadata["agents_involved"]
+            
+        if hasattr(context, "created_at"):
+            state["created_at"] = context.created_at
+        elif "created_at" in metadata:
+            state["created_at"] = metadata["created_at"]
+            
+        if hasattr(context, "updated_at"):
+            state["updated_at"] = context.updated_at
+        elif "updated_at" in metadata:
+            state["updated_at"] = metadata["updated_at"]
+            
+        if hasattr(context, "artifacts"):
+            state["artifacts"] = context.artifacts
+        elif "artifacts" in metadata:
+            state["artifacts"] = metadata["artifacts"]
+            
+        if hasattr(context, "variables"):
+            state["variables"] = context.variables
+        elif "variables" in metadata:
+            state["variables"] = metadata["variables"]
+            
+        return state
 
 
 # Crear instancia global del adaptador
-state_manager_adapter = StateManagerAdapter(use_optimized=True)  # Usar el optimizado por defecto
+state_manager_adapter = StateManagerAdapter()  # Siempre usa el optimizado
