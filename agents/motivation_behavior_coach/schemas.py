@@ -128,6 +128,8 @@ class MotivationStrategiesOutput(BaseModel):
     strategies: List[MotivationStrategy] = Field(..., description="Estrategias de motivación recomendadas")
     daily_practices: List[str] = Field(..., description="Prácticas diarias recomendadas")
     long_term_approach: str = Field(..., description="Enfoque a largo plazo")
+    program_type: Optional[str] = Field(None, description="Tipo de programa del usuario (PRIME, LONGEVITY, etc.)")
+    
 
 
 # Modelos para Cambio de Comportamiento

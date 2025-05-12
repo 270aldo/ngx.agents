@@ -23,6 +23,10 @@ from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adap
 from infrastructure.adapters.a2a_adapter import a2a_adapter
 from core.logging_config import get_logger
 
+# Importar el servicio de clasificación de programas y definiciones
+from services.program_classification_service import ProgramClassificationService
+from agents.shared.program_definitions import get_program_definition
+
 # Configurar logger
 logger = get_logger(__name__)
 
@@ -86,9 +90,47 @@ class BiohackingProtocolSkill(GoogleADKSkill):
         health_conditions = input_data.health_conditions or []
         goals = input_data.goals or []
         
+        # Obtener cliente Gemini del agente
+        gemini_client = self.agent.gemini_client
+        
+        # Obtener el tipo de programa del usuario si está disponible
+        try:
+            # Intentar obtener el tipo de programa del contexto del agente
+            program_type = getattr(self.agent, "program_type", "GENERAL")
+            program_def = None
+            
+            if program_type != "GENERAL":
+                program_def = get_program_definition(program_type)
+                logger.info(f"Generando protocolo de biohacking para programa {program_type}")
+        except Exception as e:
+            logger.warning(f"Error al obtener tipo de programa: {e}. Usando enfoque general.")
+            program_type = "GENERAL"
+            program_def = None
+        
+        # Preparar contexto específico del programa
+        program_context = ""
+        if program_def:
+            program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+            program_context += f"- {program_def.get('description', '')}\n"
+            program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+            
+            # Añadir consideraciones especiales para biohacking según el programa
+            if program_type == "PRIME":
+                program_context += "\nConsideraciones especiales para biohacking en PRIME:\n"
+                program_context += "- Enfoque en optimización del rendimiento físico y mental\n"
+                program_context += "- Protocolos para mejorar la recuperación y reducir la inflamación\n"
+                program_context += "- Estrategias para optimizar hormonas relacionadas con el rendimiento\n"
+                program_context += "- Técnicas para mejorar la calidad del sueño y la recuperación\n"
+            elif program_type == "LONGEVITY":
+                program_context += "\nConsideraciones especiales para biohacking en LONGEVITY:\n"
+                program_context += "- Enfoque en intervenciones que promueven la longevidad y salud a largo plazo\n"
+                program_context += "- Protocolos para optimizar biomarcadores de envejecimiento\n"
+                program_context += "- Estrategias para mejorar la salud mitocondrial y celular\n"
+                program_context += "- Técnicas para reducir la inflamación crónica y el estrés oxidativo\n"
+        
         # Construir el prompt para el modelo
         prompt = f"""
-        Eres un experto en biohacking y optimización biológica.
+        Eres un experto en biohacking y optimización biológica especializado en programas {program_type}.
         
         El usuario solicita un protocolo de biohacking con la siguiente consulta:
         "{query}"
@@ -98,14 +140,12 @@ class BiohackingProtocolSkill(GoogleADKSkill):
         - Género: {gender if gender else "No especificado"}
         - Condiciones de salud: {', '.join(health_conditions) if health_conditions else "No especificadas"}
         - Objetivos: {', '.join(goals) if goals else "No especificados"}
+        {program_context}
         
-        Proporciona un protocolo de biohacking detallado y personalizado, basado en evidencia científica.
+        Proporciona un protocolo de biohacking detallado y personalizado para el programa {program_type}, basado en evidencia científica.
         Incluye recomendaciones específicas sobre dieta, suplementos, ejercicio, sueño, y otras intervenciones relevantes.
         Estructura tu respuesta en secciones claras y proporciona una justificación científica para cada recomendación.
         """
-        
-        # Obtener cliente Gemini del agente
-        gemini_client = self.agent.gemini_client
         
         # Generar respuesta utilizando Gemini
         response_text = await gemini_client.generate_response(prompt, temperature=0.7)
@@ -115,12 +155,16 @@ class BiohackingProtocolSkill(GoogleADKSkill):
         Basándote en la consulta del usuario:
         "{query}"
         
+        Para un usuario del programa {program_type}:
+        {program_context}
+        
         Genera un protocolo de biohacking estructurado en formato JSON con los siguientes campos:
-        - objective: objetivo principal del protocolo
+        - objective: objetivo principal del protocolo adaptado al programa {program_type}
         - duration: duración recomendada
-        - interventions: objeto con intervenciones (diet, supplements, exercise, sleep, etc.)
+        - program_type: tipo de programa ("{program_type}")
+        - interventions: objeto con intervenciones (diet, supplements, exercise, sleep, etc.) adaptadas al programa {program_type}
         - schedule: cronograma diario/semanal
-        - metrics: métricas para seguimiento
+        - metrics: métricas para seguimiento, priorizando las relevantes para {program_type}
         - precautions: precauciones y contraindicaciones
         
         Devuelve SOLO el JSON, sin explicaciones adicionales.
@@ -511,6 +555,10 @@ class BiohackingInnovator(ADKAgent):
             **kwargs
         )
         
+        # Inicializar el servicio de clasificación de programas
+        self.gemini_client = gemini_client or GeminiClient()
+        self.program_classification_service = ProgramClassificationService(self.gemini_client)
+        
         logger.info(f"Agente BiohackingInnovator inicializado con ID: {agent_id}")
     
     async def _get_context(self, user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -745,6 +793,29 @@ class BiohackingInnovator(ADKAgent):
                 if user_profile:
                     context["user_profile"] = user_profile
         
+        # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+        program_context = {
+            "user_profile": user_profile or {},
+            "goals": user_profile.get("goals", []) if user_profile else []
+        }
+        
+        try:
+            # Clasificar el tipo de programa del usuario
+            program_type = await self.program_classification_service.classify_program_type(program_context)
+            logger.info(f"Tipo de programa determinado para biohacking: {program_type}")
+            
+            # Obtener definición del programa para personalizar las recomendaciones
+            program_def = get_program_definition(program_type)
+            
+            # Guardar el tipo de programa en el contexto
+            context["program_type"] = program_type
+            if program_def:
+                context["program_objective"] = program_def.get("objective", "")
+        except Exception as e:
+            logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+            program_type = "GENERAL"
+            program_def = None
+        
         # Clasificar el tipo de consulta utilizando el adaptador del Intent Analyzer
         query_type = await self._classify_query(input_text)
         capabilities_used = []
@@ -891,6 +962,7 @@ class BiohackingInnovator(ADKAgent):
             "capabilities_used": capabilities_used,
             "metadata": {
                 "query_type": query_type,
+                "program_type": program_type,
                 "execution_time": execution_time,
                 "session_id": session_id
             }

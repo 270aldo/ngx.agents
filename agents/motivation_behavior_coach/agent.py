@@ -28,6 +28,10 @@ from core.logging_config import get_logger
 from adk.agent import Skill
 from adk.toolkit import Toolkit
 
+# Importar el servicio de clasificación de programas y definiciones
+from services.program_classification_service import ProgramClassificationService
+from agents.shared.program_definitions import get_program_definition
+
 # Importar esquemas para las skills
 from agents.motivation_behavior_coach.schemas import (
     HabitFormationInput, HabitFormationOutput,
@@ -154,7 +158,7 @@ class MotivationBehaviorCoach(ADKAgent):
             description=description,
             model=_model,
             instruction=_instruction,
-            state_manager=state_manager,
+            state_manager=None,  # Ya no usamos el state_manager original
             adk_toolkit=adk_toolkit,
             capabilities=_capabilities,
             a2a_server_url=a2a_server_url,
@@ -164,6 +168,9 @@ class MotivationBehaviorCoach(ADKAgent):
         # Configurar clientes adicionales
         self.gemini_client = GeminiClient(model_name=self.model)
         self.supabase_client = SupabaseClient()
+        
+        # Inicializar el servicio de clasificación de programas
+        self.program_classification_service = ProgramClassificationService(self.gemini_client)
         
         # Configurar sistema de instrucciones para Gemini
         self.system_instructions = """Eres un coach especializado en motivación y cambio de comportamiento. 
@@ -717,6 +724,10 @@ class MotivationBehaviorCoach(ADKAgent):
                 input_data.user_profile
             )
             
+            # Obtener el tipo de programa utilizado para las estrategias
+            program_type = motivation_data.get("program_type", "GENERAL")
+            program_objective = motivation_data.get("program_objective", "")
+            
             # Crear las estrategias de motivación
             strategies = []
             for strategy_data in motivation_data.get("strategies", []):
@@ -726,7 +737,7 @@ class MotivationBehaviorCoach(ADKAgent):
                         description=strategy_data.get("description", "Descripción de la estrategia"),
                         implementation=strategy_data.get("implementation", "Pasos para implementar"),
                         science_behind=strategy_data.get("science_behind", "Respaldado por investigaciones en psicología positiva"),
-                        example=strategy_data.get("example", "Ejemplo de aplicación")
+                        example=strategy_data.get("example", f"Ejemplo de aplicación para programa {program_type}")
                     ))
                 elif isinstance(strategy_data, str):
                     strategies.append(MotivationStrategy(
@@ -734,7 +745,7 @@ class MotivationBehaviorCoach(ADKAgent):
                         description=strategy_data,
                         implementation="Implementar según las circunstancias personales",
                         science_behind="Basado en principios de psicología positiva",
-                        example="Ejemplo personalizado"
+                        example=f"Ejemplo personalizado para programa {program_type}"
                     ))
             
             # Si no hay estrategias, crear al menos una predeterminada
@@ -744,15 +755,28 @@ class MotivationBehaviorCoach(ADKAgent):
                     description="Visualizar el resultado deseado para aumentar la motivación",
                     implementation="Dedica 5 minutos cada mañana a visualizar el logro de tus objetivos",
                     science_behind="Basado en investigaciones sobre neuroplasticidad y priming mental",
-                    example="Un atleta que visualiza su victoria antes de la competencia"
+                    example=f"Un atleta de programa {program_type} que visualiza su victoria antes de la competencia"
                 ))
+            
+            # Personalizar el análisis según el programa
+            analysis = motivation_data.get("analysis", "Análisis motivacional personalizado")
+            if program_objective:
+                analysis = f"[{program_type}] {analysis}\n\nObjetivo del programa: {program_objective}"
+            
+            # Personalizar el enfoque a largo plazo según el programa
+            long_term_approach = motivation_data.get("long_term_approach", "Enfoque a largo plazo para mantener la motivación")
+            if program_type == "PRIME":
+                long_term_approach = f"[PRIME] {long_term_approach}\n\nEnfoque en rendimiento sostenible y progresión continua."
+            elif program_type == "LONGEVITY":
+                long_term_approach = f"[LONGEVITY] {long_term_approach}\n\nEnfoque en hábitos sostenibles y mejora de biomarcadores a largo plazo."
             
             # Crear la salida de la skill
             return MotivationStrategiesOutput(
-                analysis=motivation_data.get("analysis", "Análisis motivacional personalizado"),
+                analysis=analysis,
                 strategies=strategies,
                 daily_practices=motivation_data.get("daily_practices", ["Práctica diaria recomendada"]),
-                long_term_approach=motivation_data.get("long_term_approach", "Enfoque a largo plazo para mantener la motivación")
+                long_term_approach=long_term_approach,
+                program_type=program_type
             )
             
         except Exception as e:
@@ -782,20 +806,63 @@ class MotivationBehaviorCoach(ADKAgent):
         Returns:
             Dict[str, Any]: Estrategias de motivación estructuradas
         """
+        # Determinar el tipo de programa del usuario para personalizar las estrategias
+        context = {
+            "user_profile": user_profile or {},
+            "goals": user_profile.get("goals", []) if user_profile else []
+        }
+        
+        try:
+            # Clasificar el tipo de programa del usuario
+            program_type = await self.program_classification_service.classify_program_type(context)
+            logger.info(f"Tipo de programa determinado para estrategias de motivación: {program_type}")
+            
+            # Obtener definición del programa para personalizar las estrategias
+            program_def = get_program_definition(program_type)
+            
+            # Preparar contexto específico del programa
+            program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+            
+            if program_def:
+                program_context += f"- {program_def.get('description', '')}\n"
+                program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                
+                # Añadir consideraciones especiales para las estrategias según el programa
+                if program_type == "PRIME":
+                    program_context += "\nConsideraciones especiales para motivación en PRIME:\n"
+                    program_context += "- Enfoque en motivación para rendimiento y superación personal\n"
+                    program_context += "- Estrategias para mantener la consistencia en entrenamientos intensos\n"
+                    program_context += "- Técnicas para superar mesetas de rendimiento\n"
+                    program_context += "- Motivación basada en logros y mejoras medibles\n"
+                elif program_type == "LONGEVITY":
+                    program_context += "\nConsideraciones especiales para motivación en LONGEVITY:\n"
+                    program_context += "- Enfoque en motivación para hábitos sostenibles a largo plazo\n"
+                    program_context += "- Estrategias para mantener la consistencia en prácticas de bienestar\n"
+                    program_context += "- Técnicas para valorar mejoras en biomarcadores y salud general\n"
+                    program_context += "- Motivación basada en calidad de vida y bienestar\n"
+        except Exception as e:
+            logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando estrategias generales.")
+            program_type = "GENERAL"
+            program_context = ""
+            program_def = None
+        
         prompt = (
+            f"{self.system_instructions}\n\n"
+            f"Eres un coach especializado en motivación y cambio de comportamiento para programas {program_type}.\n\n"
             f"Genera estrategias de motivación personalizadas basadas en la siguiente solicitud:\n\n"
             f"\"{user_input}\"\n\n"
+            f"{program_context}\n\n"
             f"El resultado debe incluir:\n"
-            f"1. Análisis motivacional de la situación\n"
-            f"2. Lista de estrategias de motivación aplicables (mínimo 3)\n"
-            f"3. Prácticas diarias recomendadas\n"
-            f"4. Enfoque a largo plazo\n\n"
+            f"1. Análisis motivacional de la situación específico para el programa {program_type}\n"
+            f"2. Lista de estrategias de motivación aplicables (mínimo 3) adaptadas al programa {program_type}\n"
+            f"3. Prácticas diarias recomendadas para mantener la motivación en este programa\n"
+            f"4. Enfoque a largo plazo para sostener el progreso\n\n"
             f"Para cada estrategia, incluye:\n"
             f"- Nombre de la estrategia\n"
             f"- Descripción detallada\n"
             f"- Pasos para implementarla\n"
             f"- Ciencia detrás de la estrategia\n"
-            f"- Ejemplo de aplicación\n\n"
+            f"- Ejemplo de aplicación específico para el programa {program_type}\n\n"
             f"Devuelve el resultado en formato JSON estructurado."
         )
         
@@ -852,6 +919,14 @@ class MotivationBehaviorCoach(ADKAgent):
                         ],
                         "long_term_approach": "Enfoque gradual y consistente, celebrando pequeños logros en el camino"
                     }
+            
+            # Añadir información del programa al resultado
+            try:
+                response["program_type"] = program_type
+                if program_def:
+                    response["program_objective"] = program_def.get("objective", "")
+            except Exception as e:
+                logger.error(f"Error al añadir información del programa: {str(e)}")
             
             return response
         except Exception as e:

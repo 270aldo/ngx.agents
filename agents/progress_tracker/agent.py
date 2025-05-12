@@ -42,6 +42,8 @@ from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
 from infrastructure.adapters.a2a_adapter import a2a_adapter
 from core.logging_config import get_logger
+from services.program_classification_service import ProgramClassificationService
+from agents.shared.program_definitions import get_program_definition
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -112,6 +114,10 @@ class ProgressTracker(ADKAgent):
         # Crear un toolkit de ADK
         adk_toolkit = Toolkit()
 
+        # Inicializar el servicio de clasificación de programas
+        self.gemini_client = GeminiClient()
+        self.program_classification_service = ProgramClassificationService(self.gemini_client)
+        
         # Inicializar el agente ADK
         super().__init__(
             agent_id=agent_id,
@@ -161,8 +167,53 @@ class ProgressTracker(ADKAgent):
         user_id = input_data.user_id
         time_period = input_data.time_period
         metrics = input_data.metrics
+        user_profile = input_data.user_profile if hasattr(input_data, 'user_profile') else {}
         
         try:
+            # Determinar el tipo de programa del usuario para personalizar el análisis
+            context = {
+                "user_profile": user_profile,
+                "goals": user_profile.get("goals", []) if user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para análisis de progreso: {program_type}")
+                
+                # Obtener definición del programa para personalizar el análisis
+                program_def = get_program_definition(program_type)
+                
+                # Preparar contexto específico del programa
+                program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+                
+                if program_def:
+                    program_context += f"- {program_def.get('description', '')}\n"
+                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                    
+                    # Añadir métricas clave específicas del programa si están disponibles
+                    if program_def.get("key_metrics"):
+                        program_context += "- Métricas clave para este programa:\n"
+                        for metric in program_def.get("key_metrics", []):
+                            program_context += f"  * {metric}\n"
+                    
+                    # Añadir consideraciones especiales para el análisis según el programa
+                    if program_type == "PRIME":
+                        program_context += "\nConsideraciones especiales para PRIME:\n"
+                        program_context += "- Enfoque en métricas de rendimiento y progresión\n"
+                        program_context += "- Análisis de tendencias de capacidad de trabajo\n"
+                        program_context += "- Identificación de patrones de recuperación\n"
+                    elif program_type == "LONGEVITY":
+                        program_context += "\nConsideraciones especiales para LONGEVITY:\n"
+                        program_context += "- Enfoque en métricas de salud a largo plazo\n"
+                        program_context += "- Análisis de tendencias de biomarcadores\n"
+                        program_context += "- Identificación de patrones de bienestar general\n"
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando análisis general.")
+                program_type = "GENERAL"
+                program_context = ""
+                program_def = None
+            
             # 1. Obtener datos (simulado por ahora, idealmente de Supabase o StateManager)
             user_data = await self._get_user_data(user_id, time_period, metrics)
             if not user_data:
@@ -171,7 +222,14 @@ class ProgressTracker(ADKAgent):
             # 2. Preparar prompt para Gemini
             metrics_str = ", ".join(metrics) if metrics else "todas las métricas disponibles"
             data_summary = json.dumps(user_data, indent=2, default=str)[:1000] # Resumen de datos
-            prompt = f"{self.system_instructions}\nAnaliza los siguientes datos de progreso para el usuario {user_id} durante el periodo '{time_period}' para las métricas: {metrics_str}.\nDatos:\n{data_summary}\n\nIdentifica tendencias clave, insights y proporciona un resumen conciso del análisis en formato JSON." 
+            
+            prompt = f"{self.system_instructions}\n"
+            prompt += f"Eres un analista especializado en seguimiento de progreso para programas {program_type}.\n"
+            prompt += f"Analiza los siguientes datos de progreso para el usuario {user_id} durante el periodo '{time_period}' para las métricas: {metrics_str}.\n"
+            prompt += f"Datos:\n{data_summary}\n"
+            prompt += f"{program_context}\n"
+            prompt += f"Identifica tendencias clave, insights y proporciona un análisis personalizado para el programa {program_type} en formato JSON.\n"
+            prompt += f"Incluye recomendaciones específicas basadas en los objetivos del programa {program_type}."
 
             # 3. Llamar a Gemini para análisis
             analysis_result = await self.gemini_client.generate_structured_output(prompt)
@@ -179,11 +237,16 @@ class ProgressTracker(ADKAgent):
             if not isinstance(analysis_result, dict):
                 # Si no es JSON, intentar envolverlo
                 analysis_result = {"analysis_summary": str(analysis_result)}
+            
+            # Añadir información del programa al resultado
+            analysis_result["program_type"] = program_type
+            if program_def:
+                analysis_result["program_objective"] = program_def.get("objective", "")
 
             # 4. (Opcional) Guardar análisis en estado
             analysis_id = f"analysis_{user_id}_{time.time():.0f}"
 
-            logger.info(f"Análisis completado para user {user_id}")
+            logger.info(f"Análisis completado para user {user_id} con programa {program_type}")
             return AnalyzeProgressOutput(
                 analysis_id=analysis_id,
                 result=analysis_result,
@@ -201,14 +264,39 @@ class ProgressTracker(ADKAgent):
         metric = input_data.metric
         time_period = input_data.time_period
         chart_type = input_data.chart_type
+        user_profile = input_data.user_profile if hasattr(input_data, 'user_profile') else {}
         
         try:
+            # Determinar el tipo de programa del usuario para personalizar la visualización
+            context = {
+                "user_profile": user_profile,
+                "goals": user_profile.get("goals", []) if user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para visualización de progreso: {program_type}")
+                
+                # Obtener definición del programa para personalizar la visualización
+                program_def = get_program_definition(program_type)
+                
+                # Verificar si la métrica es clave para el programa
+                is_key_metric = False
+                if program_def and program_def.get("key_metrics"):
+                    is_key_metric = metric in program_def.get("key_metrics", [])
+                    if is_key_metric:
+                        logger.info(f"La métrica {metric} es una métrica clave para el programa {program_type}")
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando visualización general.")
+                program_type = "GENERAL"
+                program_def = None
+                is_key_metric = False
+            
             # 1. Obtener datos (simulado)
             user_data = await self._get_user_data(user_id, time_period, [metric])
             if not user_data or metric not in user_data or not user_data[metric]:
-                raise ValueError(f"No se encontraron datos para la métrica '{metric}'.")
-
-            # Extraer fechas y valores
+                raise ValueError(f"No se encontraron datos para la métrica '{metric}'.")  # Extraer fechas y valores
             dates = [item['date'] for item in user_data[metric]]
             values = [item['value'] for item in user_data[metric]]
             
@@ -219,20 +307,103 @@ class ProgressTracker(ADKAgent):
                 logger.warning(f"No se pudieron parsear algunas fechas para visualización: {dates}")
                 # Intentar continuar o devolver error
 
-            # 2. Generar gráfico
+            # 2. Generar gráfico personalizado según el tipo de programa
             plt.figure(figsize=(10, 5))
-            if chart_type == 'line':
-                plt.plot(dates, values, marker='o')
-            elif chart_type == 'bar':
-                plt.bar(dates, values)
+            
+            # Personalizar colores y estilos según el programa
+            if program_type == "PRIME":
+                color = '#1E88E5'  # Azul para PRIME
+                linestyle = '-'
+                linewidth = 2
+                marker_size = 8
+                title_prefix = "PRIME - "
+            elif program_type == "LONGEVITY":
+                color = '#43A047'  # Verde para LONGEVITY
+                linestyle = '-'
+                linewidth = 2
+                marker_size = 8
+                title_prefix = "LONGEVITY - "
             else:
-                plt.plot(dates, values, marker='o') # Default a línea
+                color = '#757575'  # Gris para GENERAL
+                linestyle = '-'
+                linewidth = 1.5
+                marker_size = 6
+                title_prefix = ""
+            
+            # Destacar métricas clave con colores más intensos
+            if is_key_metric:
+                if program_type == "PRIME":
+                    color = '#0D47A1'  # Azul más intenso
+                    linewidth = 3
+                elif program_type == "LONGEVITY":
+                    color = '#2E7D32'  # Verde más intenso
+                    linewidth = 3
+                else:
+                    color = '#424242'  # Gris más intenso
+                    linewidth = 2
+            
+            # Generar el gráfico según el tipo especificado
+            if chart_type == 'line':
+                plt.plot(dates, values, marker='o', color=color, linestyle=linestyle, 
+                         linewidth=linewidth, markersize=marker_size)
+                
+                # Añadir línea de tendencia para métricas clave
+                if is_key_metric and len(values) > 2:
+                    try:
+                        # Crear índices para las fechas
+                        x = np.arange(len(dates))
+                        # Calcular línea de tendencia
+                        z = np.polyfit(x, values, 1)
+                        p = np.poly1d(z)
+                        # Dibujar línea de tendencia
+                        plt.plot(dates, p(x), "--", color=color, alpha=0.7, 
+                                 linewidth=linewidth-0.5)
+                    except Exception as e:
+                        logger.warning(f"No se pudo generar línea de tendencia: {e}")
+            elif chart_type == 'bar':
+                plt.bar(dates, values, color=color, alpha=0.8, width=0.7)
+            else:
+                plt.plot(dates, values, marker='o', color=color, linestyle=linestyle, 
+                         linewidth=linewidth, markersize=marker_size)
+            
+            # Añadir zonas objetivo si están definidas para el programa y la métrica
+            if program_def and program_def.get("metric_targets") and metric in program_def.get("metric_targets", {}):
+                try:
+                    target_range = program_def["metric_targets"][metric]
+                    if isinstance(target_range, dict) and "min" in target_range and "max" in target_range:
+                        min_val = target_range["min"]
+                        max_val = target_range["max"]
+                        plt.axhspan(min_val, max_val, alpha=0.2, color='green', label="Rango objetivo")
+                        plt.legend()
+                except Exception as e:
+                    logger.warning(f"No se pudo añadir zona objetivo: {e}")
                  
             plt.xlabel("Fecha")
             plt.ylabel(metric.capitalize())
-            plt.title(f"Progreso de {metric.capitalize()} para Usuario {user_id} ({time_period})")
+            plt.title(f"{title_prefix}Progreso de {metric.capitalize()} para Usuario {user_id} ({time_period})")
             plt.xticks(rotation=45)
             plt.tight_layout()
+            
+            # Añadir anotaciones para valores destacados
+            if is_key_metric:
+                try:
+                    # Encontrar valor máximo
+                    max_idx = values.index(max(values))
+                    plt.annotate(f"Máx: {values[max_idx]}", 
+                                xy=(dates[max_idx], values[max_idx]),
+                                xytext=(10, 10),
+                                textcoords="offset points",
+                                arrowprops=dict(arrowstyle="->", color=color))
+                    
+                    # Encontrar valor mínimo
+                    min_idx = values.index(min(values))
+                    plt.annotate(f"Mín: {values[min_idx]}", 
+                                xy=(dates[min_idx], values[min_idx]),
+                                xytext=(10, -15),
+                                textcoords="offset points",
+                                arrowprops=dict(arrowstyle="->", color=color))
+                except Exception as e:
+                    logger.warning(f"No se pudieron añadir anotaciones: {e}")
             
             # 3. Guardar gráfico
             viz_filename = f"viz_{user_id}_{metric}_{time.time():.0f}.png"
@@ -265,8 +436,57 @@ class ProgressTracker(ADKAgent):
         period1 = input_data.period1
         period2 = input_data.period2
         metrics = input_data.metrics
+        user_profile = input_data.user_profile if hasattr(input_data, 'user_profile') else {}
         
         try:
+            # Determinar el tipo de programa del usuario para personalizar la comparación
+            context = {
+                "user_profile": user_profile,
+                "goals": user_profile.get("goals", []) if user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para comparación de progreso: {program_type}")
+                
+                # Obtener definición del programa para personalizar la comparación
+                program_def = get_program_definition(program_type)
+                
+                # Preparar contexto específico del programa
+                program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+                
+                if program_def:
+                    program_context += f"- {program_def.get('description', '')}\n"
+                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                    
+                    # Añadir métricas clave específicas del programa si están disponibles
+                    key_metrics_in_request = []
+                    if program_def.get("key_metrics"):
+                        program_context += "- Métricas clave para este programa:\n"
+                        for metric in program_def.get("key_metrics", []):
+                            program_context += f"  * {metric}\n"
+                            if metric in metrics:
+                                key_metrics_in_request.append(metric)
+                    
+                    # Añadir consideraciones especiales para la comparación según el programa
+                    if program_type == "PRIME":
+                        program_context += "\nConsideraciones especiales para comparación en PRIME:\n"
+                        program_context += "- Enfoque en progresión de rendimiento y capacidad de trabajo\n"
+                        program_context += "- Análisis de consistencia en patrones de entrenamiento\n"
+                        program_context += "- Evaluación de adaptación a cargas de trabajo\n"
+                    elif program_type == "LONGEVITY":
+                        program_context += "\nConsideraciones especiales para comparación en LONGEVITY:\n"
+                        program_context += "- Enfoque en tendencias de biomarcadores y salud a largo plazo\n"
+                        program_context += "- Análisis de estabilidad en métricas de salud\n"
+                        program_context += "- Evaluación de mejoras sostenibles en bienestar general\n"
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando comparación general.")
+                program_type = "GENERAL"
+                program_context = ""
+                program_def = None
+                key_metrics_in_request = []
+            
             # 1. Obtener datos para ambos periodos (simulado)
             data_p1 = await self._get_user_data(user_id, period1, metrics)
             data_p2 = await self._get_user_data(user_id, period2, metrics)
@@ -278,18 +498,35 @@ class ProgressTracker(ADKAgent):
             metrics_str = ", ".join(metrics)
             summary_p1 = json.dumps(data_p1, indent=2, default=str)[:500]
             summary_p2 = json.dumps(data_p2, indent=2, default=str)[:500]
-            prompt = f"""{self.system_instructions}\nCompara los datos de progreso del usuario {user_id} para las métricas '{metrics_str}' entre el periodo '{period1}' y el periodo '{period2}'.
-            Datos Periodo 1 ({period1}):\n{summary_p1}\n
-            Datos Periodo 2 ({period2}):\n{summary_p2}\n
-            Identifica las diferencias clave, calcula los cambios porcentuales si aplica, y proporciona un resumen de la comparación en formato JSON."""
+            
+            # Destacar métricas clave si existen
+            key_metrics_str = ", ".join(key_metrics_in_request) if key_metrics_in_request else ""
+            key_metrics_context = f"\nPresta especial atención a las siguientes métricas clave para el programa {program_type}: {key_metrics_str}" if key_metrics_in_request else ""
+            
+            prompt = f"{self.system_instructions}\n"
+            prompt += f"Eres un analista especializado en comparación de progreso para programas {program_type}.\n"
+            prompt += f"Compara los datos de progreso del usuario {user_id} para las métricas '{metrics_str}' entre el periodo '{period1}' y el periodo '{period2}'.\n"
+            prompt += f"Datos Periodo 1 ({period1}):\n{summary_p1}\n\n"
+            prompt += f"Datos Periodo 2 ({period2}):\n{summary_p2}\n\n"
+            prompt += f"{program_context}\n"
+            prompt += f"{key_metrics_context}\n"
+            prompt += f"Identifica las diferencias clave, calcula los cambios porcentuales si aplica, y proporciona un análisis personalizado para el programa {program_type} en formato JSON.\n"
+            prompt += f"Incluye recomendaciones específicas basadas en los objetivos del programa {program_type}."
 
             # 3. Llamar a Gemini para comparación
             comparison_result = await self.gemini_client.generate_structured_output(prompt)
 
             if not isinstance(comparison_result, dict):
                 comparison_result = {"comparison_summary": str(comparison_result)}
+            
+            # Añadir información del programa al resultado
+            comparison_result["program_type"] = program_type
+            if program_def:
+                comparison_result["program_objective"] = program_def.get("objective", "")
+                if key_metrics_in_request:
+                    comparison_result["key_metrics_analyzed"] = key_metrics_in_request
 
-            logger.info(f"Comparación completada para user {user_id}")
+            logger.info(f"Comparación completada para user {user_id} con programa {program_type}")
             return CompareProgressOutput(
                 result=comparison_result,
                 status="success"
