@@ -24,6 +24,8 @@ from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
 from infrastructure.adapters.a2a_adapter import a2a_adapter
 from core.logging_config import get_logger
+from services.program_classification_service import ProgramClassificationService
+from agents.shared.program_definitions import get_program_definition
 
 # Importar Skill y Toolkit desde adk.agent
 from adk.agent import Skill
@@ -94,6 +96,10 @@ class PrecisionNutritionArchitect(ADKAgent):
         _model = model or self.DEFAULT_MODEL
         _instruction = instruction or self.DEFAULT_INSTRUCTION
         _mcp_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
+        
+        # Inicializar el servicio de clasificación de programas
+        self.gemini_client = GeminiClient()
+        self.program_classification_service = ProgramClassificationService(self.gemini_client)
         
         # Definir las skills antes de llamar al constructor de ADKAgent
         self.skills = [
@@ -421,10 +427,36 @@ class PrecisionNutritionArchitect(ADKAgent):
         logger.info(f"Ejecutando habilidad: _skill_recommend_supplements con input: {input_data.user_input[:30]}...")
         
         try:
-            # Generar las recomendaciones de suplementos
+            # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+            context = {
+                "user_profile": input_data.user_profile or {},
+                "goals": input_data.user_profile.get("goals", []) if input_data.user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para recomendaciones de suplementos: {program_type}")
+                
+                # Obtener definición del programa para personalizar las recomendaciones
+                program_def = get_program_definition(program_type)
+                
+                # Verificar si hay recomendaciones de suplementos específicas para el programa
+                program_supplements = []
+                if program_def and program_def.get("key_protocols") and "supplementation" in program_def.get("key_protocols", {}):
+                    program_supplements = program_def.get("key_protocols", {}).get("supplementation", [])
+                    logger.info(f"Encontradas {len(program_supplements)} recomendaciones de suplementos para el programa {program_type}")
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+                program_type = "GENERAL"
+                program_supplements = []
+            
+            # Generar recomendaciones de suplementos
             rec_dict = await self._generate_supplement_recommendation(
                 input_data.user_input,
-                input_data.user_profile
+                input_data.user_profile,
+                program_type=program_type,
+                program_supplements=program_supplements
             )
             
             # Crear la salida de la skill
@@ -560,41 +592,78 @@ class PrecisionNutritionArchitect(ADKAgent):
         Returns:
             Dict[str, Any]: Plan de comidas generado
         """
-        # Preparar prompt para el modelo
-        prompt = f"""
-        {self.instruction}
+        logger.info(f"Generando plan de comidas para entrada: {user_input[:50]}...")
         
-        Genera un plan nutricional personalizado basado en la siguiente solicitud:
-        
-        "{user_input}"
-        
-        El plan debe incluir:
-        1. Objetivo nutricional principal
-        2. Distribución de macronutrientes recomendada
-        3. Calorías diarias estimadas
-        4. Comidas diarias con ejemplos específicos
-        5. Alimentos recomendados y alimentos a evitar
-        6. Estrategia de hidratación
-        7. Consideraciones de timing nutricional (crononutrición)
-        
-        Devuelve el plan en formato JSON estructurado.
-        """
-
-        # Añadir información del perfil si está disponible
-        if user_profile:
-            prompt += f"""
-            
-            Considera la siguiente información del usuario:
-            - Nombre: {user_profile.get('name', 'N/A')}
-            - Edad: {user_profile.get('age', 'N/A')}
-            - Peso: {user_profile.get('weight', 'N/A')}
-            - Altura: {user_profile.get('height', 'N/A')}
-            - Objetivos: {user_profile.get('goals', 'N/A')}
-            - Restricciones alimenticias: {user_profile.get('dietary_restrictions', 'N/A')}
-            - Alergias: {user_profile.get('allergies', 'N/A')}
-            """
-
         try:
+            # Determinar el tipo de programa del usuario para personalizar el plan
+            context = {
+                "user_profile": user_profile or {},
+                "goals": user_profile.get("goals", []) if user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para plan de comidas: {program_type}")
+                
+                # Obtener definición del programa para personalizar el plan
+                program_def = get_program_definition(program_type)
+                program_context = f"""\nCONTEXTO DEL PROGRAMA {program_type}:\n"""
+                
+                if program_def:
+                    program_context += f"- {program_def.get('description', '')}\n"
+                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                    
+                    # Añadir necesidades nutricionales específicas del programa si están disponibles
+                    if program_def.get("nutritional_needs"):
+                        program_context += "- Necesidades nutricionales específicas:\n"
+                        for need in program_def.get("nutritional_needs", []):
+                            program_context += f"  * {need}\n"
+                    
+                    # Añadir estrategias nutricionales si están disponibles
+                    if program_def.get("key_protocols") and "nutrition" in program_def.get("key_protocols", {}):
+                        program_context += "- Estrategias nutricionales recomendadas:\n"
+                        for strategy in program_def.get("key_protocols", {}).get("nutrition", []):
+                            program_context += f"  * {strategy}\n"
+                
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando plan general.")
+                program_type = "GENERAL"
+                program_context = ""
+            
+            # Preparar prompt para el modelo
+            prompt = f"""
+            Eres un nutricionista experto especializado en nutrición de precisión. 
+            Genera un plan de comidas detallado y personalizado basado en la siguiente solicitud:
+            
+            "{user_input}"
+            {program_context}
+            
+            El plan debe incluir:
+            1. Comidas para 7 días (desayuno, almuerzo, cena y snacks)
+            2. Cantidades aproximadas de cada ingrediente
+            3. Macronutrientes estimados por comida
+            4. Recomendaciones generales alineadas con el programa {program_type}
+            
+            Devuelve el plan en formato JSON estructurado.
+            """
+            
+            # Añadir información del perfil si está disponible
+            if user_profile:
+                prompt += f"""
+                
+                Considera la siguiente información del usuario:
+                - Edad: {user_profile.get('age', 'No disponible')}
+                - Género: {user_profile.get('gender', 'No disponible')}
+                - Peso: {user_profile.get('weight', 'No disponible')} {user_profile.get('weight_unit', 'kg')}
+                - Altura: {user_profile.get('height', 'No disponible')} {user_profile.get('height_unit', 'cm')}
+                - Nivel de actividad: {user_profile.get('activity_level', 'No disponible')}
+                - Objetivos: {', '.join(user_profile.get('goals', ['No disponible']))}
+                - Restricciones dietéticas: {', '.join(user_profile.get('dietary_restrictions', ['Ninguna']))}
+                - Alergias: {', '.join(user_profile.get('allergies', ['Ninguna']))}
+                - Preferencias: {', '.join(user_profile.get('preferences', ['Ninguna']))}
+                """
+            
             # Generar el plan nutricional usando generate_text
             response_text = await self.gemini_client.generate_text(prompt)
 
@@ -693,31 +762,55 @@ class PrecisionNutritionArchitect(ADKAgent):
             }
 
     async def _generate_supplement_recommendation(
-        self, user_input: str, user_profile: Optional[Dict[str, Any]] = None
+        self, user_input: str, user_profile: Optional[Dict[str, Any]] = None,
+        program_type: str = "GENERAL", program_supplements: List[str] = None
     ) -> Dict[str, Any]:
         """
-        Genera recomendaciones de suplementación personalizadas basadas en la entrada del usuario y su perfil.
+        Genera recomendaciones de suplementación personalizadas basadas en la entrada del usuario, su perfil y tipo de programa.
         
         Args:
             user_input: Texto de entrada del usuario
             user_profile: Perfil del usuario con información relevante (opcional)
+            program_type: Tipo de programa del usuario (PRIME, LONGEVITY, etc.)
+            program_supplements: Lista de suplementos recomendados para el programa específico
             
         Returns:
             Dict[str, Any]: Recomendaciones de suplementación generadas
         """
+        logger.info(f"Generando recomendaciones de suplementos para programa: {program_type}")
+        
+        # Inicializar la lista de suplementos del programa si es None
+        if program_supplements is None:
+            program_supplements = []
+        
+        # Preparar contexto específico del programa para el prompt
+        program_context = ""
+        if program_type != "GENERAL" and program_supplements:
+            program_context = f"""
+            
+            CONTEXTO DEL PROGRAMA {program_type}:
+            Este usuario sigue un programa {program_type}, que tiene las siguientes recomendaciones específicas de suplementación:
+            {', '.join(program_supplements)}
+            
+            
+            Asegúrate de incluir estos suplementos en tus recomendaciones si son apropiados para la solicitud del usuario,
+            y explica cómo se alinean con los objetivos del programa {program_type}.
+            """
+        
         # Preparar prompt para el modelo
         prompt = f"""
-        {self.instruction}
+        Eres un experto en nutrición y suplementación personalizada.
         
         Genera recomendaciones de suplementación personalizadas basadas en la siguiente solicitud:
         
         "{user_input}"
+        {program_context}
         
         Las recomendaciones deben incluir:
-        1. Suplementos principales recomendados
+        1. Suplementos principales recomendados (prioriza los específicos del programa {program_type} si son relevantes)
         2. Dosis sugerida para cada suplemento
         3. Timing óptimo de consumo
-        4. Beneficios esperados
+        4. Beneficios esperados, especialmente en relación con los objetivos del programa {program_type}
         5. Posibles interacciones o precauciones
         6. Alternativas naturales cuando sea posible
         
@@ -729,13 +822,15 @@ class PrecisionNutritionArchitect(ADKAgent):
             prompt += f"""
             
             Considera la siguiente información del usuario:
-            - Nombre: {user_profile.get('name', 'N/A')}
-            - Edad: {user_profile.get('age', 'N/A')}
-            - Peso: {user_profile.get('weight', 'N/A')}
-            - Altura: {user_profile.get('height', 'N/A')}
-            - Objetivos: {user_profile.get('goals', 'N/A')}
-            - Restricciones alimenticias: {user_profile.get('dietary_restrictions', 'N/A')}
-            - Alergias: {user_profile.get('allergies', 'N/A')}
+            - Edad: {user_profile.get('age', 'No disponible')}
+            - Género: {user_profile.get('gender', 'No disponible')}
+            - Peso: {user_profile.get('weight', 'No disponible')} {user_profile.get('weight_unit', 'kg')}
+            - Altura: {user_profile.get('height', 'No disponible')} {user_profile.get('height_unit', 'cm')}
+            - Nivel de actividad: {user_profile.get('activity_level', 'No disponible')}
+            - Objetivos: {', '.join(user_profile.get('goals', ['No disponible']))}
+            - Restricciones dietéticas: {', '.join(user_profile.get('dietary_restrictions', ['Ninguna']))}
+            - Alergias: {', '.join(user_profile.get('allergies', ['Ninguna']))}
+            - Condiciones médicas: {', '.join(user_profile.get('medical_conditions', ['Ninguna']))}
             """
 
         try:
