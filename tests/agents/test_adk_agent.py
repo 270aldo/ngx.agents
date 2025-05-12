@@ -12,7 +12,7 @@ from adk.agent import Skill as GoogleADKSkill
 from adk.toolkit import Toolkit as GoogleADKToolkit
 
 from agents.base.adk_agent import ADKAgent
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
 

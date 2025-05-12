@@ -111,7 +111,7 @@ def print_results(results: List[Dict], total: int, correct: int, incorrect: int,
                 
                 # Mostrar recomendación
                 if result["uses_original"]:
-                    print("    Recomendación: Reemplazar 'from core.state_manager import' por 'from infrastructure.adapters.state_manager_adapter import'")
+                    print("    Recomendación: Utilizar 'from infrastructure.adapters.state_manager_adapter import' para acceder a la funcionalidad del State Manager")
 
 def main() -> int:
     """

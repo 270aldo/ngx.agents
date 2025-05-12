@@ -8,7 +8,7 @@ import uuid
 import pytest
 from typing import Dict, Any
 
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 
 
 @pytest.mark.asyncio

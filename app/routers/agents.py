@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 
 from core.auth import get_current_user
 from core.logging_config import get_logger
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from app.schemas.agent import AgentRunRequest, AgentRunResponse, AgentInfo, AgentListResponse
 from agents.base.base_agent import BaseAgent
 from tools.mcp_toolkit import MCPToolkit
@@ -39,7 +39,7 @@ def get_state_manager() -> StateManager:
     Returns:
         Instancia del StateManager
     """
-    return StateManager()
+    return state_manager_adapter
 
 
 def discover_agents() -> Dict[str, BaseAgent]:

@@ -10,7 +10,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from core.state_manager import ConversationContext
+from infrastructure.adapters.state_manager_adapter import ConversationContext
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 
 

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Path, Query, Back
 
 from core.auth import get_current_user
 from core.logging_config import get_logger
-from core.state_manager import StateManager, get_state_manager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from app.schemas.chat import ChatRequest, ChatResponse, AgentResponse
 from agents.orchestrator.agent import NGXNexusOrchestrator
 from config import settings
@@ -45,7 +45,7 @@ def get_orchestrator() -> NGXNexusOrchestrator:
 
     if _orchestrator_instance is None:
         logger.info("Creando nueva instancia de NGXNexusOrchestrator.")
-        state_manager = get_state_manager()
+        state_manager = state_manager_adapter
         
         # La URL para las llamadas HTTP A2A del Orquestador debe apuntar
         # al servidor FastAPI principal donde se exponen los endpoints /a2a/{agent_id}/process

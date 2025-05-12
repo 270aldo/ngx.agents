@@ -61,7 +61,7 @@ except ImportError:
 from agents.base.a2a_agent import A2AAgent 
 from clients.gemini_client import GeminiClient 
 from clients.supabase_client import SupabaseClient 
-from core.state_manager import ConversationContext
+from infrastructure.adapters.state_manager_adapter import ConversationContext
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter as state_manager
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result

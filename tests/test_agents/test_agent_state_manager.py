@@ -10,7 +10,7 @@ import pytest
 from typing import Dict, Any
 import json
 
-from core.state_manager import StateManager
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from agents.orchestrator.agent import NGXNexusOrchestrator
 from agents.progress_tracker.agent import ProgressTracker
 from agents.elite_training_strategist.agent import EliteTrainingStrategist
