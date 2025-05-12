@@ -23,6 +23,8 @@ from tools.mcp_client import MCPClient
 from agents.base.adk_agent import ADKAgent
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from core.logging_config import get_logger
+from services.program_classification_service import ProgramClassificationService
+from agents.shared.program_definitions import get_program_definition
 
 # Importar Skill y Toolkit desde adk.agent
 from adk.agent import Skill
@@ -92,6 +94,10 @@ class BiometricsInsightEngine(ADKAgent):
         _model = model or self.DEFAULT_MODEL
         _instruction = instruction or self.DEFAULT_INSTRUCTION
         _mcp_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
+        
+        # Inicializar el servicio de clasificación de programas
+        self.gemini_client = GeminiClient()
+        self.program_classification_service = ProgramClassificationService(self.gemini_client)
         
         # Crear directorio temporal para visualizaciones si es necesario
         self.tmp_dir = os.path.join(os.getcwd(), "tmp", "biometrics_viz")
@@ -248,100 +254,105 @@ class BiometricsInsightEngine(ADKAgent):
         Returns:
             BiometricAnalysisOutput: Análisis biométrico generado
         """
-        logger.info(f"Ejecutando habilidad: _skill_biometric_analysis con input: {input_data.user_input[:30]}...")
+        logger.info(f"Ejecutando skill de análisis biométrico con datos: {input_data}")
+        
+        # Obtener datos biométricos (en un caso real, se obtendrían de una API o base de datos)
+        biometric_data = input_data.biometric_data or self._get_sample_biometric_data()
+        user_profile = input_data.user_profile or {}
+        
+        # Determinar el tipo de programa del usuario para análisis personalizado
+        context = {
+            "user_profile": user_profile,
+            "goals": user_profile.get("goals", [])
+        }
         
         try:
-            # Obtener datos biométricos
-            biometric_data = input_data.biometric_data
-            if not biometric_data:
-                # Si no hay datos biométricos, usar datos de ejemplo
-                biometric_data = self._get_sample_biometric_data()
+            # Clasificar el tipo de programa del usuario
+            program_type = await self.program_classification_service.classify_program_type(context)
+            logger.info(f"Tipo de programa determinado para análisis biométrico: {program_type}")
             
-            # Preparar prompt para el modelo
-            prompt = f"""
-            Eres un especialista en análisis e interpretación de datos biométricos.
+            # Obtener definición del programa para personalizar el análisis
+            program_def = get_program_definition(program_type)
+            program_context = f"""\nCONTEXTO DEL PROGRAMA {program_type}:\n"""
             
-            Analiza los siguientes datos biométricos:
+            if program_def:
+                program_context += f"- {program_def.get('description', '')}\n"
+                program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                program_context += f"- Pilares: {', '.join(program_def.get('pillars', []))}\n"
+                program_context += f"- Necesidades: {', '.join(program_def.get('user_needs', []))}\n"
             
-            "{input_data.user_input}"
+        except Exception as e:
+            logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando análisis general.")
+            program_type = "GENERAL"
+            program_context = ""
+        
+        # Construir prompt para el análisis
+        prompt = f"""
+        Eres un experto en análisis de datos biométricos. Analiza los siguientes datos y proporciona insights 
+        personalizados y recomendaciones basadas en los patrones observados.
+        
+        DATOS BIOMÉTRICOS:
+        {json.dumps(biometric_data, indent=2)}
+        
+        PERFIL DEL USUARIO:
+        {json.dumps(user_profile, indent=2)}
+        {program_context}
+        
+        Proporciona un análisis detallado que incluya:
+        1. Interpretación de los datos y patrones observados
+        2. Insights clave sobre el estado de salud y bienestar
+        3. Recomendaciones personalizadas basadas en los datos y el tipo de programa del usuario ({program_type})
+        4. Áreas de mejora y posibles intervenciones específicas para el programa {program_type}
+        
+        Tu análisis debe ser claro, preciso y basado en evidencia científica.
+        """
+        
+        try:
+            # Generar análisis usando Gemini
+            analysis_text = await self.gemini_client.generate_text(prompt)
             
-            Datos biométricos disponibles:
-            {json.dumps(biometric_data, indent=2)}
-            
-            El análisis debe incluir:
-            1. Interpretación de los datos principales
-            2. Insights clave identificados
-            3. Patrones relevantes
-            4. Recomendaciones personalizadas
-            5. Áreas de mejora
-            
-            Devuelve el análisis en formato JSON estructurado.
-            """
-            
-            # Añadir información del perfil si está disponible
-            if input_data.user_profile:
-                prompt += f"""
-                
-                Considera la siguiente información del usuario:
-                - Edad: {input_data.user_profile.get('age', 'No disponible')}
-                - Género: {input_data.user_profile.get('gender', 'No disponible')}
-                - Nivel de actividad: {input_data.user_profile.get('activity_level', 'No disponible')}
-                - Objetivos de salud: {', '.join(input_data.user_profile.get('health_goals', ['No disponible']))}
-                - Condiciones: {', '.join(input_data.user_profile.get('conditions', ['No disponible']))}
-                """
-            
-            # Generar el análisis biométrico
-            response = await self.gemini_client.generate_structured_output(prompt)
-            
-            # Si la respuesta no es un diccionario, intentar convertirla
-            if not isinstance(response, dict):
-                try:
-                    response = json.loads(response)
-                except:
-                    # Si no se puede convertir, crear un diccionario básico
-                    response = {
-                        "interpretation": "Interpretación no disponible",
-                        "main_insights": ["No se pudieron identificar insights"],
-                        "patterns": ["No se pudieron identificar patrones"],
-                        "recommendations": ["Recomendaciones no disponibles"],
-                        "areas_for_improvement": ["No se pudieron identificar áreas de mejora"]
-                    }
-            
-            # Crear el artefacto de análisis biométrico
+            # Crear artefacto con el análisis
             artifact = BiometricAnalysisArtifact(
-                analysis_id=str(uuid.uuid4()),
-                analysis_type="biometric_analysis",
-                metrics_analyzed=list(biometric_data.keys()),
-                timestamp=time.time(),
-                summary=response.get("interpretation", "Análisis completado")
+                id=str(uuid.uuid4()),
+                label=f"Análisis Biométrico - Programa {program_type}",
+                content=analysis_text,
+                metadata={
+                    "timestamp": time.time(),
+                    "data_types": list(biometric_data.keys()),
+                    "analysis_type": "comprehensive",
+                    "program_type": program_type
+                }
             )
             
-            # Crear la salida de la skill
             return BiometricAnalysisOutput(
-                interpretation=response.get("interpretation", "Interpretación no disponible"),
-                main_insights=response.get("main_insights", ["No se pudieron identificar insights"]),
-                patterns=response.get("patterns", ["No se pudieron identificar patrones"]),
-                recommendations=response.get("recommendations", ["Recomendaciones no disponibles"]),
-                areas_for_improvement=response.get("areas_for_improvement", ["No se pudieron identificar áreas de mejora"]),
-                artifact=artifact
+                analysis=analysis_text,
+                artifacts=[artifact],
+                metadata={
+                    "timestamp": time.time(),
+                    "data_points": sum(len(data_type) for data_type in biometric_data.values()),
+                    "program_type": program_type
+                }
+            )
             )
             
         except Exception as e:
-            logger.error(f"Error en skill '_skill_biometric_analysis': {e}", exc_info=True)
-            # En caso de error, devolver un análisis básico
+            logger.error(f"Error al generar análisis biométrico: {e}", exc_info=True)
+            # Crear un artefacto de error
+            error_artifact = BiometricAnalysisArtifact(
+                id=str(uuid.uuid4()),
+                label="Error en Análisis Biométrico",
+                content=f"Error: {str(e)}",
+                metadata={
+                    "timestamp": time.time(),
+                    "error": str(e),
+                    "error_type": type(e).__name__
+                }
+            )
+            
             return BiometricAnalysisOutput(
-                interpretation="No se pudo generar un análisis completo debido a un error",
-                main_insights=["Error en el procesamiento de datos biométricos"],
-                patterns=["No se pudieron identificar patrones"],
-                recommendations=["Consulta a un profesional de la salud"],
-                areas_for_improvement=["No se pudieron identificar áreas de mejora"],
-                artifact=BiometricAnalysisArtifact(
-                    analysis_id=str(uuid.uuid4()),
-                    analysis_type="error",
-                    metrics_analyzed=[],
-                    timestamp=time.time(),
-                    summary=f"Error: {str(e)}"
-                )
+                analysis="No se pudo generar el análisis debido a un error.",
+                artifacts=[error_artifact],
+                metadata={"error": str(e)}
             )
     
     async def _skill_pattern_recognition(self, input_data: PatternRecognitionInput) -> PatternRecognitionOutput:

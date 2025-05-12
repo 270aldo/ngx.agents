@@ -11,10 +11,26 @@ from unittest.mock import MagicMock, patch
 # Agregar directorio raíz al path para imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Importar fixtures específicos
+# Asegurarse de que el directorio raíz y el directorio de mocks estén en el path
+import sys
+import os
+from typing import Dict, Any, List, Optional
+from unittest.mock import MagicMock, AsyncMock
+
+# No aplicamos patches globales aquí para evitar errores de importación
+# Los patches se aplicarán en cada archivo de prueba según sea necesario
+
+# Ahora importar fixtures específicos
 from .fixtures.vertex_ai_fixtures import *
-from .fixtures.state_manager_fixtures import *
 from .fixtures.a2a_fixtures import *
+
+# Definir fixtures básicos aquí en lugar de importarlos
+@pytest.fixture
+def test_settings() -> Dict[str, Any]:
+    return {
+        "test_user_id": "test_user_123",
+        "test_conversation_id": "test_conversation_456"
+    }
 
 # Fixtures comunes
 @pytest.fixture

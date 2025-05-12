@@ -7,19 +7,64 @@ del StateManager con Supabase.
 import uuid
 import pytest
 from typing import Dict, Any
+from unittest.mock import patch, MagicMock, AsyncMock
 
-from core.state_manager import StateManager
+# Importar el adaptador
+from infrastructure.adapters.state_manager_adapter import StateManagerAdapter
 
+
+# Fixture para el StateManagerAdapter
+@pytest.fixture
+async def state_manager_for_test():
+    # Crear un mock para el state_manager_optimized
+    mock_manager = AsyncMock()
+    
+    # Configurar comportamiento del mock para get_conversation_state
+    async def mock_get_conversation_state(conversation_id):
+        return {
+            "conversation_id": conversation_id,
+            "user_id": "test_user_123",
+            "messages": [],
+            "metadata": {}
+        }
+    mock_manager.get_conversation_state.side_effect = mock_get_conversation_state
+    
+    # Configurar comportamiento del mock para set_conversation_state
+    async def mock_set_conversation_state(conversation_id, state):
+        return True
+    mock_manager.set_conversation_state.side_effect = mock_set_conversation_state
+    
+    # Configurar comportamiento del mock para delete_conversation_state
+    async def mock_delete_conversation_state(conversation_id):
+        return True
+    mock_manager.delete_conversation_state.side_effect = mock_delete_conversation_state
+    
+    # Configurar comportamiento del mock para initialize
+    async def mock_initialize():
+        return None
+    mock_manager.initialize.side_effect = mock_initialize
+    
+    # Configurar comportamiento del mock para get_stats
+    async def mock_get_stats():
+        return {"operations": 0, "cache_hits": 0, "cache_misses": 0}
+    mock_manager.get_stats.side_effect = mock_get_stats
+    
+    # Aplicar el patch para optimized_state_manager
+    with patch('infrastructure.adapters.state_manager_adapter.optimized_state_manager', mock_manager):
+        # Crear una instancia fresca del adaptador para cada prueba
+        adapter = StateManagerAdapter()
+        await adapter.initialize()
+        yield adapter
 
 @pytest.mark.asyncio
-async def test_save_state(state_manager: StateManager, test_settings: Dict[str, Any]):
+async def test_save_state(state_manager_for_test: StateManagerAdapter, test_settings: Dict[str, Any]):
     """Prueba la función save_state del StateManager."""
     # Datos de prueba
     user_id = test_settings["test_user_id"]
     state_data = {"key": "value", "nested": {"foo": "bar"}}
     
     # Guardar estado
-    result = await state_manager.save_state(state_data, user_id)
+    result = await state_manager_for_test.save_state(state_data, user_id)
     
     # Verificar resultado
     assert "error" not in result
@@ -29,7 +74,7 @@ async def test_save_state(state_manager: StateManager, test_settings: Dict[str, 
 
 
 @pytest.mark.asyncio
-async def test_load_state(state_manager: StateManager, test_settings: Dict[str, Any]):
+async def test_load_state(state_manager_for_test: StateManagerAdapter, test_settings: Dict[str, Any]):
     """Prueba la función load_state del StateManager."""
     # Datos de prueba
     user_id = test_settings["test_user_id"]
@@ -37,17 +82,17 @@ async def test_load_state(state_manager: StateManager, test_settings: Dict[str, 
     state_data = {"key": "value", "nested": {"foo": "bar"}}
     
     # Guardar estado
-    await state_manager.save_state(state_data, user_id, session_id)
+    await state_manager_for_test.save_state(state_data, user_id, session_id)
     
     # Cargar estado
-    loaded_state = await state_manager.load_state(user_id, session_id)
+    loaded_state = await state_manager_for_test.load_state(user_id, session_id)
     
     # Verificar resultado
     assert loaded_state == state_data
 
 
 @pytest.mark.asyncio
-async def test_delete_state(state_manager: StateManager, test_settings: Dict[str, Any]):
+async def test_delete_state(state_manager_for_test: StateManagerAdapter, test_settings: Dict[str, Any]):
     """Prueba la función delete_state del StateManager."""
     # Datos de prueba
     user_id = test_settings["test_user_id"]
@@ -55,21 +100,24 @@ async def test_delete_state(state_manager: StateManager, test_settings: Dict[str
     state_data = {"key": "value"}
     
     # Guardar estado
-    await state_manager.save_state(state_data, user_id, session_id)
+    result = await state_manager_for_test.save_state(state_data, user_id, session_id)
+    
+    # Verificar que se guardó correctamente
+    assert "error" not in result
     
     # Eliminar estado
-    result = await state_manager.delete_state(user_id, session_id)
+    deleted = await state_manager_for_test.delete_state(user_id, session_id)
     
-    # Verificar resultado
-    assert result is True
+    # Verificar que se eliminó correctamente
+    assert deleted is True
     
-    # Verificar que el estado ya no existe
-    loaded_state = await state_manager.load_state(user_id, session_id)
+    # Intentar cargar el estado eliminado
+    loaded_state = await state_manager_for_test.load_state(user_id, session_id)
     assert loaded_state == {}
 
 
 @pytest.mark.asyncio
-async def test_update_existing_state(state_manager: StateManager, test_settings: Dict[str, Any]):
+async def test_update_existing_state(state_manager_for_test: StateManagerAdapter, test_settings: Dict[str, Any]):
     """Prueba la actualización de un estado existente."""
     # Datos de prueba
     user_id = test_settings["test_user_id"]
@@ -78,17 +126,17 @@ async def test_update_existing_state(state_manager: StateManager, test_settings:
     updated_state = {"key": "new_value", "counter": 2, "new_key": "added"}
     
     # Guardar estado inicial
-    await state_manager.save_state(initial_state, user_id, session_id)
+    await state_manager_for_test.save_state(initial_state, user_id, session_id)
     
     # Actualizar estado
-    result = await state_manager.save_state(updated_state, user_id, session_id)
+    result = await state_manager_for_test.save_state(updated_state, user_id, session_id)
     
     # Verificar resultado
     assert "error" not in result
     assert result["session_id"] == session_id
     
     # Cargar estado actualizado
-    loaded_state = await state_manager.load_state(user_id, session_id)
+    loaded_state = await state_manager_for_test.load_state(user_id, session_id)
     
     # Verificar que el estado se actualizó correctamente
     assert loaded_state == updated_state

@@ -39,6 +39,13 @@ from tools.mcp_toolkit import MCPToolkit
 from tools.mcp_client import MCPClient
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
+from services.program_classification_service import ProgramClassificationService
+from agents.shared.program_definitions import (
+    get_program_definition,
+    get_program_keywords,
+    get_age_range,
+    get_all_program_types
+)
 from infrastructure.adapters.a2a_adapter import a2a_adapter
 from core.logging_config import get_logger
 from google.cloud import aiplatform
@@ -75,6 +82,10 @@ class EliteTrainingStrategist(ADKAgent):
         _model = model or self.DEFAULT_MODEL
         _instruction = instruction or self.DEFAULT_INSTRUCTION
         _mcp_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
+        
+        # Inicializar el servicio de clasificación de programas
+        self.gemini_client = GeminiClient()
+        self.program_classification_service = ProgramClassificationService(self.gemini_client)
 
         # Definir las skills antes de llamar al constructor de ADKAgent
         self.skills = [
@@ -389,11 +400,10 @@ class EliteTrainingStrategist(ADKAgent):
                 
         # Si no hay coincidencias, devolver tipo general
         return "generate_training_plan"
-    
-    # --- Métodos para comunicación entre agentes ---
     async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Consulta a otro agente utilizando el adaptador de A2A.
+        Enriquece la consulta con información específica del programa del usuario.
         
         Args:
             agent_id: ID del agente a consultar
@@ -405,25 +415,41 @@ class EliteTrainingStrategist(ADKAgent):
         Returns:
             Dict[str, Any]: Respuesta del agente consultado
         """
-        try:
-            # Crear contexto para la consulta
-            task_context = {
-                "user_id": user_id,
-                "session_id": session_id,
-                "additional_context": context or {}
-            }
+        if not a2a_adapter:
+            logger.error("Adaptador A2A no disponible. No se puede consultar a otros agentes.")
+            return {"error": "A2A adapter not available"}
             
-            # Llamar al agente utilizando el adaptador de A2A
-            response = await a2a_adapter.call_agent(
+        try:
+            # Preparar contexto para la consulta
+            if context is None:
+                context = {}
+            
+            # Enriquecer la consulta con información del programa si está disponible
+            enriched_query = query
+            if context and "program_type" in context:
+                program_type = context["program_type"]
+                try:
+                    # Usar el servicio para enriquecer la consulta
+                    enriched_query = self.program_classification_service.enrich_query_with_program_context(
+                        query, program_type
+                    )
+                    logger.info(f"Consulta enriquecida con información del programa {program_type}")
+                except Exception as e:
+                    logger.warning(f"No se pudo enriquecer la consulta con información del programa: {e}")
+                    
+            # Realizar la consulta al otro agente
+            response = await a2a_adapter.consult_agent(
                 agent_id=agent_id,
-                user_input=query,
-                context=task_context
+                query=enriched_query,
+                user_id=user_id,
+                session_id=session_id,
+                context=context
             )
             
-            logger.info(f"Respuesta recibida del agente {agent_id}")
             return response
+            
         except Exception as e:
-            logger.error(f"Error al consultar al agente {agent_id}: {e}", exc_info=True)
+            logger.error(f"Error al consultar al agente {agent_id}: {str(e)}")
             return {
                 "status": "error",
                 "error": str(e),
@@ -489,7 +515,7 @@ class EliteTrainingStrategist(ADKAgent):
         if context is None:
             context = {}
             
-        program_type = self._get_program_type_from_profile(context)
+        program_type = await self._get_program_type_from_profile(context)
 
         # Construir prompt para Gemini
         prompt_parts = [
@@ -588,7 +614,7 @@ class EliteTrainingStrategist(ADKAgent):
         """
         Lógica interna para adaptar un programa de entrenamiento.
         """
-        program_type = self._get_program_type_from_profile({})
+        program_type = await self._get_program_type_from_profile({})
 
         prompt_parts = [
             f"Eres un entrenador de élite. Adapta un plan de entrenamiento existente para un programa tipo '{program_type}'.",
@@ -643,7 +669,7 @@ class EliteTrainingStrategist(ADKAgent):
         """
         Lógica interna para analizar datos de rendimiento.
         """
-        program_type = self._get_program_type_from_profile({})
+        program_type = await self._get_program_type_from_profile({})
 
         prompt_parts = [
             f"Eres un analista de rendimiento deportivo de élite. Analiza los siguientes datos para un programa '{program_type}'.",
@@ -694,55 +720,33 @@ class EliteTrainingStrategist(ADKAgent):
 
         return analysis
 
-    def _get_program_type_from_profile(self, context: Dict[str, Any]) -> str:
+    async def _get_program_type_from_profile(self, context: Dict[str, Any]) -> str:
         """
-        Determina el tipo de programa basado en el perfil del usuario.
+        Determina el tipo de programa basado en el perfil del usuario utilizando el servicio
+        centralizado de clasificación de programas.
         
         Args:
-            context: Contexto del usuario
+            context: Contexto del usuario que puede incluir program_type, user_profile, goals, etc.
             
         Returns:
-            str: Tipo de programa (PRIME, ELITE, PERFORMANCE, etc.)
+            str: Tipo de programa (PRIME, LONGEVITY, STRENGTH, HYPERTROPHY, ENDURANCE, ATHLETIC, PERFORMANCE)
         """
-        # Obtener el tipo de programa del contexto si está disponible
-        program_type = context.get("program_type")
-        if program_type:
-            return program_type
-            
-        # Si no hay tipo de programa en el contexto, intentar determinarlo basado en otros datos
-        experience_level = context.get("experience_level", "").lower()
-        goals = context.get("goals", [])
+        logger.debug(f"Determinando tipo de programa desde contexto usando servicio centralizado: {context}")
         
-        # Mapeo de niveles de experiencia a tipos de programa
-        if experience_level in ["principiante", "beginner", "novice"]:
-            return "FOUNDATION"
-        elif experience_level in ["intermedio", "intermediate"]:
-            return "PERFORMANCE"
-        elif experience_level in ["avanzado", "advanced"]:
-            return "ELITE"
-        elif experience_level in ["profesional", "elite", "professional"]:
-            return "PRIME"
-            
-        # Si no se puede determinar por nivel de experiencia, intentar por objetivos
-        if goals:
-            goal_str = " ".join(goals).lower()
-            if any(kw in goal_str for kw in ["fuerza", "strength", "powerlifting"]):
-                return "STRENGTH"
-            elif any(kw in goal_str for kw in ["hipertrofia", "hypertrophy", "muscle", "músculo"]):
-                return "HYPERTROPHY"
-            elif any(kw in goal_str for kw in ["resistencia", "endurance", "cardio"]):
-                return "ENDURANCE"
-            elif any(kw in goal_str for kw in ["atlético", "athletic", "deporte", "sport"]):
-                return "ATHLETIC"
-                
-        # Valor por defecto
-        return "PERFORMANCE"
+        # Utilizar el servicio de clasificación de programas
+        program_type = await self.program_classification_service.classify_program_type(context)
+        logger.info(f"Tipo de programa determinado por el servicio de clasificación: {program_type}")
+        
+        return program_type
     
+    # Método eliminado: _classify_program_type_with_llm
+    # Ahora se utiliza el servicio centralizado de clasificación de programas
+
     async def _set_training_intensity_volume(self, current_phase: str, athlete_feedback: Dict[str, Any], performance_metrics: Dict[str, Any], goal_adjustment_reason: str) -> Dict[str, Any]:
         """
         Lógica interna para establecer la intensidad y volumen del entrenamiento.
         """
-        program_type = self._get_program_type_from_profile({})
+        program_type = await self._get_program_type_from_profile({})
 
         prompt_parts = [
             f"Eres un coach experto en periodización. Determina los ajustes óptimos de intensidad y volumen para un atleta en un programa '{program_type}'.",
