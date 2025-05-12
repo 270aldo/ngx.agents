@@ -20,6 +20,8 @@ from agents.base.adk_agent import ADKAgent
 from core.agent_card import AgentCard, Example
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from core.logging_config import get_logger
+from services.program_classification_service import ProgramClassificationService
+from agents.shared.program_definitions import get_program_definition
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -116,6 +118,37 @@ class InjuryPreventionSkill(GoogleADKSkill):
         injury_history = input_data.injury_history or []
         user_profile = input_data.user_profile or {}
         
+        # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+        context = {
+            "user_profile": user_profile,
+            "goals": user_profile.get("goals", []) if user_profile else []
+        }
+        
+        try:
+            # Clasificar el tipo de programa del usuario
+            program_type = await self.agent.program_classification_service.classify_program_type(context)
+            logger.info(f"Tipo de programa determinado para prevención de lesiones: {program_type}")
+            
+            # Obtener definición del programa para personalizar las recomendaciones
+            program_def = get_program_definition(program_type)
+            
+            # Preparar contexto específico del programa
+            program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+            
+            if program_def:
+                program_context += f"- {program_def.get('description', '')}\n"
+                program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                
+                # Añadir protocolos de recuperación específicos del programa si están disponibles
+                if program_def.get("key_protocols") and "recovery" in program_def.get("key_protocols", {}):
+                    program_context += "- Protocolos de recuperación recomendados:\n"
+                    for protocol in program_def.get("key_protocols", {}).get("recovery", []):
+                        program_context += f"  * {protocol}\n"
+        except Exception as e:
+            logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+            program_type = "GENERAL"
+            program_context = ""
+        
         # Construir el prompt para el modelo
         activity_info = f"Actividad: {activity_type}" if activity_type else "Actividad no especificada"
         history_info = f"Historial de lesiones: {', '.join(injury_history)}" if injury_history else "Sin historial de lesiones conocido"
@@ -129,14 +162,17 @@ class InjuryPreventionSkill(GoogleADKSkill):
         Información adicional:
         - {activity_info}
         - {history_info}
+        - Tipo de programa: {program_type}
+        {program_context}
         
         Proporciona una respuesta detallada sobre cómo prevenir lesiones específicas,
         incluyendo ejercicios de calentamiento, fortalecimiento, técnica adecuada y señales de alerta.
+        Adapta tus recomendaciones específicamente para el programa {program_type} del usuario.
         
         Estructura tu respuesta en secciones:
-        1. Análisis de riesgos específicos
-        2. Estrategias de prevención
-        3. Ejercicios recomendados
+        1. Análisis de riesgos específicos para el programa {program_type}
+        2. Estrategias de prevención alineadas con los objetivos del programa
+        3. Ejercicios recomendados considerando las necesidades específicas del programa
         4. Señales de alerta
         5. Cuándo buscar ayuda profesional
         """
@@ -238,6 +274,49 @@ class RehabilitationSkill(GoogleADKSkill):
         injury_phase = input_data.injury_phase
         user_profile = input_data.user_profile or {}
         
+        # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+        context = {
+            "user_profile": user_profile,
+            "goals": user_profile.get("goals", []) if user_profile else []
+        }
+        
+        try:
+            # Clasificar el tipo de programa del usuario
+            program_type = await self.agent.program_classification_service.classify_program_type(context)
+            logger.info(f"Tipo de programa determinado para rehabilitación: {program_type}")
+            
+            # Obtener definición del programa para personalizar las recomendaciones
+            program_def = get_program_definition(program_type)
+            
+            # Preparar contexto específico del programa
+            program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+            
+            if program_def:
+                program_context += f"- {program_def.get('description', '')}\n"
+                program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                
+                # Añadir protocolos de recuperación específicos del programa si están disponibles
+                if program_def.get("key_protocols") and "recovery" in program_def.get("key_protocols", {}):
+                    program_context += "- Protocolos de recuperación recomendados:\n"
+                    for protocol in program_def.get("key_protocols", {}).get("recovery", []):
+                        program_context += f"  * {protocol}\n"
+                        
+                # Añadir consideraciones especiales para la rehabilitación según el programa
+                if program_type == "PRIME":
+                    program_context += "\nConsideraciones especiales para PRIME:\n"
+                    program_context += "- Enfoque en recuperación rápida y eficiente\n"
+                    program_context += "- Priorización de la funcionalidad y el rendimiento\n"
+                    program_context += "- Uso de técnicas avanzadas de rehabilitación\n"
+                elif program_type == "LONGEVITY":
+                    program_context += "\nConsideraciones especiales para LONGEVITY:\n"
+                    program_context += "- Enfoque en rehabilitación sostenible y de largo plazo\n"
+                    program_context += "- Priorización de la salud articular y la prevención de recurrencias\n"
+                    program_context += "- Adaptación de ejercicios para minimizar el impacto en articulaciones\n"
+        except Exception as e:
+            logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+            program_type = "GENERAL"
+            program_context = ""
+        
         # Construir el prompt para el modelo
         injury_info = f"Tipo de lesión: {injury_type}" if injury_type else "Tipo de lesión no especificado"
         phase_info = f"Fase de la lesión: {injury_phase}" if injury_phase else "Fase de la lesión no especificada"
@@ -251,15 +330,18 @@ class RehabilitationSkill(GoogleADKSkill):
         Información adicional:
         - {injury_info}
         - {phase_info}
+        - Tipo de programa: {program_type}
+        {program_context}
         
         Proporciona una respuesta detallada sobre cómo rehabilitar esta lesión específica,
         incluyendo fases de recuperación, ejercicios recomendados, progresión y señales de alerta.
+        Adapta tus recomendaciones específicamente para el programa {program_type} del usuario.
         
         Estructura tu respuesta en secciones:
-        1. Análisis de la lesión
-        2. Fases de rehabilitación
-        3. Ejercicios recomendados por fase
-        4. Progresión y criterios para avanzar
+        1. Análisis de la lesión en el contexto del programa {program_type}
+        2. Fases de rehabilitación adaptadas al programa {program_type}
+        3. Ejercicios recomendados por fase, considerando las necesidades específicas del programa
+        4. Progresión y criterios para avanzar, alineados con los objetivos del programa
         5. Señales de alerta
         6. Cuándo buscar ayuda profesional
         """
@@ -514,6 +596,49 @@ class SleepOptimizationSkill(GoogleADKSkill):
         sleep_data = input_data.sleep_data or {}
         user_profile = input_data.user_profile or {}
         
+        # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+        context = {
+            "user_profile": user_profile,
+            "goals": user_profile.get("goals", []) if user_profile else []
+        }
+        
+        try:
+            # Clasificar el tipo de programa del usuario
+            program_type = await self.agent.program_classification_service.classify_program_type(context)
+            logger.info(f"Tipo de programa determinado para optimización del sueño: {program_type}")
+            
+            # Obtener definición del programa para personalizar las recomendaciones
+            program_def = get_program_definition(program_type)
+            
+            # Preparar contexto específico del programa
+            program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+            
+            if program_def:
+                program_context += f"- {program_def.get('description', '')}\n"
+                program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                
+                # Añadir protocolos de sueño específicos del programa si están disponibles
+                if program_def.get("key_protocols") and "sleep" in program_def.get("key_protocols", {}):
+                    program_context += "- Protocolos de sueño recomendados:\n"
+                    for protocol in program_def.get("key_protocols", {}).get("sleep", []):
+                        program_context += f"  * {protocol}\n"
+                        
+                # Añadir consideraciones especiales para la optimización del sueño según el programa
+                if program_type == "PRIME":
+                    program_context += "\nConsideraciones especiales para PRIME:\n"
+                    program_context += "- Enfoque en sueño para optimizar rendimiento y recuperación\n"
+                    program_context += "- Priorización de estrategias para maximizar el sueño profundo y REM\n"
+                    program_context += "- Uso de técnicas avanzadas de optimización del sueño\n"
+                elif program_type == "LONGEVITY":
+                    program_context += "\nConsideraciones especiales para LONGEVITY:\n"
+                    program_context += "- Enfoque en sueño para promover la longevidad y salud celular\n"
+                    program_context += "- Priorización de la regularidad y duración del sueño\n"
+                    program_context += "- Estrategias para minimizar la inflamación y optimizar la reparación celular\n"
+        except Exception as e:
+            logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+            program_type = "GENERAL"
+            program_context = ""
+        
         # Construir el prompt para el modelo
         issues_info = f"Problemas de sueño: {', '.join(sleep_issues)}" if sleep_issues else "Problemas de sueño no especificados"
         data_info = "Datos de sueño disponibles" if sleep_data else "Sin datos de sueño específicos"
@@ -527,16 +652,19 @@ class SleepOptimizationSkill(GoogleADKSkill):
         Información adicional:
         - {issues_info}
         - {data_info}
+        - Tipo de programa: {program_type}
+        {program_context}
         
         Proporciona una respuesta detallada sobre cómo mejorar la calidad y cantidad del sueño,
         incluyendo estrategias de higiene del sueño, rutinas, entorno óptimo y consideraciones especiales.
+        Adapta tus recomendaciones específicamente para el programa {program_type} del usuario.
         
         Estructura tu respuesta en secciones:
-        1. Análisis de los problemas de sueño
-        2. Estrategias de higiene del sueño
-        3. Optimización del entorno
-        4. Rutinas recomendadas
-        5. Suplementos y ayudas naturales (si aplica)
+        1. Análisis de los problemas de sueño en el contexto del programa {program_type}
+        2. Estrategias de higiene del sueño adaptadas al programa {program_type}
+        3. Optimización del entorno para maximizar los beneficios del programa
+        4. Rutinas recomendadas alineadas con los objetivos del programa
+        5. Suplementos y ayudas naturales específicas para el programa (si aplica)
         6. Cuándo buscar ayuda profesional
         """
         
@@ -654,6 +782,49 @@ class HRVProtocolSkill(GoogleADKSkill):
         training_context = input_data.training_context or {}
         user_profile = input_data.user_profile or {}
         
+        # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+        context = {
+            "user_profile": user_profile,
+            "goals": user_profile.get("goals", []) if user_profile else []
+        }
+        
+        try:
+            # Clasificar el tipo de programa del usuario
+            program_type = await self.agent.program_classification_service.classify_program_type(context)
+            logger.info(f"Tipo de programa determinado para protocolos HRV: {program_type}")
+            
+            # Obtener definición del programa para personalizar las recomendaciones
+            program_def = get_program_definition(program_type)
+            
+            # Preparar contexto específico del programa
+            program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+            
+            if program_def:
+                program_context += f"- {program_def.get('description', '')}\n"
+                program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                
+                # Añadir protocolos de recuperación específicos del programa si están disponibles
+                if program_def.get("key_protocols") and "recovery" in program_def.get("key_protocols", {}):
+                    program_context += "- Protocolos de recuperación recomendados:\n"
+                    for protocol in program_def.get("key_protocols", {}).get("recovery", []):
+                        program_context += f"  * {protocol}\n"
+                        
+                # Añadir consideraciones especiales para HRV según el programa
+                if program_type == "PRIME":
+                    program_context += "\nConsideraciones especiales de HRV para PRIME:\n"
+                    program_context += "- Enfoque en HRV para optimizar rendimiento y periodización del entrenamiento\n"
+                    program_context += "- Uso de HRV para determinar intensidad y volumen de entrenamiento\n"
+                    program_context += "- Estrategias de recuperación basadas en HRV para maximizar adaptaciones\n"
+                elif program_type == "LONGEVITY":
+                    program_context += "\nConsideraciones especiales de HRV para LONGEVITY:\n"
+                    program_context += "- Enfoque en HRV como biomarcador de salud cardiovascular y longevidad\n"
+                    program_context += "- Uso de HRV para monitorizar el balance autónomo y estrés crónico\n"
+                    program_context += "- Estrategias para mejorar el HRV a largo plazo\n"
+        except Exception as e:
+            logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+            program_type = "GENERAL"
+            program_context = ""
+        
         # Construir el prompt para el modelo
         data_info = "Datos de HRV disponibles" if hrv_data else "Sin datos de HRV específicos"
         context_info = "Contexto de entrenamiento disponible" if training_context else "Sin contexto de entrenamiento específico"
@@ -667,17 +838,20 @@ class HRVProtocolSkill(GoogleADKSkill):
         Información adicional:
         - {data_info}
         - {context_info}
+        - Tipo de programa: {program_type}
+        {program_context}
         
         Proporciona una respuesta detallada sobre cómo interpretar y utilizar los datos de HRV,
         incluyendo su significado, aplicaciones prácticas, estrategias de implementación y consideraciones especiales.
+        Adapta tus recomendaciones específicamente para el programa {program_type} del usuario.
         
         Estructura tu respuesta en secciones:
-        1. Interpretación de los datos de HRV
-        2. Implicaciones para entrenamiento/recuperación
-        3. Estrategias recomendadas
-        4. Implementación práctica
-        5. Factores que afectan el HRV
-        6. Seguimiento y ajustes
+        1. Interpretación de los datos de HRV en el contexto del programa {program_type}
+        2. Implicaciones para entrenamiento/recuperación alineadas con los objetivos del programa
+        3. Estrategias recomendadas específicas para el programa {program_type}
+        4. Implementación práctica considerando las necesidades del programa
+        5. Factores que afectan el HRV relevantes para el programa
+        6. Seguimiento y ajustes para optimizar resultados dentro del programa
         """
         
         # Obtener cliente Gemini del agente
@@ -795,6 +969,50 @@ class ChronicPainSkill(GoogleADKSkill):
         pain_duration = input_data.pain_duration
         user_profile = input_data.user_profile or {}
         
+        # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+        context = {
+            "user_profile": user_profile,
+            "goals": user_profile.get("goals", []) if user_profile else []
+        }
+        
+        try:
+            # Clasificar el tipo de programa del usuario
+            program_type = await self.agent.program_classification_service.classify_program_type(context)
+            logger.info(f"Tipo de programa determinado para manejo del dolor crónico: {program_type}")
+            
+            # Obtener definición del programa para personalizar las recomendaciones
+            program_def = get_program_definition(program_type)
+            
+            # Preparar contexto específico del programa
+            program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+            
+            if program_def:
+                program_context += f"- {program_def.get('description', '')}\n"
+                program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                
+                # Añadir protocolos de manejo del dolor específicos del programa si están disponibles
+                if program_def.get("key_protocols") and "pain_management" in program_def.get("key_protocols", {}):
+                    program_context += "- Protocolos de manejo del dolor recomendados:\n"
+                    for protocol in program_def.get("key_protocols", {}).get("pain_management", []):
+                        program_context += f"  * {protocol}\n"
+                        
+                # Añadir consideraciones especiales para el manejo del dolor según el programa
+                if program_type == "PRIME":
+                    program_context += "\nConsideraciones especiales para PRIME:\n"
+                    program_context += "- Enfoque en manejo del dolor para mantener el rendimiento\n"
+                    program_context += "- Estrategias para minimizar el tiempo de inactividad\n"
+                    program_context += "- Técnicas avanzadas de manejo del dolor para atletas\n"
+                elif program_type == "LONGEVITY":
+                    program_context += "\nConsideraciones especiales para LONGEVITY:\n"
+                    program_context += "- Enfoque en manejo del dolor a largo plazo y sostenible\n"
+                    program_context += "- Estrategias para mejorar la calidad de vida y funcionalidad\n"
+                    program_context += "- Técnicas de manejo del dolor adaptadas para adultos mayores\n"
+                    program_context += "- Consideraciones especiales para condiciones crónicas relacionadas con la edad\n"
+        except Exception as e:
+            logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+            program_type = "GENERAL"
+            program_context = ""
+        
         # Construir el prompt para el modelo
         location_info = f"Ubicación del dolor: {pain_location}" if pain_location else "Ubicación del dolor no especificada"
         intensity_info = f"Intensidad del dolor: {pain_intensity}/10" if pain_intensity else "Intensidad del dolor no especificada"
@@ -810,15 +1028,18 @@ class ChronicPainSkill(GoogleADKSkill):
         - {location_info}
         - {intensity_info}
         - {duration_info}
+        - Tipo de programa: {program_type}
+        {program_context}
         
         Proporciona una respuesta detallada sobre cómo manejar este dolor específico,
         incluyendo estrategias no farmacológicas, ejercicios, modificaciones de actividad y consideraciones especiales.
+        Adapta tus recomendaciones específicamente para el programa {program_type} del usuario.
         
         Estructura tu respuesta en secciones:
-        1. Evaluación del dolor
-        2. Estrategias de manejo no farmacológicas
-        3. Ejercicios recomendados
-        4. Modificaciones de actividad
+        1. Evaluación del dolor en el contexto del programa {program_type}
+        2. Estrategias de manejo no farmacológicas alineadas con los objetivos del programa
+        3. Ejercicios recomendados considerando las necesidades específicas del programa
+        4. Modificaciones de actividad para mantener la funcionalidad dentro del programa
         5. Cuándo buscar ayuda profesional
         
         IMPORTANTE: Aclara que tus recomendaciones no reemplazan la atención médica profesional.
@@ -1121,6 +1342,10 @@ class RecoveryCorrective(ADKAgent):
             state_manager=state_manager,
             **kwargs
         )
+        
+        # Inicializar el servicio de clasificación de programas
+        self.gemini_client = gemini_client or GeminiClient()
+        self.program_classification_service = ProgramClassificationService(self.gemini_client)
         
         logger.info(f"Agente RecoveryCorrective inicializado con ID: {agent_id}")
     
