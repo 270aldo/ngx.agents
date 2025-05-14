@@ -7,166 +7,459 @@ necesarios para utilizar el sistema A2A optimizado y el cliente Vertex AI optimi
 
 import logging
 import time
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, Tuple
 from datetime import datetime
 
 from agents.elite_training_strategist.agent import EliteTrainingStrategist
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 from infrastructure.adapters.a2a_adapter import a2a_adapter
-from infrastructure.adapters.state_manager_adapter import state_manager_adapter
-from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
-from clients.vertex_ai import vertex_ai_client
 from core.logging_config import get_logger
 
 # Configurar logger
 logger = get_logger(__name__)
 
-class EliteTrainingStrategistAdapter(EliteTrainingStrategist):
+class EliteTrainingStrategistAdapter(EliteTrainingStrategist, BaseAgentAdapter):
     """
     Adaptador para el agente EliteTrainingStrategist que utiliza los componentes optimizados.
     
-    Este adaptador extiende el agente EliteTrainingStrategist original y sobrescribe los métodos
-    necesarios para utilizar el sistema A2A optimizado y el cliente Vertex AI optimizado.
+    Este adaptador extiende el agente EliteTrainingStrategist original y utiliza la clase
+    BaseAgentAdapter para implementar métodos comunes.
     """
     
-    async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
+    def __init__(self, *args, **kwargs):
         """
-        Obtiene el contexto de la conversación desde el adaptador del StateManager.
-
+        Inicializa el adaptador del EliteTrainingStrategist.
+        
         Args:
-            user_id (Optional[str]): ID del usuario.
-            session_id (Optional[str]): ID de la sesión.
-
-        Returns:
-            Dict[str, Any]: Contexto de la conversación.
+            *args: Argumentos posicionales para la clase base
+            **kwargs: Argumentos de palabras clave para la clase base
         """
-        try:
-            # Intentar cargar desde el adaptador del StateManager
-            if user_id and session_id:
-                try:
-                    state_data = await state_manager_adapter.load_state(user_id, session_id)
-                    if state_data and isinstance(state_data, dict):
-                        logger.debug(f"Contexto cargado desde adaptador del StateManager para user_id={user_id}, session_id={session_id}")
-                        return state_data
-                except Exception as e:
-                    logger.warning(f"Error al cargar contexto desde adaptador del StateManager: {e}")
-            
-            # Si no hay contexto o hay error, crear uno nuevo
-            return {
-                "conversation_history": [],
-                "user_profile": {},
-                "training_plans": [],
-                "performance_data": {},
-                "last_updated": datetime.now().isoformat()
-            }
-        except Exception as e:
-            logger.error(f"Error al obtener contexto: {e}", exc_info=True)
-            # En caso de error, devolver un contexto vacío
-            return {
-                "conversation_history": [],
-                "user_profile": {},
-                "training_plans": [],
-                "performance_data": {},
-                "last_updated": datetime.now().isoformat()
-            }
-
-    async def _update_context(self, context: Dict[str, Any], user_id: str, session_id: str) -> None:
-        """
-        Actualiza el contexto de la conversación en el adaptador del StateManager.
-
-        Args:
-            context (Dict[str, Any]): Contexto actualizado.
-            user_id (str): ID del usuario.
-            session_id (str): ID de la sesión.
-        """
-        try:
-            # Actualizar la marca de tiempo
-            context["last_updated"] = datetime.now().isoformat()
-            
-            # Guardar el contexto en el adaptador del StateManager
-            await state_manager_adapter.save_state(user_id, session_id, context)
-            logger.info(f"Contexto actualizado en adaptador del StateManager para user_id={user_id}, session_id={session_id}")
-        except Exception as e:
-            logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
+        super().__init__(*args, **kwargs)
+        
+        # Configuración de clasificación específica para este agente
+        self.fallback_keywords = [
+            "entrenamiento", "training", "ejercicio", "exercise", "rutina", "routine",
+            "programa", "program", "intensidad", "intensity", "volumen", "volume",
+            "periodización", "periodization", "rendimiento", "performance"
+        ]
+        
+        self.excluded_keywords = [
+            "nutrición", "nutrition", "dieta", "diet", "suplemento", "supplement",
+            "lesión", "injury", "recuperación", "recovery"
+        ]
     
-    async def _classify_query(self, query: str) -> str:
+    def _create_default_context(self) -> Dict[str, Any]:
         """
-        Clasifica el tipo de consulta del usuario utilizando el adaptador del Intent Analyzer.
+        Crea un contexto predeterminado para el agente EliteTrainingStrategist.
+        
+        Returns:
+            Dict[str, Any]: Contexto predeterminado
+        """
+        return {
+            "conversation_history": [],
+            "user_profile": {},
+            "training_plans": [],
+            "performance_data": {},
+            "last_updated": datetime.now().isoformat()
+        }
+    
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
+        """
+        Obtiene el mapeo de intenciones a tipos de consulta específico para EliteTrainingStrategist.
+        
+        Returns:
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
+        """
+        return {
+            "training_plan": "generate_training_plan",
+            "adapt_program": "adapt_training_program",
+            "performance_analysis": "analyze_performance_data",
+            "intensity_volume": "set_training_intensity_volume",
+            "exercise_routine": "prescribe_exercise_routines"
+        }
+    
+    def _adjust_score_based_on_context(self, score: float, context: Dict[str, Any]) -> float:
+        """
+        Ajusta la puntuación de clasificación basada en el contexto.
+        
+        Args:
+            score: Puntuación de clasificación original
+            context: Contexto adicional para la clasificación
+            
+        Returns:
+            float: Puntuación ajustada
+        """
+        # Verificar si hay un perfil de usuario con información de entrenamiento
+        if context.get("user_profile", {}).get("training_level"):
+            score += 0.1  # Aumentar la puntuación si hay información de entrenamiento
+        
+        # Verificar si hay planes de entrenamiento previos
+        if context.get("training_plans") and len(context.get("training_plans", [])) > 0:
+            score += 0.1  # Aumentar la puntuación si hay planes de entrenamiento previos
+        
+        # Verificar si hay datos de rendimiento
+        if context.get("performance_data") and len(context.get("performance_data", {})) > 0:
+            score += 0.1  # Aumentar la puntuación si hay datos de rendimiento
+        
+        # Limitar la puntuación máxima a 1.0
+        return min(1.0, score)
+    
+    async def _process_query(self, query: str, user_id: str, session_id: str,
+                           program_type: str, state: Dict[str, Any], profile: Dict[str, Any],
+                           **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la consulta del usuario.
+        
+        Este método implementa la lógica específica del EliteTrainingStrategist.
+        
+        Args:
+            query: La consulta del usuario
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            program_type: Tipo de programa (general, elite, etc.)
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta del agente
+        """
+        try:
+            # Determinar el tipo de consulta
+            query_type = await self._classify_query(query)
+            logger.info(f"Tipo de consulta determinado: {query_type}")
+            
+            # Procesar según el tipo de consulta
+            if query_type == "generate_training_plan":
+                response = await self._generate_training_plan(query, state, profile, program_type)
+            elif query_type == "adapt_training_program":
+                response = await self._adapt_training_program(query, state, profile, program_type)
+            elif query_type == "analyze_performance_data":
+                response = await self._analyze_performance_data(query, state, profile, program_type)
+            elif query_type == "set_training_intensity_volume":
+                response = await self._set_training_intensity_volume(query, state, profile, program_type)
+            elif query_type == "prescribe_exercise_routines":
+                response = await self._prescribe_exercise_routines(query, state, profile, program_type)
+            else:
+                # Tipo de consulta no reconocido, usar procesamiento genérico
+                response = await self._process_generic_query(query, state, profile, program_type)
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error al procesar consulta: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "response": f"Lo siento, ha ocurrido un error al procesar tu consulta: {str(e)}",
+                "agent": self.__class__.__name__
+            }
+    
+    async def _generate_training_plan(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+        """
+        Genera un plan de entrenamiento personalizado.
         
         Args:
             query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
             
         Returns:
-            str: Tipo de consulta clasificada
+            Dict[str, Any]: Plan de entrenamiento generado
         """
-        try:
-            # Utilizar el adaptador del Intent Analyzer para analizar la intención
-            intent_analysis = await intent_analyzer_adapter.analyze_intent(query)
+        # Implementación específica para generar un plan de entrenamiento
+        prompt = f"""
+        Como Elite Training Strategist, genera un plan de entrenamiento personalizado basado en:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        Perfil: {profile.get('training_level', 'No especificado')}
+        
+        Proporciona un plan detallado con:
+        1. Objetivos del entrenamiento
+        2. Estructura semanal
+        3. Ejercicios específicos con series, repeticiones y descansos
+        4. Progresión recomendada
+        5. Métricas para seguimiento
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar el estado con el nuevo plan
+        if "training_plans" not in state:
+            state["training_plans"] = []
             
-            # Mapear la intención primaria a los tipos de consulta del agente
-            primary_intent = intent_analysis.get("primary_intent", "").lower()
-            
-            # Mapeo de intenciones a tipos de consulta
-            intent_to_query_type = {
-                "training_plan": "generate_training_plan",
-                "adapt_program": "adapt_training_program",
-                "performance_analysis": "analyze_performance_data",
-                "intensity_volume": "set_training_intensity_volume",
-                "exercise_routine": "prescribe_exercise_routines"
-            }
-            
-            # Buscar coincidencias exactas
-            if primary_intent in intent_to_query_type:
-                return intent_to_query_type[primary_intent]
-            
-            # Buscar coincidencias parciales
-            for intent, query_type in intent_to_query_type.items():
-                if intent in primary_intent:
-                    return query_type
-            
-            # Si no hay coincidencias, usar el método de palabras clave como fallback
-            return self._classify_query_by_keywords(query)
-        except Exception as e:
-            logger.error(f"Error al clasificar consulta con Intent Analyzer: {e}", exc_info=True)
-            # En caso de error, usar el método de palabras clave como fallback
-            return self._classify_query_by_keywords(query)
+        state["training_plans"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "plan": response_text,
+            "program_type": program_type
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
     
-    async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _adapt_training_program(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
         """
-        Consulta a otro agente utilizando el adaptador de A2A.
+        Adapta un programa de entrenamiento existente.
         
         Args:
-            agent_id: ID del agente a consultar
-            query: Consulta a enviar al agente
-            user_id: ID del usuario
-            session_id: ID de la sesión
-            context: Contexto adicional para la consulta
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
             
         Returns:
-            Dict[str, Any]: Respuesta del agente consultado
+            Dict[str, Any]: Programa adaptado
         """
-        try:
-            # Crear contexto para la consulta
-            task_context = {
-                "user_id": user_id,
-                "session_id": session_id,
-                "additional_context": context or {}
-            }
+        # Obtener el último plan de entrenamiento si existe
+        last_plan = None
+        if state.get("training_plans") and len(state["training_plans"]) > 0:
+            last_plan = state["training_plans"][-1].get("plan", "")
+        
+        # Implementación específica para adaptar un programa de entrenamiento
+        prompt = f"""
+        Como Elite Training Strategist, adapta el programa de entrenamiento existente basado en:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        Perfil: {profile.get('training_level', 'No especificado')}
+        
+        {"Plan existente: " + last_plan if last_plan else "No hay plan existente, crea uno nuevo."}
+        
+        Proporciona un plan adaptado con:
+        1. Cambios específicos y su justificación
+        2. Nueva estructura semanal
+        3. Ejercicios modificados con series, repeticiones y descansos
+        4. Progresión recomendada
+        5. Métricas para seguimiento
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar el estado con el plan adaptado
+        if "training_plans" not in state:
+            state["training_plans"] = []
             
-            # Llamar al agente utilizando el adaptador de A2A
-            response = await a2a_adapter.call_agent(
-                agent_id=agent_id,
-                user_input=query,
-                context=task_context
-            )
+        state["training_plans"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "plan": response_text,
+            "program_type": program_type,
+            "type": "adaptation"
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
+    
+    async def _analyze_performance_data(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+        """
+        Analiza datos de rendimiento del usuario.
+        
+        Args:
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
             
-            logger.info(f"Respuesta recibida del agente {agent_id}")
-            return response
-        except Exception as e:
-            logger.error(f"Error al consultar al agente {agent_id}: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "error": str(e),
-                "output": f"Error al consultar al agente {agent_id}",
-                "agent_id": agent_id,
-                "agent_name": agent_id
-            }
+        Returns:
+            Dict[str, Any]: Análisis de rendimiento
+        """
+        # Obtener datos de rendimiento si existen
+        performance_data = state.get("performance_data", {})
+        
+        # Implementación específica para analizar datos de rendimiento
+        prompt = f"""
+        Como Elite Training Strategist, analiza los datos de rendimiento basado en:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        Perfil: {profile.get('training_level', 'No especificado')}
+        
+        Datos de rendimiento: {performance_data}
+        
+        Proporciona un análisis detallado con:
+        1. Tendencias identificadas
+        2. Áreas de mejora
+        3. Recomendaciones específicas
+        4. Comparación con estándares para el nivel del usuario
+        5. Próximos objetivos recomendados
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar el estado con el análisis
+        if "performance_analyses" not in state:
+            state["performance_analyses"] = []
+            
+        state["performance_analyses"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "analysis": response_text
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
+    
+    async def _set_training_intensity_volume(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+        """
+        Establece la intensidad y volumen de entrenamiento.
+        
+        Args:
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
+            
+        Returns:
+            Dict[str, Any]: Recomendaciones de intensidad y volumen
+        """
+        # Implementación específica para establecer intensidad y volumen
+        prompt = f"""
+        Como Elite Training Strategist, establece la intensidad y volumen de entrenamiento basado en:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        Perfil: {profile.get('training_level', 'No especificado')}
+        
+        Proporciona recomendaciones detalladas con:
+        1. Intensidad recomendada (% de 1RM, RPE, etc.)
+        2. Volumen semanal (series por grupo muscular)
+        3. Distribución del volumen a lo largo de la semana
+        4. Estrategias de periodización
+        5. Ajustes basados en la recuperación
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar el estado con las recomendaciones
+        if "intensity_volume_recommendations" not in state:
+            state["intensity_volume_recommendations"] = []
+            
+        state["intensity_volume_recommendations"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "recommendations": response_text
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
+    
+    async def _prescribe_exercise_routines(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+        """
+        Prescribe rutinas de ejercicios específicas.
+        
+        Args:
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
+            
+        Returns:
+            Dict[str, Any]: Rutinas de ejercicios prescritas
+        """
+        # Implementación específica para prescribir rutinas de ejercicios
+        prompt = f"""
+        Como Elite Training Strategist, prescribe rutinas de ejercicios específicas basado en:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        Perfil: {profile.get('training_level', 'No especificado')}
+        
+        Proporciona rutinas detalladas con:
+        1. Ejercicios específicos para cada grupo muscular
+        2. Técnica correcta de ejecución
+        3. Series, repeticiones y descansos
+        4. Variaciones para diferentes niveles
+        5. Progresiones y regresiones
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar el estado con las rutinas
+        if "exercise_routines" not in state:
+            state["exercise_routines"] = []
+            
+        state["exercise_routines"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "routines": response_text
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
+    
+    async def _process_generic_query(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+        """
+        Procesa una consulta genérica cuando no se identifica un tipo específico.
+        
+        Args:
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
+            
+        Returns:
+            Dict[str, Any]: Respuesta a la consulta genérica
+        """
+        # Implementación para consultas genéricas
+        prompt = f"""
+        Como Elite Training Strategist, responde a la siguiente consulta:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        Perfil: {profile.get('training_level', 'No especificado')}
+        
+        Proporciona una respuesta detallada y útil basada en principios de entrenamiento avanzados.
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
+    
+    async def _generate_response(self, prompt: str, context: Dict[str, Any]) -> str:
+        """
+        Genera una respuesta utilizando el cliente Vertex AI.
+        
+        Args:
+            prompt: Prompt para generar la respuesta
+            context: Contexto para la generación
+            
+        Returns:
+            str: Respuesta generada
+        """
+        # Este método utiliza el método de la clase base de BaseAgentAdapter
+        # que internamente usa el cliente Vertex AI optimizado
+        return await super()._generate_response(prompt=prompt, context=context)

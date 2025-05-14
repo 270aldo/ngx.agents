@@ -21,34 +21,47 @@ from core.logging_config import configure_logging
 # Configurar logger
 logger = configure_logging(__name__)
 
-# Obtener tracer y meter
-tracer = get_tracer("ngx_agents.api")
-meter = get_meter("ngx_agents.api")
+# Importar configuración
+from core.settings import settings
 
-# Crear métricas
-http_requests_counter = meter.create_counter(
-    name="http.requests",
-    description="Número de solicitudes HTTP recibidas",
-    unit="1"
-)
+# Variables globales para telemetría
+tracer = None
+meter = None
+http_requests_counter = None
+http_request_duration = None
+http_request_size = None
+http_response_size = None
 
-http_request_duration = meter.create_histogram(
-    name="http.request.duration",
-    description="Duración de las solicitudes HTTP",
-    unit="ms"
-)
-
-http_request_size = meter.create_histogram(
-    name="http.request.size",
-    description="Tamaño de las solicitudes HTTP",
-    unit="bytes"
-)
-
-http_response_size = meter.create_histogram(
-    name="http.response.size",
-    description="Tamaño de las respuestas HTTP",
-    unit="bytes"
-)
+# Inicializar métricas solo si la telemetría está habilitada
+if settings.telemetry_enabled:
+    # Obtener tracer y meter
+    tracer = get_tracer("ngx_agents.api")
+    meter = get_meter("ngx_agents.api")
+    
+    # Crear métricas
+    http_requests_counter = meter.create_counter(
+        name="http.requests",
+        description="Número de solicitudes HTTP recibidas",
+        unit="1"
+    )
+    
+    http_request_duration = meter.create_histogram(
+        name="http.request.duration",
+        description="Duración de las solicitudes HTTP",
+        unit="ms"
+    )
+    
+    http_request_size = meter.create_histogram(
+        name="http.request.size",
+        description="Tamaño de las solicitudes HTTP",
+        unit="bytes"
+    )
+    
+    http_response_size = meter.create_histogram(
+        name="http.response.size",
+        description="Tamaño de las respuestas HTTP",
+        unit="bytes"
+    )
 
 
 class TelemetryMiddleware(BaseHTTPMiddleware):
@@ -231,10 +244,15 @@ class TelemetryRoute(APIRoute):
 def setup_telemetry_middleware(app: FastAPI) -> None:
     """
     Configura el middleware de telemetría para una aplicación FastAPI.
+    Solo configura el middleware si la telemetría está habilitada.
     
     Args:
         app: La aplicación FastAPI a instrumentar.
     """
+    if not settings.telemetry_enabled:
+        logger.info("Telemetría deshabilitada. No se configurará el middleware.")
+        return
+        
     # Añadir middleware de telemetría
     app.add_middleware(TelemetryMiddleware)
     

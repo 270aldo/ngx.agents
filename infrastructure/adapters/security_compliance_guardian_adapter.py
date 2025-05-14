@@ -7,223 +7,466 @@ necesarios para utilizar el sistema A2A optimizado y el cliente Vertex AI optimi
 
 import logging
 import time
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, Tuple
 from datetime import datetime
 
 from agents.security_compliance_guardian.agent import SecurityComplianceGuardian
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 from infrastructure.adapters.a2a_adapter import a2a_adapter
-from infrastructure.adapters.state_manager_adapter import state_manager_adapter
-from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
-from clients.vertex_ai import vertex_ai_client
 from core.logging_config import get_logger
 
 # Configurar logger
 logger = get_logger(__name__)
 
-class SecurityComplianceGuardianAdapter(SecurityComplianceGuardian):
+class SecurityComplianceGuardianAdapter(SecurityComplianceGuardian, BaseAgentAdapter):
     """
     Adaptador para el agente SecurityComplianceGuardian que utiliza los componentes optimizados.
     
-    Este adaptador extiende el agente SecurityComplianceGuardian original y sobrescribe los métodos
-    necesarios para utilizar el sistema A2A optimizado y el cliente Vertex AI optimizado.
+    Este adaptador extiende el agente SecurityComplianceGuardian original y utiliza la clase
+    BaseAgentAdapter para implementar métodos comunes.
     """
     
-    async def _get_context(self, user_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def __init__(self, *args, **kwargs):
         """
-        Obtiene el contexto de la conversación desde el adaptador del StateManager.
+        Inicializa el adaptador del SecurityComplianceGuardian.
         
         Args:
-            user_id: ID del usuario
-            session_id: ID de la sesión
+            *args: Argumentos posicionales para la clase base
+            **kwargs: Argumentos de palabras clave para la clase base
+        """
+        super().__init__(*args, **kwargs)
+        
+        # Configuración de clasificación específica para este agente
+        self.fallback_keywords = [
+            "seguridad", "security", "cumplimiento", "compliance", "regulación", "regulation",
+            "vulnerabilidad", "vulnerability", "amenaza", "threat", "protección", "protection",
+            "privacidad", "privacy", "encriptación", "encryption", "auditoría", "audit"
+        ]
+        
+        self.excluded_keywords = [
+            "entrenamiento", "training", "nutrición", "nutrition", "recuperación", "recovery",
+            "rendimiento", "performance", "motivación", "motivation"
+        ]
+    
+    def _create_default_context(self) -> Dict[str, Any]:
+        """
+        Crea un contexto predeterminado para el agente SecurityComplianceGuardian.
+        
+        Returns:
+            Dict[str, Any]: Contexto predeterminado
+        """
+        return {
+            "conversation_history": [],
+            "user_profile": {},
+            "security_queries": [],
+            "security_assessments": [],
+            "compliance_checks": [],
+            "vulnerability_scans": [],
+            "data_protections": [],
+            "general_recommendations": [],
+            "query_types": {},
+            "last_updated": datetime.now().isoformat()
+        }
+    
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
+        """
+        Obtiene el mapeo de intenciones a tipos de consulta específico para SecurityComplianceGuardian.
+        
+        Returns:
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
+        """
+        return {
+            "security_assessment": "security_assessment",
+            "security_audit": "security_assessment",
+            "compliance": "compliance_check",
+            "regulation": "compliance_check",
+            "vulnerability": "vulnerability_scan",
+            "threat": "vulnerability_scan",
+            "data_protection": "data_protection",
+            "privacy": "data_protection",
+            "encryption": "data_protection"
+        }
+    
+    def _adjust_score_based_on_context(self, score: float, context: Dict[str, Any]) -> float:
+        """
+        Ajusta la puntuación de clasificación basada en el contexto.
+        
+        Args:
+            score: Puntuación de clasificación original
+            context: Contexto adicional para la clasificación
             
         Returns:
-            Dict[str, Any]: Contexto de la conversación
+            float: Puntuación ajustada
         """
-        try:
-            # Intentar cargar el contexto desde el adaptador del StateManager
-            if user_id and session_id:
-                try:
-                    context = await state_manager_adapter.load_state(user_id, session_id)
-                    if context:
-                        logger.info(f"Contexto cargado desde adaptador del StateManager para user_id={user_id}, session_id={session_id}")
-                        return context
-                except Exception as e:
-                    logger.warning(f"Error al cargar contexto desde adaptador del StateManager: {e}")
-            
-            # Si no hay contexto o hay error, crear uno nuevo
-            logger.info(f"No se encontró contexto en adaptador del StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
-            return {
-                "conversation_history": [],
-                "user_profile": {},
-                "security_queries": [],
-                "security_assessments": [],
-                "compliance_checks": [],
-                "vulnerability_scans": [],
-                "data_protections": [],
-                "general_recommendations": [],
-                "query_types": {},
-                "last_updated": datetime.now().isoformat()
-            }
-        except Exception as e:
-            logger.error(f"Error al obtener contexto: {e}", exc_info=True)
-            # En caso de error, devolver un contexto vacío
-            return {
-                "conversation_history": [],
-                "user_profile": {},
-                "security_queries": [],
-                "security_assessments": [],
-                "compliance_checks": [],
-                "vulnerability_scans": [],
-                "data_protections": [],
-                "general_recommendations": [],
-                "query_types": {},
-                "last_updated": datetime.now().isoformat()
-            }
-
-    async def _update_context(self, context: Dict[str, Any], user_id: str, session_id: str) -> None:
+        # Verificar si hay consultas de seguridad previas
+        if context.get("security_queries") and len(context.get("security_queries", [])) > 0:
+            score += 0.1  # Aumentar la puntuación si hay consultas de seguridad previas
+        
+        # Verificar si hay evaluaciones de seguridad previas
+        if context.get("security_assessments") and len(context.get("security_assessments", [])) > 0:
+            score += 0.1  # Aumentar la puntuación si hay evaluaciones de seguridad previas
+        
+        # Verificar si hay verificaciones de cumplimiento previas
+        if context.get("compliance_checks") and len(context.get("compliance_checks", [])) > 0:
+            score += 0.1  # Aumentar la puntuación si hay verificaciones de cumplimiento previas
+        
+        # Limitar la puntuación máxima a 1.0
+        return min(1.0, score)
+    
+    async def _process_query(self, query: str, user_id: str, session_id: str,
+                           program_type: str, state: Dict[str, Any], profile: Dict[str, Any],
+                           **kwargs) -> Dict[str, Any]:
         """
-        Actualiza el contexto de la conversación en el adaptador del StateManager.
+        Procesa la consulta del usuario.
+        
+        Este método implementa la lógica específica del SecurityComplianceGuardian.
         
         Args:
-            context: Contexto actualizado
+            query: La consulta del usuario
             user_id: ID del usuario
             session_id: ID de la sesión
+            program_type: Tipo de programa (general, elite, etc.)
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta del agente
         """
         try:
-            # Actualizar la marca de tiempo
-            context["last_updated"] = datetime.now().isoformat()
+            # Determinar el tipo de consulta
+            query_type = await self._classify_query(query)
+            logger.info(f"Tipo de consulta determinado: {query_type}")
             
-            # Guardar el contexto en el adaptador del StateManager
-            await state_manager_adapter.save_state(user_id, session_id, context)
-            logger.info(f"Contexto actualizado en adaptador del StateManager para user_id={user_id}, session_id={session_id}")
+            # Actualizar el contexto con el tipo de consulta
+            if "query_types" not in state:
+                state["query_types"] = {}
+                
+            if query_type in state["query_types"]:
+                state["query_types"][query_type] += 1
+            else:
+                state["query_types"][query_type] = 1
+            
+            # Procesar según el tipo de consulta
+            if query_type == "security_assessment":
+                response = await self._process_security_assessment(query, state, profile, program_type)
+            elif query_type == "compliance_check":
+                response = await self._process_compliance_check(query, state, profile, program_type)
+            elif query_type == "vulnerability_scan":
+                response = await self._process_vulnerability_scan(query, state, profile, program_type)
+            elif query_type == "data_protection":
+                response = await self._process_data_protection(query, state, profile, program_type)
+            else:
+                # Tipo de consulta no reconocido, usar procesamiento genérico
+                response = await self._process_generic_query(query, state, profile, program_type)
+            
+            return response
+            
         except Exception as e:
-            logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
+            logger.error(f"Error al procesar consulta: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "response": f"Lo siento, ha ocurrido un error al procesar tu consulta: {str(e)}",
+                "agent": self.__class__.__name__
+            }
     
-    async def _classify_query_with_intent_analyzer(self, query: str) -> str:
+    async def _process_security_assessment(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
         """
-        Clasifica el tipo de consulta del usuario utilizando el adaptador del Intent Analyzer.
+        Procesa una consulta de evaluación de seguridad.
         
         Args:
             query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
             
         Returns:
-            str: Tipo de consulta clasificada
+            Dict[str, Any]: Resultado de la evaluación de seguridad
         """
-        try:
-            # Utilizar el adaptador del Intent Analyzer para analizar la intención
-            intent_analysis = await intent_analyzer_adapter.analyze_intent(query)
+        # Implementación específica para evaluación de seguridad
+        prompt = f"""
+        Como Security Compliance Guardian, realiza una evaluación de seguridad basada en:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        
+        Proporciona una evaluación detallada que incluya:
+        1. Identificación de riesgos de seguridad potenciales
+        2. Evaluación de controles de seguridad existentes
+        3. Recomendaciones para mejorar la postura de seguridad
+        4. Mejores prácticas aplicables
+        5. Consideraciones específicas para el contexto del usuario
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar el estado con la nueva evaluación
+        if "security_assessments" not in state:
+            state["security_assessments"] = []
             
-            # Mapear la intención primaria a los tipos de consulta del agente
-            primary_intent = intent_analysis.get("primary_intent", "").lower()
+        state["security_assessments"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "assessment": response_text
+        })
+        
+        # Actualizar las consultas de seguridad
+        if "security_queries" not in state:
+            state["security_queries"] = []
             
-            # Mapeo de intenciones a tipos de consulta
-            intent_to_query_type = {
-                "security_assessment": "security_assessment",
-                "security_audit": "security_assessment",
-                "compliance": "compliance_check",
-                "regulation": "compliance_check",
-                "vulnerability": "vulnerability_scan",
-                "threat": "vulnerability_scan",
-                "data_protection": "data_protection",
-                "privacy": "data_protection",
-                "encryption": "data_protection"
-            }
-            
-            # Buscar coincidencias exactas
-            if primary_intent in intent_to_query_type:
-                return intent_to_query_type[primary_intent]
-            
-            # Buscar coincidencias parciales
-            for intent, query_type in intent_to_query_type.items():
-                if intent in primary_intent:
-                    return query_type
-            
-            # Si no hay coincidencias, usar el método de palabras clave como fallback
-            return self._classify_query(query)
-        except Exception as e:
-            logger.error(f"Error al clasificar consulta con Intent Analyzer: {e}", exc_info=True)
-            # En caso de error, usar el método de palabras clave como fallback
-            return self._classify_query(query)
+        state["security_queries"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "type": "security_assessment"
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
     
-    async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _process_compliance_check(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
         """
-        Consulta a otro agente utilizando el adaptador de A2A.
+        Procesa una consulta de verificación de cumplimiento.
         
         Args:
-            agent_id: ID del agente a consultar
-            query: Consulta a enviar al agente
-            user_id: ID del usuario
-            session_id: ID de la sesión
-            context: Contexto adicional para la consulta
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
             
         Returns:
-            Dict[str, Any]: Respuesta del agente consultado
+            Dict[str, Any]: Resultado de la verificación de cumplimiento
         """
-        try:
-            # Crear contexto para la consulta
-            task_context = {
-                "user_id": user_id,
-                "session_id": session_id,
-                "additional_context": context or {}
-            }
+        # Implementación específica para verificación de cumplimiento
+        prompt = f"""
+        Como Security Compliance Guardian, realiza una verificación de cumplimiento basada en:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        
+        Proporciona una verificación detallada que incluya:
+        1. Identificación de requisitos regulatorios aplicables
+        2. Evaluación del nivel de cumplimiento actual
+        3. Brechas de cumplimiento identificadas
+        4. Recomendaciones para lograr el cumplimiento
+        5. Consideraciones específicas para el contexto del usuario
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar el estado con la nueva verificación
+        if "compliance_checks" not in state:
+            state["compliance_checks"] = []
             
-            # Llamar al agente utilizando el adaptador de A2A
-            response = await a2a_adapter.call_agent(
-                agent_id=agent_id,
-                user_input=query,
-                context=task_context
-            )
+        state["compliance_checks"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "check": response_text
+        })
+        
+        # Actualizar las consultas de seguridad
+        if "security_queries" not in state:
+            state["security_queries"] = []
             
-            logger.info(f"Respuesta recibida del agente {agent_id}")
-            return response
-        except Exception as e:
-            logger.error(f"Error al consultar al agente {agent_id}: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "error": str(e),
-                "output": f"Error al consultar al agente {agent_id}",
-                "agent_id": agent_id,
-                "agent_name": agent_id
-            }
+        state["security_queries"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "type": "compliance_check"
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
     
-    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    async def _process_vulnerability_scan(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
         """
-        Sobrescribe el método _run_async_impl para utilizar el clasificador de intenciones optimizado.
+        Procesa una consulta de escaneo de vulnerabilidades.
         
         Args:
-            input_text: Texto de entrada del usuario
-            user_id: ID del usuario (opcional)
-            **kwargs: Argumentos adicionales como context, parameters, etc.
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
             
         Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo ADK
+            Dict[str, Any]: Resultado del escaneo de vulnerabilidades
         """
-        start_time = time.time()
-        logger.info(f"Ejecutando SecurityComplianceGuardianAdapter con input: {input_text[:50]}...")
+        # Implementación específica para escaneo de vulnerabilidades
+        prompt = f"""
+        Como Security Compliance Guardian, realiza un escaneo de vulnerabilidades basado en:
         
-        # Obtener session_id de los kwargs o generar uno nuevo
-        session_id = kwargs.get("session_id", None)
+        Consulta: {query}
+        Tipo de programa: {program_type}
         
-        # Obtener el contexto de la conversación
-        context = await self._get_context(user_id, session_id) if user_id else {}
+        Proporciona un escaneo detallado que incluya:
+        1. Identificación de vulnerabilidades potenciales
+        2. Evaluación de la severidad de cada vulnerabilidad
+        3. Vectores de ataque posibles
+        4. Recomendaciones para mitigar las vulnerabilidades
+        5. Consideraciones específicas para el contexto del usuario
+        """
         
-        # Clasificar el tipo de consulta utilizando el Intent Analyzer
-        query_type = await self._classify_query_with_intent_analyzer(input_text)
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
         
-        # Actualizar el contexto con el tipo de consulta
-        if query_type in context.get("query_types", {}):
-            context["query_types"][query_type] += 1
-        else:
-            if "query_types" not in context:
-                context["query_types"] = {}
-            context["query_types"][query_type] = 1
+        # Actualizar el estado con el nuevo escaneo
+        if "vulnerability_scans" not in state:
+            state["vulnerability_scans"] = []
+            
+        state["vulnerability_scans"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "scan": response_text
+        })
         
-        # Continuar con la implementación original pero usando el query_type determinado por el Intent Analyzer
-        # Llamar al método original con el contexto actualizado
-        result = await super()._run_async_impl(input_text, user_id, **kwargs)
+        # Actualizar las consultas de seguridad
+        if "security_queries" not in state:
+            state["security_queries"] = []
+            
+        state["security_queries"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "type": "vulnerability_scan"
+        })
         
-        # Calcular tiempo de ejecución
-        execution_time = time.time() - start_time
-        logger.info(f"SecurityComplianceGuardianAdapter completó la ejecución en {execution_time:.2f} segundos")
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
+    
+    async def _process_data_protection(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+        """
+        Procesa una consulta de protección de datos.
         
-        return result
+        Args:
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
+            
+        Returns:
+            Dict[str, Any]: Resultado de la protección de datos
+        """
+        # Implementación específica para protección de datos
+        prompt = f"""
+        Como Security Compliance Guardian, proporciona recomendaciones de protección de datos basadas en:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        
+        Proporciona recomendaciones detalladas que incluyan:
+        1. Estrategias de protección de datos aplicables
+        2. Mecanismos de encriptación recomendados
+        3. Políticas de privacidad y manejo de datos
+        4. Mejores prácticas para la protección de información sensible
+        5. Consideraciones específicas para el contexto del usuario
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar el estado con las nuevas recomendaciones
+        if "data_protections" not in state:
+            state["data_protections"] = []
+            
+        state["data_protections"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "recommendations": response_text
+        })
+        
+        # Actualizar las consultas de seguridad
+        if "security_queries" not in state:
+            state["security_queries"] = []
+            
+        state["security_queries"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "type": "data_protection"
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
+    
+    async def _process_generic_query(self, query: str, state: Dict[str, Any], profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+        """
+        Procesa una consulta genérica cuando no se identifica un tipo específico.
+        
+        Args:
+            query: Consulta del usuario
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            program_type: Tipo de programa
+            
+        Returns:
+            Dict[str, Any]: Respuesta a la consulta genérica
+        """
+        # Implementación para consultas genéricas
+        prompt = f"""
+        Como Security Compliance Guardian, responde a la siguiente consulta:
+        
+        Consulta: {query}
+        Tipo de programa: {program_type}
+        
+        Proporciona una respuesta detallada y útil basada en principios de seguridad y cumplimiento.
+        """
+        
+        # Generar respuesta utilizando el método de la clase base
+        response_text = await self._generate_response(prompt=prompt, context=state)
+        
+        # Actualizar las recomendaciones generales
+        if "general_recommendations" not in state:
+            state["general_recommendations"] = []
+            
+        state["general_recommendations"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "recommendation": response_text
+        })
+        
+        # Actualizar las consultas de seguridad
+        if "security_queries" not in state:
+            state["security_queries"] = []
+            
+        state["security_queries"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "type": "general"
+        })
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "context": state,
+            "agent": self.__class__.__name__
+        }
+    
+    async def _generate_response(self, prompt: str, context: Dict[str, Any]) -> str:
+        """
+        Genera una respuesta utilizando el cliente Vertex AI.
+        
+        Args:
+            prompt: Prompt para generar la respuesta
+            context: Contexto para la generación
+            
+        Returns:
+            str: Respuesta generada
+        """
+        # Este método utiliza el método de la clase base de BaseAgentAdapter
+        # que internamente usa el cliente Vertex AI optimizado
+        return await super()._generate_response(prompt=prompt, context=context)

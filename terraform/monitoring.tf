@@ -417,6 +417,68 @@ resource "google_monitoring_alert_policy" "service_unavailable" {
   }
 }
 
+# Alertas específicas para Vertex AI
+resource "google_monitoring_alert_policy" "vertex_ai_high_usage" {
+  display_name = "NGX Agents - Vertex AI Alto Uso"
+  combiner     = "OR"
+  conditions {
+    display_name = "Uso de tokens > 100,000/min"
+    condition_threshold {
+      filter          = "metric.type=\"custom.googleapis.com/vertex_ai.client.tokens\" resource.type=\"k8s_container\" metric.label.type=\"total\""
+      duration        = "900s"  # 15 minutos
+      comparison      = "COMPARISON_GT"
+      threshold_value = 100000
+      aggregations {
+        alignment_period   = "300s"  # 5 minutos
+        per_series_aligner = "ALIGN_RATE"
+      }
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.pagerduty.name]
+
+  documentation {
+    content   = "Alto uso de tokens de Vertex AI detectado. Esto puede generar costos elevados. Revisar el uso y considerar ajustes en la caché o en los parámetros de generación."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "vertex_ai_low_cache_hit_rate" {
+  display_name = "NGX Agents - Vertex AI Baja Tasa de Aciertos de Caché"
+  combiner     = "OR"
+  conditions {
+    display_name = "Tasa de aciertos de caché < 50%"
+    condition_threshold {
+      filter          = "metric.type=\"custom.googleapis.com/vertex_ai.client.cache_hits\" resource.type=\"k8s_container\""
+      duration        = "1800s"  # 30 minutos
+      comparison      = "COMPARISON_LT"
+      threshold_value = 0.5
+      denominator_filter = "metric.type=\"custom.googleapis.com/vertex_ai.client.cache_misses\" resource.type=\"k8s_container\""
+      denominator_aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_RATE"
+      }
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_RATE"
+      }
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.pagerduty.name]
+
+  documentation {
+    content   = "Baja tasa de aciertos de caché en Vertex AI. Esto puede aumentar costos y latencia. Revisar la configuración de TTL y estrategias de caché."
+    mime_type = "text/markdown"
+  }
+}
+
 resource "google_monitoring_notification_channel" "pagerduty" {
   display_name = "PagerDuty - NGX Agents"
   type         = "pagerduty"

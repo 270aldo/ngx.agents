@@ -5,7 +5,7 @@ Este módulo define los esquemas de entrada y salida para las skills del agente
 PrecisionNutritionArchitect utilizando modelos Pydantic.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -242,3 +242,86 @@ class ChrononutritionPlanArtifact(BaseModel):
     fasting_hours: Optional[int] = Field(
         None, description="Horas de ayuno recomendadas"
     )
+    
+    
+    # Modelos para la skill de análisis de imágenes de alimentos
+    class AnalyzeFoodImageInput(BaseModel):
+        """Esquema de entrada para la skill de análisis de imágenes de alimentos."""
+        image_data: Union[str, Dict[str, Any]] = Field(
+            ..., description="Datos de la imagen (base64, URL o ruta de archivo)"
+        )
+        user_input: Optional[str] = Field(
+            "", description="Texto de entrada del usuario"
+        )
+        user_profile: Optional[Dict[str, Any]] = Field(
+            None, description="Perfil del usuario con información relevante"
+        )
+        dietary_preferences: Optional[List[str]] = Field(
+            None, description="Preferencias dietéticas del usuario"
+        )
+    
+    
+    class NutrientInfo(BaseModel):
+        """Modelo para información nutricional de un alimento."""
+        name: str = Field(..., description="Nombre del nutriente")
+        amount: str = Field(..., description="Cantidad del nutriente")
+        unit: str = Field(..., description="Unidad de medida")
+        daily_value_percent: Optional[float] = Field(
+            None, description="Porcentaje del valor diario recomendado"
+        )
+    
+    
+    class FoodItem(BaseModel):
+        """Modelo para un alimento identificado en la imagen."""
+        name: str = Field(..., description="Nombre del alimento")
+        confidence_score: float = Field(..., description="Puntuación de confianza (0.0-1.0)")
+        estimated_calories: Optional[str] = Field(
+            None, description="Calorías estimadas"
+        )
+        estimated_portion: Optional[str] = Field(
+            None, description="Porción estimada"
+        )
+        macronutrients: Optional[Dict[str, str]] = Field(
+            None, description="Macronutrientes estimados"
+        )
+        nutrients: Optional[List[NutrientInfo]] = Field(
+            None, description="Información nutricional detallada"
+        )
+    
+    
+    class AnalyzeFoodImageOutput(BaseModel):
+        """Esquema de salida para la skill de análisis de imágenes de alimentos."""
+        identified_foods: List[FoodItem] = Field(
+            ..., description="Alimentos identificados en la imagen"
+        )
+        total_calories: Optional[str] = Field(
+            None, description="Calorías totales estimadas"
+        )
+        meal_type: Optional[str] = Field(
+            None, description="Tipo de comida (desayuno, almuerzo, cena, snack)"
+        )
+        nutritional_assessment: str = Field(
+            ..., description="Evaluación nutricional general"
+        )
+        health_score: Optional[float] = Field(
+            None, description="Puntuación de salud (0-10)"
+        )
+        recommendations: List[str] = Field(
+            ..., description="Recomendaciones nutricionales"
+        )
+        alternatives: Optional[List[Dict[str, str]]] = Field(
+            None, description="Alternativas más saludables"
+        )
+    
+    
+    class FoodImageAnalysisArtifact(BaseModel):
+        """Artefacto para análisis de imágenes de alimentos."""
+        analysis_id: str = Field(..., description="ID único del análisis")
+        created_at: str = Field(..., description="Timestamp de creación")
+        food_count: int = Field(..., description="Número de alimentos identificados")
+        health_score: Optional[float] = Field(
+            None, description="Puntuación de salud (0-10)"
+        )
+        processed_image_url: Optional[str] = Field(
+            None, description="URL de la imagen procesada con anotaciones"
+        )

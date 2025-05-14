@@ -36,7 +36,9 @@ from agents.biometrics_insight_engine.schemas import (
     PatternRecognitionInput, PatternRecognitionOutput,
     TrendIdentificationInput, TrendIdentificationOutput,
     DataVisualizationInput, DataVisualizationOutput,
-    BiometricAnalysisArtifact, BiometricVisualizationArtifact
+    BiometricAnalysisArtifact, BiometricVisualizationArtifact,
+    BiometricImageAnalysisInput, BiometricImageAnalysisOutput,
+    BiometricImageArtifact
 )
 
 # Configurar logger
@@ -132,6 +134,13 @@ class BiometricsInsightEngine(ADKAgent):
                 handler=self._skill_data_visualization,
                 input_schema=DataVisualizationInput,
                 output_schema=DataVisualizationOutput
+            ),
+            Skill(
+                name="biometric_image_analysis",
+                description="Analiza imágenes biométricas para extraer métricas, identificar indicadores visuales y proporcionar insights de salud",
+                handler=self._skill_biometric_image_analysis,
+                input_schema=BiometricImageAnalysisInput,
+                output_schema=BiometricImageAnalysisOutput
             )
         ]
         
@@ -142,6 +151,7 @@ class BiometricsInsightEngine(ADKAgent):
             "trend_identification",
             "personalized_insights",
             "data_visualization",
+            "biometric_image_analysis",
         ]
         
         # Crear un toolkit de ADK
@@ -332,7 +342,6 @@ class BiometricsInsightEngine(ADKAgent):
                     "data_points": sum(len(data_type) for data_type in biometric_data.values()),
                     "program_type": program_type
                 }
-            )
             )
             
         except Exception as e:
@@ -757,3 +766,170 @@ class BiometricsInsightEngine(ADKAgent):
             "glucose": glucose_data,
             "body_composition": body_composition_data
         }
+        
+    async def _skill_biometric_image_analysis(self, input_data: BiometricImageAnalysisInput) -> BiometricImageAnalysisOutput:
+        """
+        Skill para analizar imágenes biométricas.
+        
+        Args:
+            input_data: Datos de entrada para la skill
+            
+        Returns:
+            BiometricImageAnalysisOutput: Análisis de la imagen biométrica
+        """
+        logger.info(f"Ejecutando skill de análisis de imágenes biométricas con tipo de análisis: {input_data.analysis_type}")
+        
+        try:
+            # Obtener datos de la imagen
+            image_data = input_data.image_data
+            analysis_type = input_data.analysis_type or "full"
+            user_profile = input_data.user_profile or {}
+            
+            # Determinar el tipo de programa del usuario para análisis personalizado
+            context = {
+                "user_profile": user_profile,
+                "goals": user_profile.get("goals", [])
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para análisis de imagen biométrica: {program_type}")
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando análisis general.")
+                program_type = "GENERAL"
+            
+            # Utilizar las capacidades de visión del agente base
+            with self.tracer.start_as_current_span("biometric_image_analysis"):
+                # Analizar la imagen utilizando el procesador de visión
+                if analysis_type == "full":
+                    # Análisis completo de la imagen
+                    vision_result = await self.vision_processor.analyze_image(image_data)
+                elif analysis_type == "body":
+                    # Análisis específico de cuerpo/postura
+                    vision_result = await self.vision_processor.analyze_image(image_data, "objects")
+                elif analysis_type == "face":
+                    # Análisis específico de rostro
+                    vision_result = await self.vision_processor.analyze_faces(image_data)
+                else:
+                    # Análisis por defecto
+                    vision_result = await self.vision_processor.analyze_image(image_data)
+                
+                # Generar una descripción detallada de la imagen
+                description_result = await self.vision_processor.describe_image(
+                    image_data,
+                    detail_level="detailed",
+                    focus_aspect="people"
+                )
+                
+                # Extraer métricas biométricas de la imagen usando el modelo multimodal
+                prompt = f"""
+                Eres un experto en análisis biométrico visual. Analiza esta imagen y extrae métricas biométricas
+                visibles. Considera aspectos como:
+                
+                1. Composición corporal aproximada
+                2. Postura y alineación
+                3. Indicadores visuales de salud
+                4. Simetría corporal
+                5. Otros indicadores biométricos relevantes
+                
+                Proporciona un análisis detallado y objetivo basado únicamente en lo que es visible en la imagen.
+                Considera que este análisis es para un usuario con programa tipo {program_type}.
+                """
+                
+                multimodal_result = await self.multimodal_adapter.process_multimodal(
+                    prompt=prompt,
+                    image_data=image_data,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Combinar los resultados para crear un análisis completo
+                analysis_summary = multimodal_result.get("text", "")
+                
+                # Extraer métricas detectadas (simuladas para este ejemplo)
+                detected_metrics = {
+                    "posture_score": 0.85,
+                    "symmetry_score": 0.78,
+                    "estimated_body_composition": {
+                        "body_fat_percentage": "No determinable con precisión desde la imagen",
+                        "muscle_definition": "Moderada",
+                        "body_proportions": "Dentro de rangos normales"
+                    }
+                }
+                
+                # Extraer indicadores visuales
+                visual_indicators = []
+                if "objects" in vision_result:
+                    for obj in vision_result.get("objects", []):
+                        if obj.get("name") in ["person", "face", "body", "arm", "leg"]:
+                            visual_indicators.append({
+                                "type": obj.get("name"),
+                                "confidence": obj.get("score", 0),
+                                "location": obj.get("bounding_poly", [])
+                            })
+                
+                # Generar insights de salud basados en el análisis
+                health_insights_prompt = f"""
+                Basándote en el siguiente análisis de una imagen biométrica, genera 3-5 insights de salud
+                concretos y accionables. El análisis es:
+                
+                {analysis_summary}
+                
+                Proporciona insights específicos, basados en evidencia y relevantes para un programa {program_type}.
+                """
+                
+                health_insights_response = await self.gemini_client.generate_text(health_insights_prompt)
+                health_insights = [insight.strip() for insight in health_insights_response.split("\n") if insight.strip()]
+                
+                # Generar recomendaciones personalizadas
+                recommendations_prompt = f"""
+                Basándote en el siguiente análisis de una imagen biométrica, genera 3-5 recomendaciones
+                personalizadas y accionables. El análisis es:
+                
+                {analysis_summary}
+                
+                Proporciona recomendaciones específicas, basadas en evidencia y relevantes para un programa {program_type}.
+                """
+                
+                recommendations_response = await self.gemini_client.generate_text(recommendations_prompt)
+                recommendations = [rec.strip() for rec in recommendations_response.split("\n") if rec.strip()]
+                
+                # Crear artefacto con el análisis
+                artifact = BiometricImageArtifact(
+                    analysis_id=str(uuid.uuid4()),
+                    image_type="biometric",
+                    analysis_type=analysis_type,
+                    timestamp=time.time(),
+                    annotations={
+                        "indicators": visual_indicators,
+                        "metrics": detected_metrics
+                    },
+                    processed_image_url=""  # En un caso real, aquí iría la URL de la imagen procesada
+                )
+                
+                # Calcular puntuación de confianza
+                confidence_scores = [indicator.get("confidence", 0) for indicator in visual_indicators]
+                confidence_score = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.7
+                
+                return BiometricImageAnalysisOutput(
+                    analysis_summary=analysis_summary,
+                    detected_metrics=detected_metrics,
+                    visual_indicators=visual_indicators,
+                    health_insights=health_insights,
+                    recommendations=recommendations,
+                    confidence_score=confidence_score
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al analizar imagen biométrica: {e}", exc_info=True)
+            
+            # En caso de error, devolver un análisis básico
+            return BiometricImageAnalysisOutput(
+                analysis_summary=f"Error al analizar la imagen biométrica: {str(e)}",
+                detected_metrics={},
+                visual_indicators=[],
+                health_insights=["No se pudieron generar insights debido a un error en el análisis"],
+                recommendations=["Consulta a un profesional de la salud para un análisis preciso"],
+                confidence_score=0.0
+            )

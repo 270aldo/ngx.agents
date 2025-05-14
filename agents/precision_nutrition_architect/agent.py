@@ -38,8 +38,10 @@ from agents.precision_nutrition_architect.schemas import (
     AnalyzeBiomarkersInput, AnalyzeBiomarkersOutput,
     BiomarkerAnalysis,
     PlanChrononutritionInput, PlanChrononutritionOutput,
+    AnalyzeFoodImageInput, AnalyzeFoodImageOutput,
     MealPlanArtifact, SupplementRecommendationArtifact,
-    BiomarkerAnalysisArtifact, ChrononutritionPlanArtifact
+    BiomarkerAnalysisArtifact, ChrononutritionPlanArtifact,
+    FoodImageAnalysisArtifact
 )
 
 # Configurar logger
@@ -97,9 +99,17 @@ class PrecisionNutritionArchitect(ADKAgent):
         _instruction = instruction or self.DEFAULT_INSTRUCTION
         _mcp_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
         
-        # Inicializar el servicio de clasificación de programas
+        # Inicializar el servicio de clasificación de programas con caché
         self.gemini_client = GeminiClient()
-        self.program_classification_service = ProgramClassificationService(self.gemini_client)
+        
+        # Configurar caché para el servicio de clasificación de programas
+        use_redis = os.environ.get('USE_REDIS_CACHE', 'false').lower() == 'true'
+        cache_ttl = int(os.environ.get('PROGRAM_CACHE_TTL', '3600'))  # 1 hora por defecto
+        self.program_classification_service = ProgramClassificationService(
+            gemini_client=self.gemini_client,
+            use_cache=use_redis,  # Habilitar caché según la configuración
+            cache_ttl=cache_ttl  # Establecer el tiempo de vida de la caché
+        )
         
         # Definir las skills antes de llamar al constructor de ADKAgent
         self.skills = [
@@ -130,6 +140,13 @@ class PrecisionNutritionArchitect(ADKAgent):
                 handler=self._skill_plan_chrononutrition,
                 input_schema=PlanChrononutritionInput,
                 output_schema=PlanChrononutritionOutput
+            ),
+            Skill(
+                name="analyze_food_image",
+                description="Analiza imágenes de alimentos para identificar componentes, estimar valores nutricionales y proporcionar recomendaciones.",
+                handler=self._skill_analyze_food_image,
+                input_schema=AnalyzeFoodImageInput,
+                output_schema=AnalyzeFoodImageOutput
             )
         ]
         
@@ -140,6 +157,7 @@ class PrecisionNutritionArchitect(ADKAgent):
             "supplement_recommendation",
             "chrononutrition_planning",
             "biomarker_analysis",
+            "food_image_analysis",
         ]
         
         # Crear un toolkit de ADK
@@ -172,6 +190,52 @@ class PrecisionNutritionArchitect(ADKAgent):
             logger.info("AI Platform (Vertex AI SDK) inicializado correctamente para PrecisionNutritionArchitect.")
         except Exception as e:
             logger.error(f"Error al inicializar AI Platform para PrecisionNutritionArchitect: {e}", exc_info=True)
+        
+        # Inicializar procesadores de visión y multimodales
+        try:
+            from core.vision_processor import VisionProcessor
+            from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
+            from clients.vertex_ai.vision_client import VertexAIVisionClient
+            from clients.vertex_ai.multimodal_client import VertexAIMultimodalClient
+            
+            # Inicializar procesador de visión
+            self.vision_processor = VisionProcessor()
+            logger.info("Procesador de visión inicializado correctamente")
+            
+            # Inicializar adaptador multimodal
+            self.multimodal_adapter = MultimodalAdapter()
+            logger.info("Adaptador multimodal inicializado correctamente")
+            
+            # Inicializar clientes especializados
+            self.vision_client = VertexAIVisionClient()
+            self.multimodal_client = VertexAIMultimodalClient()
+            logger.info("Clientes de visión y multimodal inicializados correctamente")
+            
+            # Inicializar tracer para telemetría
+            from opentelemetry import trace
+            self.tracer = trace.get_tracer(__name__)
+            logger.info("Tracer para telemetría inicializado correctamente")
+            
+            # Marcar capacidades como disponibles
+            self._vision_capabilities_available = True
+        except ImportError as e:
+            logger.warning(f"No se pudieron inicializar algunos componentes para capacidades avanzadas: {e}")
+            # Crear implementaciones simuladas para mantener la compatibilidad
+            self._vision_capabilities_available = False
+            
+            # Crear implementaciones simuladas
+            self.vision_processor = type('DummyVisionProcessor', (), {
+                'analyze_food_image': lambda self, image_data: {"detected_foods": [], "text": "Análisis de imagen simulado"}
+            })()
+            
+            self.multimodal_adapter = type('DummyMultimodalAdapter', (), {
+                'process_multimodal': lambda self, prompt, image_data, temperature=0.2, max_output_tokens=1024:
+                    {"text": "Análisis multimodal simulado"}
+            })()
+            
+            self.tracer = type('DummyTracer', (), {
+                'start_as_current_span': lambda name: type('DummySpan', (), {'__enter__': lambda self: None, '__exit__': lambda self, *args: None})()
+            })
             
         logger.info(f"{self.name} ({self.agent_id}) inicializado con integración oficial de Google ADK.")
     
@@ -602,9 +666,15 @@ class PrecisionNutritionArchitect(ADKAgent):
             }
             
             try:
-                # Clasificar el tipo de programa del usuario
+                # Clasificar el tipo de programa del usuario utilizando el servicio con caché
+                start_time = time.time()
                 program_type = await self.program_classification_service.classify_program_type(context)
-                logger.info(f"Tipo de programa determinado para plan de comidas: {program_type}")
+                elapsed_time = time.time() - start_time
+                logger.info(f"Tipo de programa determinado para plan de comidas: {program_type} (tiempo: {elapsed_time:.2f}s)")
+                
+                # Obtener estadísticas de caché para monitoreo
+                cache_stats = await self.program_classification_service.get_cache_stats()
+                logger.debug(f"Estadísticas de caché del servicio de clasificación: {cache_stats}")
                 
                 # Obtener definición del programa para personalizar el plan
                 program_def = get_program_definition(program_type)
@@ -623,8 +693,19 @@ class PrecisionNutritionArchitect(ADKAgent):
                     # Añadir estrategias nutricionales si están disponibles
                     if program_def.get("key_protocols") and "nutrition" in program_def.get("key_protocols", {}):
                         program_context += "- Estrategias nutricionales recomendadas:\n"
-                        for strategy in program_def.get("key_protocols", {}).get("nutrition", []):
-                            program_context += f"  * {strategy}\n"
+                        # Obtener recomendaciones específicas del programa utilizando el servicio con caché
+                        nutrition_recommendations = await self.program_classification_service.get_program_specific_recommendations(
+                            program_type, "nutrition"
+                        )
+                        
+                        # Usar las recomendaciones obtenidas del servicio o caer en el fallback
+                        if nutrition_recommendations:
+                            for strategy in nutrition_recommendations:
+                                program_context += f"  * {strategy}\n"
+                        else:
+                            # Fallback a las recomendaciones del programa_def si el servicio no devuelve datos
+                            for strategy in program_def.get("key_protocols", {}).get("nutrition", []):
+                                program_context += f"  * {strategy}\n"
                 
             except Exception as e:
                 logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando plan general.")
@@ -1164,3 +1245,293 @@ class PrecisionNutritionArchitect(ADKAgent):
                     "Evitar comidas pesadas antes de dormir"
                 ]
             }
+    
+    async def _skill_analyze_food_image(self, input_data: AnalyzeFoodImageInput) -> AnalyzeFoodImageOutput:
+        """
+        Skill para analizar imágenes de alimentos.
+        
+        Args:
+            input_data: Datos de entrada para la skill
+            
+        Returns:
+            AnalyzeFoodImageOutput: Análisis de la imagen de alimentos
+        """
+        logger.info(f"Ejecutando skill de análisis de imágenes de alimentos")
+        
+        try:
+            # Obtener datos de la imagen
+            image_data = input_data.image_data
+            user_profile = input_data.user_profile or {}
+            dietary_preferences = input_data.dietary_preferences or []
+            
+            # Determinar el tipo de programa del usuario para personalizar el análisis
+            context = {
+                "user_profile": user_profile,
+                "goals": user_profile.get("goals", []) if user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para análisis de imagen de alimentos: {program_type}")
+                
+                # Obtener definición del programa para personalizar el análisis
+                program_def = get_program_definition(program_type)
+                program_context = f"""\nCONTEXTO DEL PROGRAMA {program_type}:\n"""
+                
+                if program_def:
+                    program_context += f"- {program_def.get('description', '')}\n"
+                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                    
+                    # Añadir necesidades nutricionales específicas del programa si están disponibles
+                    if program_def.get("nutritional_needs"):
+                        program_context += "- Necesidades nutricionales específicas:\n"
+                        for need in program_def.get("nutritional_needs", []):
+                            program_context += f"  * {need}\n"
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando análisis general.")
+                program_type = "GENERAL"
+                program_context = ""
+            
+            # Utilizar las capacidades de visión del agente base
+            with self.tracer.start_as_current_span("food_image_analysis"):
+                # Verificar si las capacidades de visión están disponibles
+                if not hasattr(self, '_vision_capabilities_available') or not self._vision_capabilities_available:
+                    logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+                    vision_result = {"detected_foods": [], "text": "Análisis de imagen simulado"}
+                else:
+                    # Analizar la imagen utilizando el procesador de visión
+                    vision_result = await self.vision_processor.analyze_image(
+                        image_data=image_data,
+                        prompt="Analiza esta imagen de alimentos e identifica todos los alimentos visibles."
+                    )
+                
+                # Extraer información de alimentos de la imagen usando el modelo multimodal
+                prompt = f"""
+                Eres un experto en nutrición y análisis de alimentos. Analiza esta imagen de alimentos y proporciona:
+                
+                1. Identificación precisa de todos los alimentos visibles
+                2. Estimación de calorías y macronutrientes (proteínas, carbohidratos, grasas)
+                3. Evaluación nutricional general (qué tan saludable es esta comida)
+                4. Recomendaciones para mejorar el valor nutricional
+                
+                Considera que este análisis es para un usuario con programa tipo {program_type}.
+                {program_context}
+                
+                Proporciona un análisis detallado y objetivo basado únicamente en lo que es visible en la imagen.
+                """
+                
+                multimodal_result = await self.multimodal_adapter.process_multimodal(
+                    prompt=prompt,
+                    image_data=image_data,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Extraer información de alimentos detectados
+                food_items = []
+                for food in vision_result.get("detected_foods", []):
+                    food_item = {
+                        "name": food,
+                        "confidence_score": 0.85,  # Valor simulado
+                        "estimated_calories": "No disponible",
+                        "estimated_portion": "Porción estándar",
+                        "macronutrients": {
+                            "proteínas": "No disponible",
+                            "carbohidratos": "No disponible",
+                            "grasas": "No disponible"
+                        }
+                    }
+                    food_items.append(food_item)
+                
+                # Si no se detectaron alimentos, extraer de la respuesta multimodal
+                if not food_items:
+                    # Analizar la respuesta multimodal para extraer alimentos
+                    analysis_text = multimodal_result.get("text", "")
+                    
+                    # Generar prompt para extraer alimentos estructurados
+                    extraction_prompt = f"""
+                    Basándote en el siguiente análisis de una imagen de alimentos, extrae una lista estructurada
+                    de los alimentos identificados con sus propiedades nutricionales estimadas.
+                    
+                    Análisis:
+                    {analysis_text}
+                    
+                    Devuelve la información en formato JSON estructurado con los siguientes campos para cada alimento:
+                    - name: nombre del alimento
+                    - estimated_calories: calorías estimadas (si es posible)
+                    - estimated_portion: porción estimada
+                    - macronutrients: macronutrientes estimados (proteínas, carbohidratos, grasas)
+                    
+                    Ejemplo de formato:
+                    [
+                      {
+                        "name": "Pollo a la parrilla",
+                        "estimated_calories": "150-200 kcal",
+                        "estimated_portion": "100g",
+                        "macronutrients": {
+                          "proteínas": "25-30g",
+                          "carbohidratos": "0g",
+                          "grasas": "8-10g"
+                        }
+                      }
+                    ]
+                    """
+                    
+                    extraction_response = await self.gemini_client.generate_structured_output(extraction_prompt)
+                    
+                    # Procesar la respuesta
+                    if isinstance(extraction_response, list):
+                        for food in extraction_response:
+                            if isinstance(food, dict) and "name" in food:
+                                food_items.append({
+                                    "name": food.get("name", "Alimento no identificado"),
+                                    "confidence_score": 0.7,  # Valor por defecto
+                                    "estimated_calories": food.get("estimated_calories", "No disponible"),
+                                    "estimated_portion": food.get("estimated_portion", "Porción estándar"),
+                                    "macronutrients": food.get("macronutrients", {
+                                        "proteínas": "No disponible",
+                                        "carbohidratos": "No disponible",
+                                        "grasas": "No disponible"
+                                    })
+                                })
+                
+                # Si aún no hay alimentos identificados, crear uno genérico
+                if not food_items:
+                    food_items.append({
+                        "name": "Comida no identificada específicamente",
+                        "confidence_score": 0.5,
+                        "estimated_calories": "No disponible",
+                        "estimated_portion": "No disponible",
+                        "macronutrients": {
+                            "proteínas": "No disponible",
+                            "carbohidratos": "No disponible",
+                            "grasas": "No disponible"
+                        }
+                    })
+                
+                # Generar evaluación nutricional
+                nutritional_assessment_prompt = f"""
+                Basándote en el siguiente análisis de una imagen de alimentos, genera una evaluación nutricional
+                concisa y objetiva. Considera el contexto del programa {program_type} del usuario.
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                La evaluación debe ser de 2-3 párrafos y debe incluir:
+                1. Valoración general de la calidad nutricional
+                2. Aspectos positivos de la comida
+                3. Áreas de mejora
+                """
+                
+                nutritional_assessment = await self.gemini_client.generate_text(nutritional_assessment_prompt)
+                
+                # Generar recomendaciones
+                recommendations_prompt = f"""
+                Basándote en el siguiente análisis de una imagen de alimentos, genera 3-5 recomendaciones
+                nutricionales específicas y accionables. Considera el contexto del programa {program_type} del usuario
+                y sus preferencias dietéticas: {', '.join(dietary_preferences) if dietary_preferences else 'No especificadas'}.
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Las recomendaciones deben ser concretas, prácticas y enfocadas en mejorar el valor nutricional
+                manteniendo el tipo de comida similar.
+                """
+                
+                recommendations_response = await self.gemini_client.generate_text(recommendations_prompt)
+                recommendations = [rec.strip() for rec in recommendations_response.split("\n") if rec.strip()]
+                
+                # Generar alternativas más saludables
+                alternatives_prompt = f"""
+                Basándote en el siguiente análisis de una imagen de alimentos, sugiere 2-3 alternativas más saludables
+                para los alimentos identificados. Considera el contexto del programa {program_type} del usuario.
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Para cada alternativa, proporciona:
+                1. El alimento original
+                2. La alternativa más saludable
+                3. Beneficio nutricional de la alternativa
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                alternatives_response = await self.gemini_client.generate_structured_output(alternatives_prompt)
+                
+                # Procesar alternativas
+                alternatives = []
+                if isinstance(alternatives_response, list):
+                    alternatives = alternatives_response
+                elif isinstance(alternatives_response, dict) and "alternatives" in alternatives_response:
+                    alternatives = alternatives_response["alternatives"]
+                else:
+                    # Crear alternativas genéricas
+                    for food in food_items:
+                        alternatives.append({
+                            "original": food["name"],
+                            "alternative": f"Versión más saludable de {food['name']}",
+                            "benefit": "Mayor valor nutricional y menos calorías"
+                        })
+                
+                # Calcular puntuación de salud (simulada)
+                health_score = 7.5  # Valor simulado entre 0-10
+                
+                # Crear artefacto con el análisis
+                artifact_id = str(uuid.uuid4())
+                artifact = FoodImageAnalysisArtifact(
+                    analysis_id=artifact_id,
+                    created_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                    food_count=len(food_items),
+                    health_score=health_score,
+                    processed_image_url=""  # En un caso real, aquí iría la URL de la imagen procesada
+                )
+                
+                # Determinar tipo de comida
+                meal_type = "No determinado"
+                if "desayuno" in multimodal_result.get("text", "").lower():
+                    meal_type = "Desayuno"
+                elif "almuerzo" in multimodal_result.get("text", "").lower() or "comida" in multimodal_result.get("text", "").lower():
+                    meal_type = "Almuerzo"
+                elif "cena" in multimodal_result.get("text", "").lower():
+                    meal_type = "Cena"
+                elif "snack" in multimodal_result.get("text", "").lower() or "merienda" in multimodal_result.get("text", "").lower():
+                    meal_type = "Snack"
+                
+                # Crear la salida de la skill
+                return AnalyzeFoodImageOutput(
+                    identified_foods=food_items,
+                    total_calories="No disponible con precisión desde la imagen",
+                    meal_type=meal_type,
+                    nutritional_assessment=nutritional_assessment,
+                    health_score=health_score,
+                    recommendations=recommendations,
+                    alternatives=alternatives
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al analizar imagen de alimentos: {e}", exc_info=True)
+            
+            # En caso de error, devolver un análisis básico
+            return AnalyzeFoodImageOutput(
+                identified_foods=[
+                    {
+                        "name": "Error en análisis",
+                        "confidence_score": 0.0,
+                        "estimated_calories": "No disponible",
+                        "estimated_portion": "No disponible",
+                        "macronutrients": {
+                            "proteínas": "No disponible",
+                            "carbohidratos": "No disponible",
+                            "grasas": "No disponible"
+                        }
+                    }
+                ],
+                total_calories="No disponible",
+                meal_type="No determinado",
+                nutritional_assessment="No se pudo realizar el análisis debido a un error en el procesamiento.",
+                health_score=None,
+                recommendations=["Consulte a un nutricionista para un análisis preciso de su alimentación."],
+                alternatives=[]
+            )

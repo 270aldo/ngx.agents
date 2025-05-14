@@ -8,8 +8,10 @@ import uuid
 import pytest
 from typing import Dict, Any
 
-from infrastructure.adapters.state_manager_adapter import state_manager_adapter
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter, StateManagerAdapter
 
+# Alias para compatibilidad con pruebas existentes
+StateManager = StateManagerAdapter
 
 @pytest.mark.asyncio
 async def test_save_state(state_manager: StateManager, test_settings: Dict[str, Any]):

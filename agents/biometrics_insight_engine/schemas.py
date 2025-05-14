@@ -5,7 +5,7 @@ Este módulo define los esquemas de entrada y salida para las skills del agente
 BiometricsInsightEngine utilizando modelos Pydantic.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -143,3 +143,37 @@ class BiometricVisualizationArtifact(BaseModel):
     metrics_included: List[str] = Field(..., description="Métricas incluidas")
     timestamp: str = Field(..., description="Timestamp de la visualización")
     url: str = Field(..., description="URL o ruta a la visualización")
+
+
+# Modelos para la skill de análisis de imágenes biométricas
+class BiometricImageAnalysisInput(BaseModel):
+    """Esquema de entrada para la skill de análisis de imágenes biométricas."""
+    image_data: Union[str, Dict[str, Any]] = Field(
+        ..., description="Datos de la imagen (base64, URL o ruta de archivo)"
+    )
+    analysis_type: Optional[str] = Field(
+        "full", description="Tipo de análisis a realizar (full, body, face, posture, etc.)"
+    )
+    user_profile: Optional[Dict[str, Any]] = Field(
+        None, description="Perfil del usuario con información relevante"
+    )
+
+
+class BiometricImageAnalysisOutput(BaseModel):
+    """Esquema de salida para la skill de análisis de imágenes biométricas."""
+    analysis_summary: str = Field(..., description="Resumen del análisis de la imagen biométrica")
+    detected_metrics: Dict[str, Any] = Field(..., description="Métricas biométricas detectadas en la imagen")
+    visual_indicators: List[Dict[str, Any]] = Field(..., description="Indicadores visuales identificados")
+    health_insights: List[str] = Field(..., description="Insights de salud basados en el análisis visual")
+    recommendations: List[str] = Field(..., description="Recomendaciones basadas en el análisis visual")
+    confidence_score: float = Field(..., description="Puntuación de confianza del análisis (0.0-1.0)")
+
+
+class BiometricImageArtifact(BaseModel):
+    """Artefacto para el análisis de imágenes biométricas."""
+    analysis_id: str = Field(..., description="ID único del análisis")
+    image_type: str = Field(..., description="Tipo de imagen analizada")
+    analysis_type: str = Field(..., description="Tipo de análisis realizado")
+    timestamp: float = Field(..., description="Timestamp del análisis")
+    annotations: Optional[Dict[str, Any]] = Field(None, description="Anotaciones en la imagen")
+    processed_image_url: Optional[str] = Field(None, description="URL de la imagen procesada con anotaciones")

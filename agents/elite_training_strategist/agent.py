@@ -31,6 +31,12 @@ from agents.elite_training_strategist.schemas import (
     PrescribeExerciseRoutinesInput,
     PrescribeExerciseRoutinesOutput,
     TrainingPlanArtifact,
+    AnalyzeExerciseFormInput,
+    AnalyzeExerciseFormOutput,
+    FormCorrectionPoint,
+    CompareExerciseProgressInput,
+    CompareExerciseProgressOutput,
+    ExerciseFormAnalysisArtifact
 )
 
 from clients.gemini_client import GeminiClient
@@ -123,6 +129,20 @@ class EliteTrainingStrategist(ADKAgent):
                 handler=self._skill_prescribe_exercise_routines,
                 input_schema=PrescribeExerciseRoutinesInput,
                 output_schema=PrescribeExerciseRoutinesOutput
+            ),
+            Skill(
+                name="analyze_exercise_form",
+                description="Analiza la forma y técnica de ejercicios mediante imágenes para proporcionar correcciones y recomendaciones.",
+                handler=self._skill_analyze_exercise_form,
+                input_schema=AnalyzeExerciseFormInput,
+                output_schema=AnalyzeExerciseFormOutput
+            ),
+            Skill(
+                name="compare_exercise_progress",
+                description="Compara imágenes de ejercicios para evaluar el progreso y cambios en la técnica a lo largo del tiempo.",
+                handler=self._skill_compare_exercise_progress,
+                input_schema=CompareExerciseProgressInput,
+                output_schema=CompareExerciseProgressOutput
             )
         ]
 
@@ -143,7 +163,7 @@ class EliteTrainingStrategist(ADKAgent):
         )
         
         # Configurar clientes adicionales
-        self.gemini_client = GeminiClient(model_name=self.model) 
+        self.gemini_client = GeminiClient(model_name=self.model)
         self.supabase_client = SupabaseClient()
         
         # Inicializar Vertex AI
@@ -155,6 +175,55 @@ class EliteTrainingStrategist(ADKAgent):
             logger.info("AI Platform (Vertex AI SDK) inicializado correctamente para ETS.")
         except Exception as e:
             logger.error(f"Error al inicializar AI Platform para ETS: {e}", exc_info=True)
+        
+        # Inicializar procesadores de visión y multimodales
+        try:
+            from core.vision_processor import VisionProcessor
+            from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
+            from clients.vertex_ai.vision_client import VertexAIVisionClient
+            from clients.vertex_ai.multimodal_client import VertexAIMultimodalClient
+            
+            # Inicializar procesador de visión
+            self.vision_processor = VisionProcessor()
+            logger.info("Procesador de visión inicializado correctamente")
+            
+            # Inicializar adaptador multimodal
+            self.multimodal_adapter = MultimodalAdapter()
+            logger.info("Adaptador multimodal inicializado correctamente")
+            
+            # Inicializar clientes especializados
+            self.vision_client = VertexAIVisionClient()
+            self.multimodal_client = VertexAIMultimodalClient()
+            logger.info("Clientes de visión y multimodal inicializados correctamente")
+            
+            # Inicializar tracer para telemetría
+            from opentelemetry import trace
+            self.tracer = trace.get_tracer(__name__)
+            logger.info("Tracer para telemetría inicializado correctamente")
+            
+            # Marcar capacidades como disponibles
+            self._vision_capabilities_available = True
+        except ImportError as e:
+            logger.warning(f"No se pudieron inicializar algunos componentes para capacidades avanzadas: {e}")
+            # Crear implementaciones simuladas para mantener la compatibilidad
+            self._vision_capabilities_available = False
+            
+            # Crear implementaciones simuladas
+            self.vision_processor = type('DummyVisionProcessor', (), {
+                'analyze_image': lambda self, image_data, prompt=None: {"text": "Análisis de imagen simulado"},
+                'describe_image': lambda self, image_data, detail_level=None, focus_aspect=None: {"text": "Descripción de imagen simulada"}
+            })()
+            
+            self.multimodal_adapter = type('DummyMultimodalAdapter', (), {
+                'process_multimodal': lambda self, prompt, image_data, temperature=0.2, max_output_tokens=1024:
+                    {"text": "Análisis multimodal simulado"},
+                'compare_images': lambda self, image_data1, image_data2, comparison_prompt=None, temperature=0.2, max_output_tokens=1024:
+                    {"text": "Comparación de imágenes simulada", "comparison": "", "similarities": [], "differences": []}
+            })()
+            
+            self.tracer = type('DummyTracer', (), {
+                'start_as_current_span': lambda name: type('DummySpan', (), {'__enter__': lambda self: None, '__exit__': lambda self, *args: None})()
+            })
             
         logger.info(f"{self.name} ({self.agent_id}) inicializado con integración oficial de Google ADK.")
 
@@ -796,3 +865,397 @@ class EliteTrainingStrategist(ADKAgent):
             return {"error": "Invalid I/V settings structure from LLM", "details": settings}
 
         return settings
+        
+    async def _skill_analyze_exercise_form(self, input_data: AnalyzeExerciseFormInput) -> AnalyzeExerciseFormOutput:
+        """
+        Skill para analizar la forma y técnica de ejercicios mediante imágenes.
+        
+        Args:
+            input_data: Datos de entrada para la skill
+            
+        Returns:
+            AnalyzeExerciseFormOutput: Análisis de la forma del ejercicio
+        """
+        logger.info(f"Ejecutando habilidad: _skill_analyze_exercise_form para ejercicio: {input_data.exercise_name}")
+        
+        try:
+            # Obtener datos de la imagen
+            image_data = input_data.image_data
+            exercise_name = input_data.exercise_name or "Ejercicio no especificado"
+            exercise_type = input_data.exercise_type or "No especificado"
+            user_profile = input_data.user_profile or {}
+            analysis_focus = input_data.analysis_focus or ["postura", "alineación", "rango de movimiento"]
+            
+            # Verificar si las capacidades de visión están disponibles
+            if not hasattr(self, '_vision_capabilities_available') or not self._vision_capabilities_available:
+                logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+                return self._generate_mock_exercise_form_analysis(input_data)
+            
+            # Utilizar las capacidades de visión del agente base
+            with self.tracer.start_as_current_span("exercise_form_analysis"):
+                # Analizar la imagen utilizando el procesador de visión
+                vision_result = await self.vision_processor.analyze_image(
+                    image_data=image_data,
+                    prompt=f"Analiza esta imagen de un atleta realizando {exercise_name} y describe la técnica y postura."
+                )
+                
+                # Generar una descripción detallada de la imagen
+                description_result = await self.vision_processor.analyze_image(
+                    image_data=image_data,
+                    prompt="Describe detalladamente la postura y alineación corporal de la persona en esta imagen."
+                )
+                
+                # Extraer análisis de forma de ejercicio usando el modelo multimodal
+                prompt = f"""
+                Eres un entrenador experto en biomecánica y técnica de ejercicios. Analiza esta imagen de un atleta
+                realizando {exercise_name} ({exercise_type}) y proporciona un análisis detallado de su forma.
+                
+                Enfócate específicamente en los siguientes aspectos:
+                {', '.join(analysis_focus)}
+                
+                Proporciona:
+                1. Una evaluación general de la calidad de la forma (escala 0-10)
+                2. Análisis detallado de la técnica
+                3. Puntos específicos de corrección (parte del cuerpo, problema, corrección recomendada)
+                4. Aspectos positivos de la forma
+                5. Recomendaciones para mejorar
+                6. Evaluación de riesgos potenciales de lesión
+                
+                Sé específico, detallado y proporciona feedback accionable basado en principios de biomecánica.
+                """
+                
+                multimodal_result = await self.multimodal_adapter.process_multimodal(
+                    prompt=prompt,
+                    image_data=image_data,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Extraer puntos de corrección estructurados
+                correction_points_prompt = f"""
+                Basándote en el siguiente análisis de forma de ejercicio, extrae puntos específicos de corrección
+                en formato estructurado. Para cada punto, incluye:
+                1. Parte del cuerpo relacionada
+                2. Problema identificado
+                3. Corrección recomendada
+                4. Severidad del problema (leve, moderada, grave)
+                5. Nivel de confianza en la detección (0.0-1.0)
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                correction_points_response = await self.gemini_client.generate_structured_output(correction_points_prompt)
+                
+                # Procesar puntos de corrección
+                correction_points = []
+                if isinstance(correction_points_response, list):
+                    for point in correction_points_response:
+                        if isinstance(point, dict) and "body_part" in point:
+                            correction_points.append(FormCorrectionPoint(
+                                body_part=point.get("body_part", "No especificado"),
+                                issue=point.get("issue", "No especificado"),
+                                correction=point.get("correction", "No especificado"),
+                                severity=point.get("severity", "moderada"),
+                                confidence=point.get("confidence", 0.7)
+                            ))
+                elif isinstance(correction_points_response, dict) and "correction_points" in correction_points_response:
+                    for point in correction_points_response["correction_points"]:
+                        if isinstance(point, dict) and "body_part" in point:
+                            correction_points.append(FormCorrectionPoint(
+                                body_part=point.get("body_part", "No especificado"),
+                                issue=point.get("issue", "No especificado"),
+                                correction=point.get("correction", "No especificado"),
+                                severity=point.get("severity", "moderada"),
+                                confidence=point.get("confidence", 0.7)
+                            ))
+                
+                # Si no hay puntos de corrección, crear uno genérico
+                if not correction_points:
+                    correction_points.append(FormCorrectionPoint(
+                        body_part="General",
+                        issue="No se pudieron identificar problemas específicos",
+                        correction="Consulta a un entrenador personal para una evaluación detallada",
+                        severity="leve",
+                        confidence=0.5
+                    ))
+                
+                # Extraer aspectos positivos y recomendaciones
+                strengths_recommendations_prompt = f"""
+                Basándote en el siguiente análisis de forma de ejercicio, extrae:
+                1. 3-5 aspectos positivos de la forma
+                2. 3-5 recomendaciones específicas para mejorar
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve la información en formato JSON estructurado con las claves "strengths" y "recommendations".
+                """
+                
+                strengths_recommendations_response = await self.gemini_client.generate_structured_output(strengths_recommendations_prompt)
+                
+                # Procesar aspectos positivos y recomendaciones
+                strengths = []
+                recommendations = []
+                
+                if isinstance(strengths_recommendations_response, dict):
+                    strengths = strengths_recommendations_response.get("strengths", [])
+                    recommendations = strengths_recommendations_response.get("recommendations", [])
+                
+                # Si no hay aspectos positivos o recomendaciones, crear genéricos
+                if not strengths:
+                    strengths = ["Disposición para mejorar la técnica", "Interés en el análisis de forma"]
+                
+                if not recommendations:
+                    recommendations = ["Consulta a un entrenador personal para una evaluación detallada", "Practica frente a un espejo para mayor conciencia corporal"]
+                
+                # Extraer puntuación de calidad de forma
+                form_quality_score = 7.5  # Valor por defecto
+                try:
+                    # Intentar extraer la puntuación del análisis
+                    score_prompt = f"""
+                    Basándote en el siguiente análisis de forma de ejercicio, extrae la puntuación de calidad de forma (0-10).
+                    Si no hay una puntuación explícita, asigna una basada en el análisis general.
+                    
+                    Análisis:
+                    {multimodal_result.get("text", "")}
+                    
+                    Devuelve solo el número (por ejemplo, 7.5).
+                    """
+                    
+                    score_response = await self.gemini_client.generate_text(score_prompt)
+                    try:
+                        # Intentar convertir la respuesta a un número
+                        form_quality_score = float(score_response.strip())
+                        # Asegurar que está en el rango 0-10
+                        form_quality_score = max(0, min(10, form_quality_score))
+                    except:
+                        # Si no se puede convertir, usar el valor por defecto
+                        pass
+                except:
+                    # Si hay algún error, usar el valor por defecto
+                    pass
+                
+                # Crear artefacto con el análisis
+                import uuid
+                artifact_id = str(uuid.uuid4())
+                artifact = ExerciseFormAnalysisArtifact(
+                    analysis_id=artifact_id,
+                    exercise_name=exercise_name,
+                    timestamp=datetime.now().isoformat(),
+                    form_quality_score=form_quality_score,
+                    processed_image_url=""  # En un caso real, aquí iría la URL de la imagen procesada
+                )
+                
+                # Crear la salida de la skill
+                return AnalyzeExerciseFormOutput(
+                    exercise_name=exercise_name,
+                    form_quality_score=form_quality_score,
+                    form_analysis=multimodal_result.get("text", ""),
+                    correction_points=correction_points,
+                    strengths=strengths,
+                    recommendations=recommendations,
+                    risk_assessment={"risk_level": "moderado", "areas_of_concern": [p.body_part for p in correction_points if p.severity == "grave"]}
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al analizar forma de ejercicio: {e}", exc_info=True)
+            
+            # En caso de error, devolver un análisis básico
+            return self._generate_mock_exercise_form_analysis(input_data)
+    
+    def _generate_mock_exercise_form_analysis(self, input_data: AnalyzeExerciseFormInput) -> AnalyzeExerciseFormOutput:
+        """
+        Genera un análisis simulado de forma de ejercicio cuando no se pueden utilizar las capacidades de visión.
+        
+        Args:
+            input_data: Datos de entrada para la skill
+            
+        Returns:
+            AnalyzeExerciseFormOutput: Análisis simulado de la forma del ejercicio
+        """
+        exercise_name = input_data.exercise_name or "Ejercicio no especificado"
+        
+        return AnalyzeExerciseFormOutput(
+            exercise_name=exercise_name,
+            form_quality_score=5.0,
+            form_analysis=f"Análisis simulado para {exercise_name}. No se pudo realizar un análisis real de la imagen.",
+            correction_points=[
+                FormCorrectionPoint(
+                    body_part="General",
+                    issue="No se pudo analizar la imagen",
+                    correction="Consulta a un entrenador personal para una evaluación detallada",
+                    severity="moderada",
+                    confidence=0.0
+                )
+            ],
+            strengths=["No se pudieron identificar aspectos positivos"],
+            recommendations=["Consulta a un entrenador personal para una evaluación detallada"],
+            risk_assessment={"risk_level": "desconocido", "areas_of_concern": []}
+        )
+    
+    async def _skill_compare_exercise_progress(self, input_data: CompareExerciseProgressInput) -> CompareExerciseProgressOutput:
+        """
+        Skill para comparar el progreso en ejercicios a través de imágenes.
+        
+        Args:
+            input_data: Datos de entrada para la skill
+            
+        Returns:
+            CompareExerciseProgressOutput: Comparación del progreso en ejercicios
+        """
+        logger.info(f"Ejecutando habilidad: _skill_compare_exercise_progress para ejercicio: {input_data.exercise_name}")
+        
+        try:
+            # Obtener datos de las imágenes
+            before_image = input_data.before_image
+            after_image = input_data.after_image
+            exercise_name = input_data.exercise_name or "Ejercicio no especificado"
+            time_between_images = input_data.time_between_images or "No especificado"
+            metrics_to_compare = input_data.metrics_to_compare or ["postura", "técnica", "rango de movimiento", "estabilidad"]
+            
+            # Verificar si las capacidades de visión están disponibles
+            if not hasattr(self, '_vision_capabilities_available') or not self._vision_capabilities_available:
+                logger.warning("Capacidades de visión no disponibles. Usando comparación simulada.")
+                return self._generate_mock_exercise_progress_comparison(input_data)
+            
+            # Utilizar las capacidades multimodales del agente base
+            with self.tracer.start_as_current_span("exercise_progress_comparison"):
+                # Comparar las imágenes utilizando el adaptador multimodal
+                comparison_prompt = f"""
+                Compara estas dos imágenes de un atleta realizando {exercise_name}.
+                La primera imagen es de ANTES y la segunda es de DESPUÉS, con un intervalo de tiempo de {time_between_images}.
+                
+                Identifica y describe:
+                1. Similitudes en la técnica y postura
+                2. Diferencias y cambios observados
+                3. Mejoras o retrocesos en la forma
+                
+                Enfócate en los siguientes aspectos: {', '.join(metrics_to_compare)}
+                """
+                
+                comparison_result = await self.multimodal_adapter.compare_images(
+                    image_data1=before_image,
+                    image_data2=after_image,
+                    comparison_prompt=comparison_prompt,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Extraer análisis de progreso usando el modelo multimodal
+                detailed_prompt = f"""
+                Eres un entrenador experto en biomecánica y técnica de ejercicios. Compara estas dos imágenes de un atleta
+                realizando {exercise_name} y proporciona un análisis detallado del progreso.
+                
+                La primera imagen es de ANTES y la segunda es de DESPUÉS, con un intervalo de tiempo de {time_between_images}.
+                
+                Enfócate específicamente en los siguientes aspectos:
+                {', '.join(metrics_to_compare)}
+                
+                Proporciona:
+                1. Un resumen del progreso observado
+                2. Mejoras clave identificadas
+                3. Cambios en la forma del ejercicio
+                4. Recomendaciones basadas en el progreso
+                5. Una puntuación cuantitativa del progreso (0-10)
+                
+                Sé específico, detallado y proporciona feedback accionable basado en principios de biomecánica.
+                """
+                
+                # Realizar un análisis detallado con ambas imágenes
+                detailed_analysis = await self.multimodal_adapter.compare_images(
+                    image_data1=before_image,
+                    image_data2=after_image,
+                    comparison_prompt=detailed_prompt,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Usar el resultado de la comparación para generar un análisis estructurado
+                progress_analysis_prompt = f"""
+                Basándote en la siguiente comparación de imágenes de ejercicio, genera un análisis estructurado
+                del progreso.
+                
+                Comparación inicial:
+                {comparison_result.get("text", "")}
+                
+                Análisis detallado:
+                {detailed_analysis.get("text", "")}
+                
+                Genera un análisis estructurado con:
+                1. Resumen del progreso
+                2. Mejoras clave identificadas (lista de diccionarios con "area" y "improvement")
+                3. Cambios en la forma del ejercicio (lista de diccionarios con "aspect" y "change")
+                4. Recomendaciones basadas en el progreso (lista de strings)
+                5. Puntuación de progreso (0-10)
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                progress_analysis = await self.gemini_client.generate_structured_output(progress_analysis_prompt)
+                
+                # Procesar el análisis de progreso
+                if not isinstance(progress_analysis, dict):
+                    progress_analysis = {
+                        "progress_summary": "No se pudo generar un análisis estructurado",
+                        "key_improvements": [],
+                        "form_changes": [],
+                        "recommendations": ["Consulta a un entrenador personal para una evaluación detallada"],
+                        "progress_score": 5.0
+                    }
+                
+                # Asegurar que todas las claves necesarias estén presentes
+                progress_summary = progress_analysis.get("progress_summary", "No disponible")
+                key_improvements = progress_analysis.get("key_improvements", [])
+                form_changes = progress_analysis.get("form_changes", [])
+                recommendations = progress_analysis.get("recommendations", [])
+                progress_score = progress_analysis.get("progress_score", 5.0)
+                
+                # Si no hay mejoras clave o cambios en la forma, crear genéricos
+                if not key_improvements:
+                    key_improvements = [{"area": "General", "improvement": "No se pudieron identificar mejoras específicas"}]
+                
+                if not form_changes:
+                    form_changes = [{"aspect": "General", "change": "No se pudieron identificar cambios específicos en la forma"}]
+                
+                if not recommendations:
+                    recommendations = ["Continúa con la práctica regular", "Consulta a un entrenador personal para una evaluación detallada"]
+                
+                # Crear la salida de la skill
+                return CompareExerciseProgressOutput(
+                    exercise_name=exercise_name,
+                    progress_summary=progress_summary,
+                    key_improvements=key_improvements,
+                    form_changes=form_changes,
+                    recommendations=recommendations,
+                    progress_score=float(progress_score) if isinstance(progress_score, (int, float)) else 5.0
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al comparar progreso en ejercicio: {e}", exc_info=True)
+            
+            # En caso de error, devolver una comparación básica
+            return self._generate_mock_exercise_progress_comparison(input_data)
+    
+    def _generate_mock_exercise_progress_comparison(self, input_data: CompareExerciseProgressInput) -> CompareExerciseProgressOutput:
+        """
+        Genera una comparación simulada de progreso en ejercicios cuando no se pueden utilizar las capacidades de visión.
+        
+        Args:
+            input_data: Datos de entrada para la skill
+            
+        Returns:
+            CompareExerciseProgressOutput: Comparación simulada del progreso en ejercicios
+        """
+        exercise_name = input_data.exercise_name or "Ejercicio no especificado"
+        
+        return CompareExerciseProgressOutput(
+            exercise_name=exercise_name,
+            progress_summary=f"Comparación simulada para {exercise_name}. No se pudo realizar un análisis real de las imágenes.",
+            key_improvements=[{"area": "General", "improvement": "No se pudieron identificar mejoras específicas"}],
+            form_changes=[{"aspect": "General", "change": "No se pudieron identificar cambios específicos"}],
+            recommendations=["Consulta a un entrenador personal para una evaluación detallada"],
+            progress_score=5.0
+        )

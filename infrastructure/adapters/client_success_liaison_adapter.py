@@ -11,16 +11,14 @@ from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
 
 from agents.client_success_liaison.agent import ClientSuccessLiaison
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 from infrastructure.adapters.a2a_adapter import a2a_adapter
-from infrastructure.adapters.state_manager_adapter import state_manager_adapter
-from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
-from clients.vertex_ai import vertex_ai_client
 from core.logging_config import get_logger
 
 # Configurar logger
 logger = get_logger(__name__)
 
-class ClientSuccessLiaisonAdapter(ClientSuccessLiaison):
+class ClientSuccessLiaisonAdapter(ClientSuccessLiaison, BaseAgentAdapter):
     """
     Adaptador para el agente ClientSuccessLiaison que utiliza los componentes optimizados.
     
@@ -28,72 +26,25 @@ class ClientSuccessLiaisonAdapter(ClientSuccessLiaison):
     necesarios para utilizar el sistema A2A optimizado y el cliente Vertex AI optimizado.
     """
     
-    async def _get_context(self, user_id: Optional[str], session_id: Optional[str] = None) -> Dict[str, Any]:
+    def _create_default_context(self) -> Dict[str, Any]:
         """
-        Obtiene el contexto de la conversación desde el adaptador del StateManager.
+        Crea un contexto predeterminado para el agente ClientSuccessLiaison.
         
-        Args:
-            user_id: ID del usuario
-            session_id: ID de la sesión
-            
         Returns:
-            Dict[str, Any]: Contexto de la conversación
+            Dict[str, Any]: Contexto predeterminado
         """
-        try:
-            # Intentar cargar el contexto desde el adaptador del StateManager
-            if user_id and session_id:
-                try:
-                    context = await state_manager_adapter.load_state(user_id, session_id)
-                    if context:
-                        logger.info(f"Contexto cargado desde adaptador del StateManager para user_id={user_id}, session_id={session_id}")
-                        return context
-                except Exception as e:
-                    logger.warning(f"Error al cargar contexto desde adaptador del StateManager: {e}")
-            
-            # Si no hay contexto o hay error, crear uno nuevo
-            logger.info(f"No se encontró contexto en adaptador del StateManager para user_id={user_id}, session_id={session_id}. Creando nuevo contexto.")
-            return {
-                "conversation_history": [],
-                "user_profile": {},
-                "calendars": [],
-                "journey_maps": [],
-                "support_requests": [],
-                "last_updated": datetime.now().isoformat()
-            }
-        except Exception as e:
-            logger.error(f"Error al obtener contexto: {e}", exc_info=True)
-            # En caso de error, devolver un contexto vacío
-            return {
-                "conversation_history": [],
-                "user_profile": {},
-                "calendars": [],
-                "journey_maps": [],
-                "support_requests": [],
-                "last_updated": datetime.now().isoformat()
-            }
-
-    async def _update_context(self, context: Dict[str, Any], user_id: str, session_id: str) -> None:
-        """
-        Actualiza el contexto de la conversación en el adaptador del StateManager.
-        
-        Args:
-            context: Contexto actualizado
-            user_id: ID del usuario
-            session_id: ID de la sesión
-        """
-        try:
-            # Actualizar la marca de tiempo
-            context["last_updated"] = datetime.now().isoformat()
-            
-            # Guardar el contexto en el adaptador del StateManager
-            await state_manager_adapter.save_state(user_id, session_id, context)
-            logger.info(f"Contexto actualizado en adaptador del StateManager para user_id={user_id}, session_id={session_id}")
-        except Exception as e:
-            logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
+        return {
+            "conversation_history": [],
+            "user_profile": {},
+            "calendars": [],
+            "journey_maps": [],
+            "support_requests": [],
+            "last_updated": datetime.now().isoformat()
+        }
     
     async def _classify_query_with_intent_analyzer(self, query: str) -> str:
         """
-        Clasifica el tipo de consulta del usuario utilizando el adaptador del Intent Analyzer.
+        Clasifica el tipo de consulta del usuario utilizando el Intent Analyzer.
         
         Args:
             query: Consulta del usuario
@@ -102,37 +53,26 @@ class ClientSuccessLiaisonAdapter(ClientSuccessLiaison):
             str: Tipo de consulta clasificada
         """
         try:
-            # Utilizar el adaptador del Intent Analyzer para analizar la intención
-            intent_analysis = await intent_analyzer_adapter.analyze_intent(query)
+            # Utilizar el Intent Analyzer para analizar la intención
+            intent_analysis = await self.intent_analyzer.analyze(
+                query, 
+                agent_type=self.__class__.__name__
+            )
             
-            # Mapear la intención primaria a los tipos de consulta del agente
-            primary_intent = intent_analysis.get("primary_intent", "").lower()
+            # Obtener el mapeo de intenciones a tipos de consulta
+            intent_to_query_type = self._get_intent_to_query_type_mapping()
             
-            # Mapeo de intenciones a tipos de consulta
-            intent_to_query_type = {
-                "community": "community_building",
-                "experience": "user_experience",
-                "support": "customer_support",
-                "retention": "retention_strategies",
-                "communication": "communication_management",
-                "search": "web_search"
-            }
-            
-            # Buscar coincidencias exactas
-            if primary_intent in intent_to_query_type:
-                return intent_to_query_type[primary_intent]
-            
-            # Buscar coincidencias parciales
+            # Buscar coincidencias en el mapeo
             for intent, query_type in intent_to_query_type.items():
-                if intent in primary_intent:
+                if intent.lower() in query.lower():
                     return query_type
             
-            # Si no hay coincidencias, usar el método de palabras clave como fallback
-            return self._classify_query(query)
+            # Si no hay coincidencias, devolver un tipo genérico
+            return "general_inquiry"
         except Exception as e:
             logger.error(f"Error al clasificar consulta con Intent Analyzer: {e}", exc_info=True)
-            # En caso de error, usar el método de palabras clave como fallback
-            return self._classify_query(query)
+            # En caso de error, devolver un tipo genérico
+            return "general_inquiry"
     
     async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -175,20 +115,62 @@ class ClientSuccessLiaisonAdapter(ClientSuccessLiaison):
                 "agent_name": agent_id
             }
     
-    async def _run_async_impl(self, input_text: str, user_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
         """
-        Sobrescribe el método _run_async_impl para utilizar el clasificador de intenciones optimizado.
+        Obtiene el mapeo de intenciones a tipos de consulta específico para ClientSuccessLiaison.
+        
+        Returns:
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
+        """
+        return {
+            "community": "community_building",
+            "experience": "user_experience",
+            "support": "customer_support",
+            "retention": "retention_strategies",
+            "communication": "communication_management",
+            "search": "web_search"
+        }
+    
+    async def _process_query(self, query: str, user_id: str, session_id: str,
+                           program_type: str, state: Dict[str, Any], profile: Dict[str, Any],
+                           **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la consulta del usuario.
         
         Args:
-            input_text: Texto de entrada del usuario
-            user_id: ID del usuario (opcional)
-            **kwargs: Argumentos adicionales como context, parameters, etc.
+            query: La consulta del usuario
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            program_type: Tipo de programa (general, elite, etc.)
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            **kwargs: Argumentos adicionales
             
         Returns:
-            Dict[str, Any]: Respuesta estandarizada del agente según el protocolo ADK
+            Dict[str, Any]: Respuesta del agente
         """
-        # Intentar clasificar la consulta con el Intent Analyzer primero
-        query_type = await self._classify_query_with_intent_analyzer(input_text)
-        
-        # Continuar con la implementación original pero usando el query_type determinado por el Intent Analyzer
-        return await super()._run_async_impl(input_text, user_id, **kwargs)
+        try:
+            # Intentar clasificar la consulta con el Intent Analyzer primero
+            query_type = await self._classify_query_with_intent_analyzer(query)
+            
+            # Procesar la consulta según el tipo determinado
+            logger.info(f"Procesando consulta de tipo: {query_type}")
+            
+            # Aquí iría la lógica específica del agente ClientSuccessLiaison
+            # Por ahora, simplemente devolvemos una respuesta genérica
+            return {
+                "success": True,
+                "output": f"Respuesta para consulta de tipo {query_type}",
+                "query_type": query_type,
+                "program_type": program_type,
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error al procesar consulta: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }

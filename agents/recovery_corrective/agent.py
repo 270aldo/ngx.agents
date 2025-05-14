@@ -1345,7 +1345,13 @@ class RecoveryCorrective(ADKAgent):
         
         # Inicializar el servicio de clasificación de programas
         self.gemini_client = gemini_client or GeminiClient()
-        self.program_classification_service = ProgramClassificationService(self.gemini_client)
+        # Configurar caché para el servicio de clasificación de programas
+        use_redis = os.environ.get('USE_REDIS_CACHE', 'false').lower() == 'true'
+        cache_ttl = int(os.environ.get('PROGRAM_CACHE_TTL', '3600'))  # 1 hora por defecto
+        self.program_classification_service = ProgramClassificationService(
+            gemini_client=self.gemini_client,
+            use_cache=True  # Habilitar caché para mejorar rendimiento
+        )
         
         logger.info(f"Agente RecoveryCorrective inicializado con ID: {agent_id}")
     

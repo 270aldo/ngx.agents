@@ -6,7 +6,7 @@ del servicio de clasificación de programas.
 """
 import pytest
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 from services.program_classification_service import ProgramClassificationService
 from agents.shared.program_definitions import get_all_program_types
 
@@ -26,7 +26,30 @@ def mock_gemini_client():
 @pytest.fixture
 def program_classification_service(mock_gemini_client):
     """Fixture para crear una instancia del servicio de clasificación de programas."""
-    return ProgramClassificationService(gemini_client=mock_gemini_client)
+    # Crear servicio con caché desactivado para pruebas básicas
+    service = ProgramClassificationService(gemini_client=mock_gemini_client, use_cache=False)
+    # Mockear el cache_manager para evitar operaciones reales de caché
+    service.cache_manager.get = AsyncMock(return_value=None)
+    service.cache_manager.set = AsyncMock(return_value=True)
+    service.cache_manager.flush = AsyncMock(return_value=True)
+    service.cache_manager.get_stats = AsyncMock(return_value={})
+    return service
+
+@pytest.fixture
+def cached_program_classification_service(mock_gemini_client):
+    """Fixture para crear una instancia del servicio con caché activado."""
+    # Crear servicio con caché activado para pruebas de caché
+    service = ProgramClassificationService(gemini_client=mock_gemini_client, use_cache=True)
+    # Mockear el cache_manager para simular operaciones de caché
+    service.cache_manager.get = AsyncMock(return_value=None)  # Por defecto, no hay caché
+    service.cache_manager.set = AsyncMock(return_value=True)
+    service.cache_manager.flush = AsyncMock(return_value=True)
+    service.cache_manager.get_stats = AsyncMock(return_value={
+        "hits": 0,
+        "misses": 0,
+        "current_items": 0
+    })
+    return service
 
 
 class TestProgramClassificationService:
@@ -128,6 +151,83 @@ class TestProgramClassificationService:
         
         # Verificar que se incluyó información relevante del programa
         assert "Objetivo:" in enriched_query or "Pilares:" in enriched_query
+
+
+    @pytest.mark.asyncio
+    async def test_get_program_specific_recommendations(self, program_classification_service):
+        """Prueba la obtención de recomendaciones específicas para un programa."""
+        # Obtener recomendaciones para PRIME/training
+        recommendations = await program_classification_service.get_program_specific_recommendations("PRIME", "training")
+        
+        # Verificar que se obtuvieron recomendaciones
+        assert isinstance(recommendations, list)
+        assert len(recommendations) > 0
+        
+    @pytest.mark.asyncio
+    async def test_cache_functionality(self, cached_program_classification_service):
+        """Prueba la funcionalidad de caché del servicio."""
+        service = cached_program_classification_service
+        
+        # Configurar mock para simular hit de caché en la segunda llamada
+        service.cache_manager.get = AsyncMock(side_effect=[None, "PRIME"])
+        
+        # Primera llamada (miss de caché)
+        context = {"user_profile": {"age": 40, "professional_role": "CEO"}, "goals": ["Optimizar rendimiento"]}
+        result1 = await service.classify_program_type(context)
+        
+        # Segunda llamada (hit de caché)
+        result2 = await service.classify_program_type(context)
+        
+        # Verificar que se llamó a cache_manager.get dos veces
+        assert service.cache_manager.get.call_count == 2
+        # Verificar que se llamó a cache_manager.set al menos una vez
+        assert service.cache_manager.set.call_count >= 1
+        # Verificar que la segunda llamada devolvió el valor cacheado
+        assert result2 == "PRIME"
+        
+    @pytest.mark.asyncio
+    async def test_get_cache_stats(self, cached_program_classification_service):
+        """Prueba la obtención de estadísticas de caché."""
+        service = cached_program_classification_service
+        
+        # Simular algunas operaciones de caché
+        service.cache_stats = {
+            'hits': 5,
+            'misses': 3,
+            'total_requests': 8
+        }
+        
+        # Obtener estadísticas
+        stats = await service.get_cache_stats()
+        
+        # Verificar estructura de estadísticas
+        assert stats['enabled'] is True
+        assert 'stats' in stats
+        assert stats['stats']['hits'] == 5
+        assert stats['stats']['misses'] == 3
+        assert stats['stats']['hit_rate'] == 5/8
+        
+    @pytest.mark.asyncio
+    async def test_flush_cache(self, cached_program_classification_service):
+        """Prueba la limpieza de caché."""
+        service = cached_program_classification_service
+        
+        # Simular algunas operaciones de caché
+        service.cache_stats = {
+            'hits': 5,
+            'misses': 3,
+            'total_requests': 8
+        }
+        
+        # Limpiar caché
+        result = await service.flush_cache()
+        
+        # Verificar resultado
+        assert result is True
+        assert service.cache_manager.flush.call_count == 1
+        assert service.cache_stats['hits'] == 0
+        assert service.cache_stats['misses'] == 0
+        assert service.cache_stats['total_requests'] == 0
 
 
 if __name__ == "__main__":

@@ -46,11 +46,13 @@ class BiometricsInsightEngine(ADKAgent):
     def __init__(self, toolkit: Optional[Toolkit] = None, a2a_server_url: Optional[str] = None, state_manager: Optional[StateManager] = None):
         # Definir capacidades y habilidades
         capabilities = [
-            "biometric_analysis", 
-            "pattern_recognition", 
-            "trend_identification", 
+            "biometric_analysis",
+            "pattern_recognition",
+            "trend_identification",
             "personalized_insights",
-            "data_visualization"
+            "data_visualization",
+            "image_analysis",
+            "multimodal_processing"
         ]
         
         # Definir skills siguiendo el formato A2A con mejores prácticas
@@ -106,6 +108,32 @@ class BiometricsInsightEngine(ADKAgent):
                 ],
                 "inputModes": ["text", "json"],
                 "outputModes": ["text", "json", "markdown", "image"]
+            },
+            {
+                "id": "biometrics-insight-image-analysis",
+                "name": "Análisis de Imágenes Biométricas",
+                "description": "Analiza imágenes de composición corporal, resultados de pruebas médicas y otras visualizaciones biométricas para extraer información relevante",
+                "tags": ["image-analysis", "body-composition", "medical-tests", "visual-data"],
+                "examples": [
+                    "Analiza esta imagen de mi composición corporal",
+                    "Interpreta los resultados de mi DEXA scan",
+                    "¿Qué indican estos resultados de mi análisis de sangre?"
+                ],
+                "inputModes": ["text", "image", "multimodal"],
+                "outputModes": ["text", "json", "markdown"]
+            },
+            {
+                "id": "biometrics-insight-multimodal-analysis",
+                "name": "Análisis Multimodal de Datos Biométricos",
+                "description": "Procesa y analiza conjuntamente texto e imágenes relacionados con datos biométricos para proporcionar insights más completos",
+                "tags": ["multimodal", "combined-analysis", "text-and-image", "comprehensive-insights"],
+                "examples": [
+                    "Compara estas dos imágenes de mi composición corporal y explica los cambios",
+                    "Analiza esta captura de pantalla de mi app de HRV y explica qué significan estos valores",
+                    "Interpreta estos resultados de laboratorio y sugiere mejoras basadas en mis objetivos"
+                ],
+                "inputModes": ["text", "image", "multimodal"],
+                "outputModes": ["text", "json", "markdown"]
             }
         ]
         
@@ -130,6 +158,38 @@ class BiometricsInsightEngine(ADKAgent):
         # Inicializar clientes y herramientas
         self.gemini_client = GeminiClient()
         self.supabase_client = SupabaseClient()
+        
+        # Inicializar procesadores de visión y multimodales
+        try:
+            from core.vision_processor import VisionProcessor
+            from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
+            from clients.vertex_ai.vision_client import VertexAIVisionClient
+            from clients.vertex_ai.multimodal_client import VertexAIMultimodalClient
+            
+            # Inicializar procesador de visión
+            self.vision_processor = VisionProcessor()
+            logger.info("Procesador de visión inicializado correctamente")
+            
+            # Inicializar adaptador multimodal
+            self.multimodal_adapter = MultimodalAdapter()
+            logger.info("Adaptador multimodal inicializado correctamente")
+            
+            # Inicializar clientes especializados
+            self.vision_client = VertexAIVisionClient()
+            self.multimodal_client = VertexAIMultimodalClient()
+            logger.info("Clientes de visión y multimodal inicializados correctamente")
+            
+            # Inicializar tracer para telemetría
+            from opentelemetry import trace
+            self.tracer = trace.get_tracer(__name__)
+            logger.info("Tracer para telemetría inicializado correctamente")
+            
+            # Marcar capacidades como disponibles
+            self._vision_capabilities_available = True
+        except ImportError as e:
+            logger.warning(f"No se pudieron inicializar algunos componentes para capacidades avanzadas: {e}")
+            # Crear implementaciones simuladas para mantener la compatibilidad
+            self._vision_capabilities_available = False
         
         # Inicializar estado interno
         self._state = {}
@@ -236,8 +296,96 @@ class BiometricsInsightEngine(ADKAgent):
             # Para este ejemplo, usamos datos de muestra
             biometric_data = kwargs.get("biometric_data", self._get_sample_biometric_data())
             
+            # Verificar si hay imágenes en la entrada
+            image_data = kwargs.get("image_data")
+            has_image = image_data is not None
+            
             # Analizar la entrada del usuario para determinar la skill a utilizar
-            if any(keyword in input_text.lower() for keyword in ["visualiza", "gráfico", "muestra", "compara", "dashboard"]):
+            if has_image and any(keyword in input_text.lower() for keyword in ["analiza", "interpreta", "examina", "evalúa"]):
+                # Usar skill de análisis de imágenes
+                if self._vision_capabilities_available:
+                    try:
+                        result = await self.execute_skill("image_analysis",
+                                                       input_text=input_text,
+                                                       image_data=image_data,
+                                                       biometric_data=biometric_data,
+                                                       user_profile=user_profile,
+                                                       context=context)
+                        
+                        # Generar respuesta
+                        if isinstance(result, dict) and "response" in result:
+                            response_text = result["response"]
+                        else:
+                            # Convertir resultado estructurado a texto
+                            response_text = "Análisis de imagen biométrica:\n\n"
+                            if isinstance(result, dict):
+                                for key, value in result.items():
+                                    if key != "response":
+                                        response_text += f"**{key.replace('_', ' ').title()}**: {value}\n"
+                            else:
+                                response_text = str(result)
+                        
+                        # Almacenar resultado en el estado
+                        image_analyses = self._state.get("image_analyses", {})
+                        analysis_id = str(uuid.uuid4())
+                        image_analyses[analysis_id] = result
+                        self.update_state("image_analyses", image_analyses)
+                        response_type = "image_analysis"
+                        
+                    except Exception as e:
+                        logger.error(f"Error al ejecutar skill image_analysis: {e}")
+                        response_text = "Lo siento, ha ocurrido un error al analizar la imagen biométrica."
+                        result = {"error": str(e)}
+                        analysis_id = None
+                else:
+                    response_text = "Lo siento, las capacidades de análisis de imágenes no están disponibles en este momento."
+                    result = {"error": "Capacidades de visión no disponibles"}
+                    analysis_id = None
+                    response_type = "error"
+            
+            elif has_image and any(keyword in input_text.lower() for keyword in ["compara", "diferencia", "cambio", "progreso", "antes y después"]):
+                # Usar skill de análisis multimodal para comparación
+                if self._vision_capabilities_available:
+                    try:
+                        result = await self.execute_skill("multimodal_analysis",
+                                                       input_text=input_text,
+                                                       image_data=image_data,
+                                                       biometric_data=biometric_data,
+                                                       user_profile=user_profile,
+                                                       context=context)
+                        
+                        # Generar respuesta
+                        if isinstance(result, dict) and "response" in result:
+                            response_text = result["response"]
+                        else:
+                            # Convertir resultado estructurado a texto
+                            response_text = "Análisis multimodal de datos biométricos:\n\n"
+                            if isinstance(result, dict):
+                                for key, value in result.items():
+                                    if key != "response":
+                                        response_text += f"**{key.replace('_', ' ').title()}**: {value}\n"
+                            else:
+                                response_text = str(result)
+                        
+                        # Almacenar resultado en el estado
+                        multimodal_analyses = self._state.get("multimodal_analyses", {})
+                        analysis_id = str(uuid.uuid4())
+                        multimodal_analyses[analysis_id] = result
+                        self.update_state("multimodal_analyses", multimodal_analyses)
+                        response_type = "multimodal_analysis"
+                        
+                    except Exception as e:
+                        logger.error(f"Error al ejecutar skill multimodal_analysis: {e}")
+                        response_text = "Lo siento, ha ocurrido un error al realizar el análisis multimodal."
+                        result = {"error": str(e)}
+                        analysis_id = None
+                else:
+                    response_text = "Lo siento, las capacidades de análisis multimodal no están disponibles en este momento."
+                    result = {"error": "Capacidades multimodales no disponibles"}
+                    analysis_id = None
+                    response_type = "error"
+            
+            elif any(keyword in input_text.lower() for keyword in ["visualiza", "gráfico", "muestra", "compara", "dashboard"]):
                 # Usar skill de visualización de datos
                 try:
                     result = await self.execute_skill("data_visualization", 
@@ -427,3 +575,264 @@ class BiometricsInsightEngine(ADKAgent):
                 "timestamp": time.time(),
                 "conversation_id": session_id
             }
+    
+    async def execute_skill(self, skill_name: str, **kwargs) -> Dict[str, Any]:
+        """
+        Ejecuta una skill específica del agente.
+        
+        Args:
+            skill_name: Nombre de la skill a ejecutar
+            **kwargs: Argumentos para la skill
+            
+        Returns:
+            Dict[str, Any]: Resultado de la ejecución de la skill
+        """
+        if skill_name == "image_analysis":
+            return await self._execute_image_analysis(**kwargs)
+        elif skill_name == "multimodal_analysis":
+            return await self._execute_multimodal_analysis(**kwargs)
+        else:
+            # Implementación existente para otras skills
+            # Aquí iría el código para ejecutar las skills originales
+            return {"response": f"Ejecutando skill {skill_name} con los parámetros proporcionados"}
+    
+    async def _execute_image_analysis(self, input_text: str, image_data: Any, **kwargs) -> Dict[str, Any]:
+        """
+        Ejecuta el análisis de imágenes biométricas.
+        
+        Args:
+            input_text: Texto de entrada del usuario
+            image_data: Datos de la imagen a analizar
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Resultado del análisis de la imagen
+        """
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            with self.tracer.start_as_current_span("biometrics_image_analysis"):
+                # Construir prompt específico para el análisis de imágenes biométricas
+                prompt = f"""
+                Eres un experto en análisis de datos biométricos y médicos. Analiza esta imagen con detalle
+                y proporciona información relevante sobre los datos biométricos que muestra.
+                
+                Consulta del usuario: "{input_text}"
+                
+                Si la imagen muestra resultados de pruebas médicas o análisis de sangre:
+                1. Identifica los biomarcadores y sus valores
+                2. Indica si están dentro de rangos normales
+                3. Explica qué significan estos valores para la salud
+                4. Proporciona recomendaciones basadas en estos valores
+                
+                Si la imagen muestra composición corporal:
+                1. Identifica los porcentajes de grasa corporal, masa muscular, etc.
+                2. Evalúa estos valores en el contexto de salud general
+                3. Sugiere áreas de mejora si es apropiado
+                
+                Si la imagen muestra datos de dispositivos wearables:
+                1. Identifica las métricas mostradas (HRV, sueño, etc.)
+                2. Interpreta los valores y patrones
+                3. Relaciona estos datos con el bienestar general
+                
+                Proporciona un análisis detallado, preciso y útil.
+                """
+                
+                # Analizar la imagen utilizando el cliente de visión
+                vision_result = await self.vision_client.analyze_image(
+                    image_data=image_data,
+                    prompt=prompt,
+                    temperature=0.2
+                )
+                
+                # Extraer texto si es necesario (para resultados de pruebas, etc.)
+                text_result = await self.vision_client.extract_text(image_data)
+                
+                # Procesar los resultados
+                analysis_text = vision_result.get("text", "")
+                extracted_text = text_result.get("text", "")
+                
+                # Generar insights basados en el análisis
+                insights_prompt = f"""
+                Basándote en el siguiente análisis de una imagen biométrica, genera 3-5 insights clave
+                sobre la salud y el bienestar del usuario.
+                
+                Análisis de la imagen:
+                {analysis_text}
+                
+                Texto extraído de la imagen:
+                {extracted_text}
+                
+                Proporciona insights específicos, accionables y basados en evidencia científica.
+                """
+                
+                insights_response = await self.gemini_client.generate_response(insights_prompt, temperature=0.3)
+                
+                # Generar recomendaciones personalizadas
+                recommendations_prompt = f"""
+                Basándote en el siguiente análisis de una imagen biométrica, genera 3-5 recomendaciones
+                personalizadas para mejorar la salud y el bienestar del usuario.
+                
+                Análisis de la imagen:
+                {analysis_text}
+                
+                Texto extraído de la imagen:
+                {extracted_text}
+                
+                Proporciona recomendaciones específicas, accionables y basadas en evidencia científica.
+                """
+                
+                recommendations_response = await self.gemini_client.generate_response(recommendations_prompt, temperature=0.3)
+                
+                # Construir respuesta final
+                result = {
+                    "response": f"{analysis_text}\n\n**Insights Clave:**\n{insights_response}\n\n**Recomendaciones Personalizadas:**\n{recommendations_response}",
+                    "analysis": analysis_text,
+                    "extracted_text": extracted_text,
+                    "insights": insights_response,
+                    "recommendations": recommendations_response,
+                    "image_type": self._determine_image_type(analysis_text)
+                }
+                
+                return result
+                
+        except Exception as e:
+            logger.error(f"Error en análisis de imagen: {e}", exc_info=True)
+            return {
+                "response": f"Lo siento, ha ocurrido un error al analizar la imagen: {str(e)}",
+                "error": str(e)
+            }
+    
+    async def _execute_multimodal_analysis(self, input_text: str, image_data: Any, **kwargs) -> Dict[str, Any]:
+        """
+        Ejecuta el análisis multimodal de datos biométricos.
+        
+        Args:
+            input_text: Texto de entrada del usuario
+            image_data: Datos de la imagen a analizar
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Resultado del análisis multimodal
+        """
+        try:
+            # Utilizar el adaptador multimodal para procesar la entrada
+            with self.tracer.start_as_current_span("biometrics_multimodal_analysis"):
+                # Construir prompt específico para el análisis multimodal
+                prompt = f"""
+                Eres un experto en análisis de datos biométricos y médicos. Analiza esta imagen junto con la consulta
+                del usuario y proporciona un análisis detallado que integre ambas fuentes de información.
+                
+                Consulta del usuario: "{input_text}"
+                
+                Proporciona:
+                1. Un análisis detallado de los datos biométricos mostrados en la imagen
+                2. Interpretación de estos datos en el contexto de la consulta del usuario
+                3. Insights sobre patrones o tendencias relevantes
+                4. Recomendaciones personalizadas basadas en el análisis
+                
+                Asegúrate de que tu respuesta sea detallada, precisa y útil para el usuario.
+                """
+                
+                # Procesar la entrada multimodal
+                multimodal_result = await self.multimodal_adapter.process_multimodal(
+                    prompt=prompt,
+                    image_data=image_data,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Procesar los resultados
+                analysis_text = multimodal_result.get("text", "")
+                
+                # Generar insights basados en el análisis
+                insights_prompt = f"""
+                Basándote en el siguiente análisis multimodal de datos biométricos, genera 3-5 insights clave
+                sobre la salud y el bienestar del usuario.
+                
+                Análisis multimodal:
+                {analysis_text}
+                
+                Proporciona insights específicos, accionables y basados en evidencia científica.
+                """
+                
+                insights_response = await self.gemini_client.generate_response(insights_prompt, temperature=0.3)
+                
+                # Generar recomendaciones personalizadas
+                recommendations_prompt = f"""
+                Basándote en el siguiente análisis multimodal de datos biométricos, genera 3-5 recomendaciones
+                personalizadas para mejorar la salud y el bienestar del usuario.
+                
+                Análisis multimodal:
+                {analysis_text}
+                
+                Proporciona recomendaciones específicas, accionables y basadas en evidencia científica.
+                """
+                
+                recommendations_response = await self.gemini_client.generate_response(recommendations_prompt, temperature=0.3)
+                
+                # Construir respuesta final
+                result = {
+                    "response": f"{analysis_text}\n\n**Insights Clave:**\n{insights_response}\n\n**Recomendaciones Personalizadas:**\n{recommendations_response}",
+                    "analysis": analysis_text,
+                    "insights": insights_response,
+                    "recommendations": recommendations_response
+                }
+                
+                return result
+                
+        except Exception as e:
+            logger.error(f"Error en análisis multimodal: {e}", exc_info=True)
+            return {
+                "response": f"Lo siento, ha ocurrido un error al realizar el análisis multimodal: {str(e)}",
+                "error": str(e)
+            }
+    
+    def _determine_image_type(self, analysis_text: str) -> str:
+        """
+        Determina el tipo de imagen biométrica basado en el análisis.
+        
+        Args:
+            analysis_text: Texto del análisis de la imagen
+            
+        Returns:
+            str: Tipo de imagen (body_composition, blood_test, wearable_data, etc.)
+        """
+        analysis_lower = analysis_text.lower()
+        
+        if any(term in analysis_lower for term in ["grasa corporal", "masa muscular", "composición corporal", "dexa", "inbody"]):
+            return "body_composition"
+        elif any(term in analysis_lower for term in ["sangre", "hemograma", "colesterol", "glucosa", "triglicéridos"]):
+            return "blood_test"
+        elif any(term in analysis_lower for term in ["hrv", "variabilidad", "sueño", "oura", "whoop", "garmin", "fitbit"]):
+            return "wearable_data"
+        elif any(term in analysis_lower for term in ["hormonal", "hormonas", "testosterona", "cortisol", "tiroides"]):
+            return "hormone_test"
+        else:
+            return "other_biometric_data"
+    
+    def _get_sample_biometric_data(self) -> Dict[str, Any]:
+        """
+        Proporciona datos biométricos de muestra para pruebas.
+        
+        Returns:
+            Dict[str, Any]: Datos biométricos de muestra
+        """
+        # Implementación existente
+        return {
+            "hrv": {
+                "daily": [65, 68, 72, 70, 67, 69, 71],
+                "weekly_avg": 69,
+                "trend": "stable"
+            },
+            "sleep": {
+                "duration": [7.2, 6.8, 7.5, 7.0, 6.5, 8.0, 7.2],
+                "quality": [85, 80, 88, 82, 75, 90, 84],
+                "deep_sleep": [1.2, 1.0, 1.4, 1.1, 0.9, 1.5, 1.2]
+            },
+            "body_composition": {
+                "weight": 75.5,
+                "body_fat": 18.2,
+                "muscle_mass": 58.4,
+                "bone_density": 1.08
+            }
+        }

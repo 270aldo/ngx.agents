@@ -17,13 +17,20 @@ from core.settings import settings
 from core.logging_config import configure_logging
 from core.telemetry import initialize_telemetry, instrument_fastapi, get_tracer, shutdown_telemetry
 from core.auth import get_current_user
-from app.routers import auth, agents, chat, a2a
+from app.routers import auth, agents, chat, a2a, budget, prompt_analyzer, domain_cache, async_processor, batch_processor, request_prioritizer, circuit_breaker, degraded_mode, chaos_testing
 from clients.supabase_client import SupabaseClient
 from app.middleware.telemetry import setup_telemetry_middleware
 
-# Configurar logging y telemetría
+# Configurar logging
 logger = configure_logging(__name__)
-initialize_telemetry()
+
+# Inicializar telemetría solo si está habilitada
+if settings.telemetry_enabled:
+    logger.info("Inicializando telemetría...")
+    initialize_telemetry()
+    logger.info("Telemetría inicializada correctamente")
+else:
+    logger.info("Telemetría deshabilitada. No se inicializará.")
 
 # Crear la aplicación FastAPI
 app = FastAPI(
@@ -34,11 +41,13 @@ app = FastAPI(
     redoc_url=None  # Desactivar /redoc por defecto
 )
 
-# Instrumentar FastAPI con OpenTelemetry
-instrument_fastapi(app)
+# Instrumentar FastAPI con OpenTelemetry y configurar middleware de telemetría solo si está habilitada
+if settings.telemetry_enabled:
+    instrument_fastapi(app)
+    logger.info("Aplicación FastAPI instrumentada con OpenTelemetry")
 
 # Configurar middlewares
-setup_telemetry_middleware(app)  # Telemetry debe ser el primer middleware para capturar todo
+setup_telemetry_middleware(app)  # Esta función ya verifica si la telemetría está habilitada
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # En producción, limitar a dominios específicos
@@ -52,10 +61,23 @@ app.include_router(auth.router)
 app.include_router(agents.router)
 app.include_router(chat.router)
 app.include_router(a2a.router)
+app.include_router(budget.router)
+app.include_router(prompt_analyzer.router)
+app.include_router(domain_cache.router)
+app.include_router(async_processor.router)
+app.include_router(batch_processor.router)
+app.include_router(request_prioritizer.router)
+app.include_router(circuit_breaker.router)
+app.include_router(degraded_mode.router)
+app.include_router(chaos_testing.router)
 
 # Incluir health check router
 from infrastructure.health_router import setup_health_router
 setup_health_router(app, prefix="/api/v1")
+
+# Incluir manejador de alertas
+from app.handlers.alert_handler import setup_alert_handler
+setup_alert_handler(app)
 
 
 # Obtener tracer para la aplicación principal
@@ -65,7 +87,15 @@ tracer = get_tracer("ngx_agents.api.main")
 @app.on_event("startup")
 async def startup_event():
     """Tareas a ejecutar al iniciar la aplicación."""
-    with tracer.start_as_current_span("app_startup"):
+    # Usar span solo si la telemetría está habilitada
+    if settings.telemetry_enabled and tracer:
+        context_manager = tracer.start_as_current_span("app_startup")
+    else:
+        # Usar un context manager nulo si la telemetría está deshabilitada
+        from contextlib import nullcontext
+        context_manager = nullcontext()
+        
+    with context_manager:
         try:
             # Configurar mensaje de inicio
             logger.info(
@@ -84,10 +114,47 @@ async def startup_event():
             await supabase_client.initialize()
             logger.info("Cliente Supabase inicializado correctamente")
             
+            # Inicializar sistema de presupuestos si está habilitado
+            if settings.enable_budgets:
+                from core.budget import budget_manager
+                logger.info("Sistema de presupuestos inicializado correctamente")
+                
+            # Inicializar analizador de prompts
+            from core.prompt_analyzer import prompt_analyzer
+            logger.info("Analizador de prompts inicializado correctamente")
+            
+            # Inicializar sistema de caché por dominio
+            from core.domain_cache import domain_cache
+            logger.info("Sistema de caché por dominio inicializado correctamente")
+            
+            # Inicializar procesador asíncrono
+            from core.async_processor import async_processor
+            asyncio.create_task(async_processor.start())
+            logger.info("Procesador asíncrono iniciado correctamente")
+            
+            # Inicializar procesador por lotes
+            from core.batch_processor import batch_processor
+            logger.info("Procesador por lotes inicializado correctamente")
+            
+            # Inicializar sistema de priorización de solicitudes
+            from core.request_prioritizer import request_prioritizer
+            asyncio.create_task(request_prioritizer.start())
+            logger.info("Sistema de priorización de solicitudes iniciado correctamente")
+            
+            # Inicializar sistema de modos degradados
+            from core.degraded_mode import degraded_mode_manager
+            asyncio.create_task(degraded_mode_manager.start_monitoring())
+            logger.info("Sistema de modos degradados iniciado correctamente")
+            
             # Registrar dependencias para health checks
             from infrastructure.health import health_check
             health_check.register_dependency("supabase", health_check.check_supabase, critical=True)
             health_check.register_dependency("vertex_ai", health_check.check_vertex_ai, critical=True)
+            
+            # Inicializar sistema de runbooks
+            from tools.runbooks import RunbookExecutor
+            runbook_executor = RunbookExecutor()
+            logger.info("Sistema de runbooks inicializado correctamente")
             
             logger.info("Aplicación NGX Agents iniciada correctamente")
             
@@ -106,8 +173,34 @@ async def shutdown_event():
     logger.info("Cerrando la aplicación NGX Agents...")
     
     try:
-        # Cerrar telemetría
-        shutdown_telemetry()
+        # Cerrar telemetría solo si está habilitada
+        if settings.telemetry_enabled:
+            shutdown_telemetry()
+            logger.info("Telemetría cerrada correctamente")
+            
+        # Detener procesador asíncrono
+        try:
+            from core.async_processor import async_processor
+            await async_processor.stop()
+            logger.info("Procesador asíncrono detenido correctamente")
+        except Exception as e:
+            logger.error(f"Error al detener procesador asíncrono: {e}")
+        
+        # Detener sistema de priorización de solicitudes
+        try:
+            from core.request_prioritizer import request_prioritizer
+            await request_prioritizer.stop()
+            logger.info("Sistema de priorización de solicitudes detenido correctamente")
+        except Exception as e:
+            logger.error(f"Error al detener sistema de priorización de solicitudes: {e}")
+        
+        # Detener sistema de modos degradados
+        try:
+            from core.degraded_mode import degraded_mode_manager
+            await degraded_mode_manager.stop_monitoring()
+            logger.info("Sistema de modos degradados detenido correctamente")
+        except Exception as e:
+            logger.error(f"Error al detener sistema de modos degradados: {e}")
         
         # Cerrar conexiones a servicios externos
         logger.info("Cerrando conexiones a servicios externos...")
@@ -186,13 +279,14 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     endpoint = request.url.path
     method = request.method
     
-    # Registrar excepción en el span actual
-    record_exception(exc, {
-        "request_id": request_id,
-        "path": endpoint,
-        "method": method,
-        "error_type": type(exc).__name__
-    })
+    # Registrar excepción en el span actual solo si la telemetría está habilitada
+    if settings.telemetry_enabled:
+        record_exception(exc, {
+            "request_id": request_id,
+            "path": endpoint,
+            "method": method,
+            "error_type": type(exc).__name__
+        })
     
     # Registrar error con contexto mejorado
     logger.error(
@@ -241,7 +335,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 async def _send_error_alert(
     error_message: str,
-    error_type: str, 
+    error_type: str,
     endpoint: str,
     request_id: str
 ) -> None:
@@ -256,6 +350,7 @@ async def _send_error_alert(
     """
     try:
         from tools.pagerduty_tools import send_alert
+        from tools.runbooks import RunbookExecutor
         
         # Detalles del error
         details = (
@@ -271,6 +366,20 @@ async def _send_error_alert(
             component="api",
             details=details
         )
+        
+        # Ejecutar runbook de respuesta a errores si existe
+        try:
+            runbook_executor = RunbookExecutor()
+            import time
+            await runbook_executor.execute_runbook("error_response", {
+                "error_message": error_message,
+                "error_type": error_type,
+                "endpoint": endpoint,
+                "request_id": request_id,
+                "timestamp": time.time()
+            })
+        except Exception as runbook_error:
+            logger.error(f"Error al ejecutar runbook de respuesta a errores: {runbook_error}", exc_info=True)
     except Exception as e:
         # No queremos que un error al enviar la alerta cause más problemas
         logger.error(f"Error al enviar alerta de error: {e}", exc_info=True)

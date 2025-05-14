@@ -1,8 +1,17 @@
-.PHONY: setup dev test test-unit test-integration test-agents test-cov test-cov-html test-adk lint format clean
+.PHONY: setup setup-full setup-dev setup-test dev test test-unit test-integration test-agents test-cov test-cov-html test-adk lint format clean
 
 # Configuración y desarrollo
 setup:
-	poetry install --with dev,test
+	poetry install --no-root --with dev,test
+
+setup-full:
+	poetry install --no-root --with dev,test,agents,clients,core,tools,telemetry
+
+setup-dev:
+	poetry install --no-root --with dev,test,agents,clients,core,tools
+
+setup-test:
+	poetry install --no-root --only test
 
 dev:
 	poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -26,18 +35,20 @@ test-adk:
 
 # Cobertura de código
 test-cov:
-	poetry run pytest --cov=core --cov=clients --cov=agents --cov=tools --cov=api
+	poetry run pytest --cov=core --cov=clients --cov=agents --cov=tools --cov=app
 
 test-cov-html:
-	poetry run pytest --cov=core --cov=clients --cov=agents --cov=tools --cov=api --cov-report=html
+	poetry run pytest --cov=core --cov=clients --cov=agents --cov=tools --cov=app --cov-report=html
 	@echo "Informe de cobertura generado en coverage_html_report/index.html"
 
 # Calidad de código
 lint:
-	poetry run flake8 core clients agents tools api
+	poetry run ruff check core clients agents tools app
+	poetry run mypy core clients agents tools app
 
 format:
-	poetry run black core clients agents tools api
+	poetry run black core clients agents tools app
+	poetry run isort core clients agents tools app
 
 # Limpieza
 clean:

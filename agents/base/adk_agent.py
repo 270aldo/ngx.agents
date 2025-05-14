@@ -58,13 +58,17 @@ except ImportError:
     # Los mocks _mock_tracer y _mock_meter se usarán si has_telemetry es False
 
 # Importaciones internas
-from agents.base.a2a_agent import A2AAgent 
-from clients.gemini_client import GeminiClient 
-from clients.supabase_client import SupabaseClient 
+from agents.base.a2a_agent import A2AAgent
+from clients.gemini_client import GeminiClient
+from clients.supabase_client import SupabaseClient
 from infrastructure.adapters.state_manager_adapter import ConversationContext
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter as state_manager
+from infrastructure.adapters.vision_adapter import vision_adapter
+from infrastructure.adapters.multimodal_adapter import multimodal_adapter
 from core.logging_config import get_logger
 from core.contracts import create_task, create_result, validate_task, validate_result
+from core.budget import budget_manager
+from core.vision_processor import vision_processor
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -86,7 +90,12 @@ class ADKAgent(A2AAgent, GoogleADKAgent):
     supabase_client: Optional[SupabaseClient] = None
     state_manager: Optional[StateManager] = None
     adk_toolkit: Optional[Toolkit] = None
-    skills: List[Any] = [] 
+    skills: List[Any] = []
+    
+    # Adaptadores para capacidades de visión y multimodales
+    vision_adapter = vision_adapter
+    multimodal_adapter = multimodal_adapter
+    vision_processor = vision_processor
 
     def __init__(
         self,
@@ -110,6 +119,9 @@ class ADKAgent(A2AAgent, GoogleADKAgent):
             self.state_manager = StateManager(self.supabase_client.client)
         else:
             self.state_manager = None
+            
+        # Inicializar adaptadores de visión y multimodales
+        self._initialize_vision_capabilities()
         
         # Inicializar el toolkit de ADK si no se proporciona
         if adk_toolkit is None:
@@ -145,6 +157,23 @@ class ADKAgent(A2AAgent, GoogleADKAgent):
         )
         
         logger.info(f"ADKAgent '{self.name}' ({self.agent_id}) inicializado.")
+        
+    async def _initialize_vision_capabilities(self):
+        """Inicializa las capacidades de visión y multimodales."""
+        try:
+            # Inicializar adaptadores si no están inicializados
+            if not self.vision_adapter.is_initialized:
+                await self.vision_adapter.initialize()
+            
+            if not self.multimodal_adapter.is_initialized:
+                await self.multimodal_adapter.initialize()
+                
+            if not self.vision_processor.is_initialized:
+                await self.vision_processor.initialize()
+                
+            logger.info(f"Capacidades de visión y multimodales inicializadas para el agente '{self.name}'")
+        except Exception as e:
+            logger.error(f"Error al inicializar capacidades de visión para el agente '{self.name}': {e}", exc_info=True)
 
     def _sanitize_otel_name(self, name: str, max_length: int = 63) -> str:
         """Sanitiza un nombre para cumplir con las restricciones de OpenTelemetry."""
@@ -288,10 +317,13 @@ class ADKAgent(A2AAgent, GoogleADKAgent):
         logger.warning(f"_update_context no implementado en ADKAgent base para user_id {user_id}")
         pass
 
-    def _get_program_type_from_profile(self, client_profile: Optional[Dict[str, Any]]) -> str:
+    async def _get_program_type_from_profile(self, client_profile: Optional[Dict[str, Any]]) -> str:
         """Devuelve el tipo de programa (PRIME/LONGEVITY/GENERAL) a partir del perfil del cliente.
 
         Si el perfil o el campo ``program_type`` no está disponible, se asume ``"PRIME"``.
+        
+        Este método es asíncrono para mantener consistencia con las implementaciones
+        en los agentes específicos que pueden necesitar consultar servicios externos.
         """
         # Si no hay perfil o el perfil no es un diccionario válido devolvemos PRIME.
         if not client_profile or not isinstance(client_profile, dict):
@@ -309,11 +341,12 @@ class ADKAgent(A2AAgent, GoogleADKAgent):
 
         return selected_program if selected_program in valid_program_types else "GENERAL"
 
-    def _extract_profile_details(self, client_profile: Dict[str, Any]) -> str:
+    async def _extract_profile_details(self, client_profile: Dict[str, Any]) -> str:
         """Convierte detalles clave del perfil en un string formateado."""
         details = []
         if client_profile:
-            details.append(f"- Programa: {self._get_program_type_from_profile(client_profile)}")
+            program_type = await self._get_program_type_from_profile(client_profile)
+            details.append(f"- Programa: {program_type}")
             if goals := client_profile.get('goals'): details.append(f"- Objetivos: {goals}")
             if level := client_profile.get('experience_level'): details.append(f"- Experiencia: {level}")
             if metrics := client_profile.get('current_metrics'): details.append(f"- Métricas: {metrics}")
@@ -321,6 +354,139 @@ class ADKAgent(A2AAgent, GoogleADKAgent):
             if injuries := client_profile.get('injury_history'): details.append(f"- Lesiones: {injuries}")
         return "\n".join(details) if details else "No disponible"
 
+    # Métodos para capacidades de visión
+    async def analyze_image(self, image_data, analysis_type="full"):
+        """
+        Analiza una imagen y extrae información.
+        
+        Args:
+            image_data: Datos de la imagen (base64, bytes o dict con url o path)
+            analysis_type: Tipo de análisis ('full', 'labels', 'objects', 'text', 'faces', 'landmarks')
+            
+        Returns:
+            Dict[str, Any]: Resultados del análisis
+        """
+        with self.tracer.start_as_current_span("agent_analyze_image"):
+            return await self.vision_processor.analyze_image(image_data, analysis_type)
+    
+    async def extract_text_from_image(self, image_data):
+        """
+        Extrae texto de una imagen.
+        
+        Args:
+            image_data: Datos de la imagen (base64, bytes o dict con url o path)
+            
+        Returns:
+            Dict[str, Any]: Texto extraído y metadatos
+        """
+        with self.tracer.start_as_current_span("agent_extract_text_from_image"):
+            return await self.vision_processor.extract_text(image_data)
+    
+    async def identify_objects_in_image(self, image_data, min_confidence=0.5):
+        """
+        Identifica objetos en una imagen.
+        
+        Args:
+            image_data: Datos de la imagen (base64, bytes o dict con url o path)
+            min_confidence: Confianza mínima para incluir objetos (0.0-1.0)
+            
+        Returns:
+            Dict[str, Any]: Objetos identificados y metadatos
+        """
+        with self.tracer.start_as_current_span("agent_identify_objects_in_image"):
+            return await self.vision_processor.identify_objects(image_data, min_confidence)
+    
+    async def analyze_faces_in_image(self, image_data):
+        """
+        Analiza caras en una imagen.
+        
+        Args:
+            image_data: Datos de la imagen (base64, bytes o dict con url o path)
+            
+        Returns:
+            Dict[str, Any]: Caras analizadas y metadatos
+        """
+        with self.tracer.start_as_current_span("agent_analyze_faces_in_image"):
+            return await self.vision_processor.analyze_faces(image_data)
+    
+    async def describe_image(self, image_data, detail_level="standard", focus_aspect=None):
+        """
+        Genera una descripción detallada de una imagen.
+        
+        Args:
+            image_data: Datos de la imagen (base64, bytes o dict con url o path)
+            detail_level: Nivel de detalle ('brief', 'standard', 'detailed')
+            focus_aspect: Aspecto en el que enfocarse (None, 'objects', 'people', 'scene', 'actions', 'colors')
+            
+        Returns:
+            Dict[str, Any]: Descripción generada y metadatos
+        """
+        with self.tracer.start_as_current_span("agent_describe_image"):
+            return await self.vision_processor.describe_image(image_data, detail_level, focus_aspect)
+    
+    # Métodos para capacidades multimodales
+    async def process_multimodal(self, prompt, image_data, temperature=0.7, max_output_tokens=None):
+        """
+        Procesa contenido multimodal (texto + imagen).
+        
+        Args:
+            prompt: Texto de prompt
+            image_data: Datos de la imagen (base64, bytes o dict con url o path)
+            temperature: Temperatura para generación
+            max_output_tokens: Máximo de tokens a generar
+            
+        Returns:
+            Dict[str, Any]: Respuesta generada
+        """
+        with self.tracer.start_as_current_span("agent_process_multimodal"):
+            return await self.multimodal_adapter.process_multimodal(prompt, image_data, temperature, max_output_tokens)
+    
+    async def visual_qa(self, question, image_data, temperature=0.2, max_output_tokens=1024):
+        """
+        Responde preguntas sobre una imagen.
+        
+        Args:
+            question: Pregunta sobre la imagen
+            image_data: Datos de la imagen (base64, bytes o dict con url o path)
+            temperature: Temperatura para generación
+            max_output_tokens: Máximo de tokens a generar
+            
+        Returns:
+            Dict[str, Any]: Respuesta a la pregunta
+        """
+        with self.tracer.start_as_current_span("agent_visual_qa"):
+            return await self.multimodal_adapter.visual_qa(question, image_data, temperature, max_output_tokens)
+    
+    async def generate_image_caption(self, image_data, style="descriptive", max_length=None):
+        """
+        Genera un pie de foto para una imagen.
+        
+        Args:
+            image_data: Datos de la imagen (base64, bytes o dict con url o path)
+            style: Estilo del pie de foto ('descriptive', 'concise', 'creative', 'technical')
+            max_length: Longitud máxima del pie de foto
+            
+        Returns:
+            Dict[str, Any]: Pie de foto generado
+        """
+        with self.tracer.start_as_current_span("agent_generate_image_caption"):
+            return await self.multimodal_adapter.generate_image_caption(image_data, style, max_length)
+    
+    async def compare_images(self, image_data1, image_data2, comparison_aspects=None):
+        """
+        Compara dos imágenes y genera un análisis de similitudes y diferencias.
+        
+        Args:
+            image_data1: Datos de la primera imagen (base64, bytes o dict con url o path)
+            image_data2: Datos de la segunda imagen (base64, bytes o dict con url o path)
+            comparison_aspects: Aspectos específicos a comparar (None para comparación general)
+            
+        Returns:
+            Dict[str, Any]: Análisis comparativo de las imágenes
+        """
+        with self.tracer.start_as_current_span("agent_compare_images"):
+            return await self.multimodal_adapter.compare_images(image_data1, image_data2, comparison_aspects)
+    
     # Método para manejar la ejecución de Google ADK
     async def run(self, *args, **kwargs):
         """
@@ -335,6 +501,15 @@ class ADKAgent(A2AAgent, GoogleADKAgent):
             
             # Medir el tiempo de respuesta
             start_time = time.time()
+            
+            # Establecer el ID del agente en el cliente de Gemini para seguimiento de presupuesto
+            if self.gemini_client:
+                self.gemini_client.set_current_agent(self.agent_id)
+            
+            # Verificar estado del presupuesto
+            budget_status = budget_manager.get_budget_status(self.agent_id)
+            if budget_status.get("percentage", 0) > 90:
+                logger.warning(f"Agente {self.agent_id} está cerca del límite de presupuesto: {budget_status.get('percentage')}%")
             
             # Ejecutar el agente utilizando la implementación de Google ADK
             with self.tracer.start_as_current_span("adk_agent_run"):

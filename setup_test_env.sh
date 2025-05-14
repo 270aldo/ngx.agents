@@ -1,5 +1,5 @@
 #!/bin/bash
-# Script para configurar un entorno virtual simple para pruebas
+# Script para configurar un entorno virtual simple para pruebas con Poetry
 
 # Colores para mensajes
 GREEN='\033[0;32m'
@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-echo -e "${YELLOW}Configurando entorno de pruebas para NGX Agents...${NC}"
+echo -e "${YELLOW}Configurando entorno de pruebas para NGX Agents con Poetry...${NC}"
 
 # Verificar si Python está instalado
 if ! command -v python3 &> /dev/null; then
@@ -15,37 +15,39 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Eliminar entorno virtual existente si existe
-if [ -d "venv_test" ]; then
-    echo -e "${YELLOW}Eliminando entorno virtual existente...${NC}"
-    rm -rf venv_test
-fi
-
-# Crear nuevo entorno virtual
-echo -e "${YELLOW}Creando nuevo entorno virtual...${NC}"
-python3 -m venv venv_test
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error al crear el entorno virtual.${NC}"
+# Verificar si Poetry está instalado
+if ! command -v poetry &> /dev/null; then
+    echo -e "${RED}Error: Poetry no está instalado. Por favor, instálalo primero:${NC}"
+    echo -e "${YELLOW}curl -sSL https://install.python-poetry.org | python3 -${NC}"
     exit 1
 fi
 
+# Configurar Poetry para crear el entorno virtual en el directorio del proyecto
+echo -e "${YELLOW}Configurando Poetry para crear el entorno virtual en el directorio del proyecto...${NC}"
+poetry config virtualenvs.in-project true
+
+# Eliminar entorno virtual existente si existe
+if [ -d ".venv_test" ]; then
+    echo -e "${YELLOW}Eliminando entorno virtual existente...${NC}"
+    rm -rf .venv_test
+fi
+
+# Crear nuevo entorno virtual e instalar dependencias mínimas para pruebas
+echo -e "${YELLOW}Creando nuevo entorno virtual e instalando dependencias para pruebas...${NC}"
+POETRY_VIRTUALENVS_PATH=".venv_test" poetry install --no-root --only test
+
 # Activar entorno virtual
 echo -e "${YELLOW}Activando entorno virtual...${NC}"
-source venv_test/bin/activate
+source .venv_test/bin/activate
 
-# Actualizar pip
-echo -e "${YELLOW}Actualizando pip...${NC}"
-pip install --upgrade pip
-
-# Instalar dependencias mínimas para pruebas
-echo -e "${YELLOW}Instalando dependencias mínimas para pruebas...${NC}"
-pip install pytest pytest-asyncio python-dotenv pydantic python-json-logger fastapi httpx starlette python-jose passlib bcrypt websockets
-
-# Crear un mock de adk.toolkit
-echo -e "${YELLOW}Creando mock de adk.toolkit...${NC}"
-mkdir -p venv_test/lib/python*/site-packages/adk
-touch venv_test/lib/python*/site-packages/adk/__init__.py
-cat > venv_test/lib/python*/site-packages/adk/toolkit.py << 'EOF'
+# Crear un mock de adk.toolkit si es necesario
+echo -e "${YELLOW}Verificando si se necesita crear mock de adk.toolkit...${NC}"
+if ! python -c "import adk.toolkit" &> /dev/null; then
+    echo -e "${YELLOW}Creando mock de adk.toolkit...${NC}"
+    SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+    mkdir -p "${SITE_PACKAGES}/adk"
+    touch "${SITE_PACKAGES}/adk/__init__.py"
+    cat > "${SITE_PACKAGES}/adk/toolkit.py" << 'EOF'
 """Mock de la clase Toolkit para pruebas."""
 
 class Toolkit:
@@ -66,8 +68,10 @@ class Toolkit:
         """Simula la ejecución del toolkit."""
         return {"result": "mock_result"}
 EOF
+fi
 
-echo -e "${GREEN}¡Entorno de pruebas configurado correctamente!${NC}"
-echo -e "${YELLOW}Para activar el entorno virtual, ejecuta:${NC} source venv_test/bin/activate"
+echo -e "${GREEN}¡Entorno de pruebas configurado correctamente con Poetry!${NC}"
+echo -e "${YELLOW}Para activar el entorno virtual, ejecuta:${NC} source .venv_test/bin/activate"
 echo -e "${YELLOW}Para ejecutar pruebas unitarias:${NC} pytest -m unit"
 echo -e "${YELLOW}Para ejecutar pruebas de agentes:${NC} pytest -m agents"
+echo -e "${YELLOW}Para ejecutar todas las pruebas:${NC} pytest"

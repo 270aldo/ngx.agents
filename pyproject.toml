@@ -55,6 +55,36 @@ opentelemetry-exporter-cloud-trace = "^0.10b1"
 google-cloud-trace = "^1.16.1"
 protobuf = "^5.26.1"
 
+# Dependencias consolidadas de todos los componentes
+[tool.poetry.group.agents]
+optional = true
+
+[tool.poetry.group.agents.dependencies]
+google-adk = "^0.1.0"
+google-generativeai = "^0.8.5"
+pydantic = ">=2.6.0,<3.0.0"
+httpx = "^0.28.1"
+
+[tool.poetry.group.clients]
+optional = true
+
+[tool.poetry.group.clients.dependencies]
+httpx = "^0.28.1"
+websockets = "^13.0.0"
+
+[tool.poetry.group.core]
+optional = true
+
+[tool.poetry.group.core.dependencies]
+pydantic = ">=2.6.0,<3.0.0"
+python-json-logger = ">=2.0.7,<3.0.0"
+
+[tool.poetry.group.tools]
+optional = true
+
+[tool.poetry.group.tools.dependencies]
+supabase = ">=2.3.0,<3.0.0"
+
 [tool.poetry.group.dev.dependencies]
 black = "^24.3.0"
 isort = "^5.13.2"
@@ -118,3 +148,8 @@ disallow_incomplete_defs = true
 [tool.ruff]
 line-length = 88
 target-version = "py39"
+
+[tool.poetry.group.app]
+optional = true
+
+[tool.poetry.group.app.dependencies]

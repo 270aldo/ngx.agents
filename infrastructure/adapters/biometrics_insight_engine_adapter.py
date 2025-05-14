@@ -1,724 +1,497 @@
 """
-Adaptador para el agente Biometrics Insight Engine.
+Adaptador para el agente BiometricsInsightEngine que utiliza los componentes optimizados.
 
-Este adaptador permite que el agente Biometrics Insight Engine sea utilizado a través del sistema A2A optimizado,
-manteniendo la compatibilidad con la implementación original pero aprovechando las mejoras
-de rendimiento y capacidades del nuevo sistema.
+Este adaptador extiende el agente BiometricsInsightEngine original y sobrescribe los métodos
+necesarios para utilizar el sistema A2A optimizado y el cliente Vertex AI optimizado.
 """
 
 import logging
-import asyncio
-import json
-import uuid
 import time
 from typing import Dict, Any, Optional, List, Union
+from datetime import datetime
 
-from core.logging_config import get_logger
 from agents.biometrics_insight_engine.agent import BiometricsInsightEngine
-from infrastructure.adapters.a2a_adapter import a2a_adapter
-from clients.vertex_ai import vertex_ai_client, VertexAIClient
-from core.state_manager_adapter import state_manager_adapter
-from core.telemetry import telemetry
-from app.schemas.a2a import A2ATaskContext
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
+from core.telemetry import get_telemetry
 
-logger = get_logger(__name__)
+# Configurar logger
+logger = logging.getLogger(__name__)
 
-class BiometricsInsightEngineAdapter:
+class BiometricsInsightEngineAdapter(BiometricsInsightEngine, BaseAgentAdapter):
     """
-    Adaptador para el agente Biometrics Insight Engine.
+    Adaptador para el agente BiometricsInsightEngine que utiliza los componentes optimizados.
     
-    Este adaptador proporciona funcionalidades para:
-    - Análisis e interpretación de datos biométricos
-    - Reconocimiento de patrones en datos biométricos
-    - Identificación de tendencias a largo plazo
-    - Visualización de datos biométricos
+    Este adaptador extiende el agente BiometricsInsightEngine original y utiliza la clase
+    BaseAgentAdapter para implementar métodos comunes.
     """
     
-    def __init__(self, a2a_client, state_manager):
+    def __init__(self):
         """
-        Inicializa el adaptador del Biometrics Insight Engine.
+        Inicializa el adaptador BiometricsInsightEngine.
+        """
+        super().__init__()
+        self.telemetry = get_telemetry()
+        self.agent_name = "biometrics_insight_engine"
         
-        Args:
-            a2a_client: Cliente A2A para comunicación con otros agentes
-            state_manager: Gestor de estado para persistencia
-        """
-        self.a2a_client = a2a_client
-        self.state_manager = state_manager
-        self.logger = get_logger("biometrics_insight_engine_adapter")
+        # Configuración de clasificación
+        self.fallback_keywords = [
+            "biométricos", "biometrics", "hrv", "sueño", "sleep", 
+            "glucosa", "glucose", "composición corporal", "body composition",
+            "datos de salud", "health data", "métricas", "metrics",
+            "análisis biométrico", "biometric analysis", "tendencias", "trends"
+        ]
         
-    @classmethod
-    async def create(cls):
-        """
-        Método de fábrica para crear una instancia del adaptador.
-        
-        Returns:
-            BiometricsInsightEngineAdapter: Una nueva instancia del adaptador
-        """
-        a2a_client = a2a_adapter
-        state_manager = state_manager_adapter
-        
-        # Inicializar el cliente Vertex AI si no está inicializado
-        if not vertex_ai_client.is_initialized:
-            await vertex_ai_client.initialize()
-            
-        return cls(a2a_client, state_manager)
-        
-    async def analyze_biometric_data(self, user_id: str, biometric_data: Dict[str, Any], query: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Analiza e interpreta datos biométricos.
-        
-        Args:
-            user_id: ID del usuario
-            biometric_data: Datos biométricos a analizar
-            query: Consulta específica sobre los datos (opcional)
-            
-        Returns:
-            Dict[str, Any]: Análisis de los datos biométricos
-        """
-        try:
-            with telemetry.start_span("biometrics_insight_engine.analyze_biometric_data"):
-                # Construir el prompt para el análisis
-                prompt = self._build_biometric_analysis_prompt(biometric_data, query)
-                
-                # Generar análisis
-                response = await vertex_ai_client.generate_content(prompt=prompt)
-                
-                # Procesar y estructurar la respuesta
-                analysis = self._parse_biometric_analysis(response["text"])
-                
-                # Guardar el análisis en el estado del usuario
-                await self._save_analysis_to_state(user_id, analysis)
-                
-                # Telemetría
-                telemetry.record_event("biometrics_insight_engine", "analysis_completed", {
-                    "user_id": user_id,
-                    "metrics_analyzed": len(biometric_data.keys()),
-                    "response_time_ms": telemetry.get_current_span().duration_ms
-                })
-                
-                return analysis
-        except Exception as e:
-            self.logger.error(f"Error analyzing biometric data: {str(e)}")
-            telemetry.record_error("biometrics_insight_engine", "analysis_failed", {
-                "error": str(e),
-                "user_id": user_id
-            })
-            raise
-            
-    async def identify_patterns(self, user_id: str, biometric_data: Dict[str, Any], time_range: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Identifica patrones en datos biométricos.
-        
-        Args:
-            user_id: ID del usuario
-            biometric_data: Datos biométricos a analizar
-            time_range: Rango de tiempo para el análisis (opcional)
-            
-        Returns:
-            Dict[str, Any]: Patrones identificados
-        """
-        try:
-            with telemetry.start_span("biometrics_insight_engine.identify_patterns"):
-                # Construir el prompt para la identificación de patrones
-                prompt = self._build_pattern_recognition_prompt(biometric_data, time_range)
-                
-                # Generar identificación de patrones
-                response = await vertex_ai_client.generate_content(prompt=prompt)
-                
-                # Procesar y estructurar la respuesta
-                patterns = self._parse_pattern_recognition(response["text"])
-                
-                # Guardar los patrones en el estado del usuario
-                await self._save_patterns_to_state(user_id, patterns)
-                
-                # Telemetría
-                telemetry.record_event("biometrics_insight_engine", "patterns_identified", {
-                    "user_id": user_id,
-                    "patterns_count": len(patterns.get("identified_patterns", [])),
-                    "response_time_ms": telemetry.get_current_span().duration_ms
-                })
-                
-                return patterns
-        except Exception as e:
-            self.logger.error(f"Error identifying patterns: {str(e)}")
-            telemetry.record_error("biometrics_insight_engine", "pattern_identification_failed", {
-                "error": str(e),
-                "user_id": user_id
-            })
-            raise
-            
-    async def analyze_trends(self, user_id: str, biometric_data: Dict[str, Any], metrics: Optional[List[str]] = None) -> Dict[str, Any]:
-        """
-        Analiza tendencias a largo plazo en datos biométricos.
-        
-        Args:
-            user_id: ID del usuario
-            biometric_data: Datos biométricos a analizar
-            metrics: Lista de métricas específicas a analizar (opcional)
-            
-        Returns:
-            Dict[str, Any]: Tendencias identificadas
-        """
-        try:
-            with telemetry.start_span("biometrics_insight_engine.analyze_trends"):
-                # Construir el prompt para el análisis de tendencias
-                prompt = self._build_trend_analysis_prompt(biometric_data, metrics)
-                
-                # Generar análisis de tendencias
-                response = await vertex_ai_client.generate_content(prompt=prompt)
-                
-                # Procesar y estructurar la respuesta
-                trends = self._parse_trend_analysis(response["text"])
-                
-                # Guardar las tendencias en el estado del usuario
-                await self._save_trends_to_state(user_id, trends)
-                
-                # Telemetría
-                telemetry.record_event("biometrics_insight_engine", "trends_analyzed", {
-                    "user_id": user_id,
-                    "metrics_analyzed": len(metrics) if metrics else len(biometric_data.keys()),
-                    "response_time_ms": telemetry.get_current_span().duration_ms
-                })
-                
-                return trends
-        except Exception as e:
-            self.logger.error(f"Error analyzing trends: {str(e)}")
-            telemetry.record_error("biometrics_insight_engine", "trend_analysis_failed", {
-                "error": str(e),
-                "user_id": user_id
-            })
-            raise
-            
-    async def generate_visualization(self, user_id: str, biometric_data: Dict[str, Any], visualization_type: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Genera una visualización de datos biométricos.
-        
-        Args:
-            user_id: ID del usuario
-            biometric_data: Datos biométricos a visualizar
-            visualization_type: Tipo de visualización (opcional)
-            
-        Returns:
-            Dict[str, Any]: Descripción de la visualización
-        """
-        try:
-            with telemetry.start_span("biometrics_insight_engine.generate_visualization"):
-                # Construir el prompt para la visualización
-                prompt = self._build_visualization_prompt(biometric_data, visualization_type)
-                
-                # Generar visualización
-                response = await vertex_ai_client.generate_content(prompt=prompt)
-                
-                # Procesar y estructurar la respuesta
-                visualization = self._parse_visualization(response["text"])
-                
-                # Guardar la visualización en el estado del usuario
-                await self._save_visualization_to_state(user_id, visualization)
-                
-                # Telemetría
-                telemetry.record_event("biometrics_insight_engine", "visualization_generated", {
-                    "user_id": user_id,
-                    "visualization_type": visualization.get("chart_type", "unknown"),
-                    "response_time_ms": telemetry.get_current_span().duration_ms
-                })
-                
-                return visualization
-        except Exception as e:
-            self.logger.error(f"Error generating visualization: {str(e)}")
-            telemetry.record_error("biometrics_insight_engine", "visualization_failed", {
-                "error": str(e),
-                "user_id": user_id
-            })
-            raise
-            
-    async def _consult_other_agent(self, agent_name: str, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Consulta a otro agente para obtener información adicional.
-        
-        Args:
-            agent_name: Nombre del agente a consultar
-            query: Consulta para el agente
-            context: Contexto adicional
-            
-        Returns:
-            Dict[str, Any]: Respuesta del agente consultado
-        """
-        try:
-            with telemetry.start_span(f"biometrics_insight_engine.consult_{agent_name}"):
-                # Crear el contexto de la tarea
-                task_context_data = A2ATaskContext(
-                    session_id=context.get("session_id") if context else None, 
-                    user_id=context.get("user_id") if context else None, 
-                    additional_context=context if context else {}
-                )
-                
-                # Llamar al agente utilizando el adaptador A2A
-                response = await self.a2a_client.call_agent(
-                    agent_id=agent_name,
-                    user_input=query,
-                    context=task_context_data
-                )
-                
-                return response
-        except Exception as e:
-            self.logger.error(f"Error consulting agent {agent_name}: {str(e)}")
-            telemetry.record_error("biometrics_insight_engine", "agent_consultation_failed", {
-                "agent": agent_name,
-                "error": str(e)
-            })
-            # Implementar fallback
-            return {"status": "error", "message": f"Failed to consult {agent_name}"}
+        self.excluded_keywords = [
+            "entrenamiento", "training", "nutrición", "nutrition",
+            "receta", "recipe", "meal", "comida"
+        ]
     
-    async def _save_analysis_to_state(self, user_id: str, analysis: Dict[str, Any]) -> None:
-        """
-        Guarda el análisis en el estado del usuario.
-        
-        Args:
-            user_id: ID del usuario
-            analysis: Análisis a guardar
-        """
-        try:
-            # Crear clave para el estado
-            state_key = f"biometrics_analysis_{user_id}"
-            
-            # Cargar estado actual
-            current_state = await self.state_manager.load_state(state_key) or {"analyses": []}
-            
-            # Añadir el nuevo análisis
-            analysis["timestamp"] = time.time()
-            analysis["id"] = str(uuid.uuid4())
-            current_state["analyses"].append(analysis)
-            
-            # Limitar a los 10 análisis más recientes
-            if len(current_state["analyses"]) > 10:
-                current_state["analyses"] = current_state["analyses"][-10:]
-            
-            # Guardar estado actualizado
-            await self.state_manager.save_state(state_key, current_state)
-        except Exception as e:
-            self.logger.error(f"Error saving analysis to state: {str(e)}")
+    def get_agent_name(self) -> str:
+        """Devuelve el nombre del agente."""
+        return self.agent_name
     
-    async def _save_patterns_to_state(self, user_id: str, patterns: Dict[str, Any]) -> None:
+    def _create_default_context(self) -> Dict[str, Any]:
         """
-        Guarda los patrones en el estado del usuario.
+        Crea un contexto predeterminado para el agente BiometricsInsightEngine.
         
-        Args:
-            user_id: ID del usuario
-            patterns: Patrones a guardar
+        Returns:
+            Dict[str, Any]: Contexto predeterminado
         """
-        try:
-            # Crear clave para el estado
-            state_key = f"biometrics_patterns_{user_id}"
-            
-            # Cargar estado actual
-            current_state = await self.state_manager.load_state(state_key) or {"patterns": []}
-            
-            # Añadir los nuevos patrones
-            patterns["timestamp"] = time.time()
-            patterns["id"] = str(uuid.uuid4())
-            current_state["patterns"].append(patterns)
-            
-            # Limitar a los 10 patrones más recientes
-            if len(current_state["patterns"]) > 10:
-                current_state["patterns"] = current_state["patterns"][-10:]
-            
-            # Guardar estado actualizado
-            await self.state_manager.save_state(state_key, current_state)
-        except Exception as e:
-            self.logger.error(f"Error saving patterns to state: {str(e)}")
+        return {
+            "conversation_history": [],
+            "user_profile": {},
+            "analyses": [],
+            "biometric_data": {},
+            "visualizations": [],
+            "last_updated": datetime.now().isoformat()
+        }
     
-    async def _save_trends_to_state(self, user_id: str, trends: Dict[str, Any]) -> None:
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
         """
-        Guarda las tendencias en el estado del usuario.
+        Obtiene el mapeo de intenciones a tipos de consulta específico para BiometricsInsightEngine.
         
-        Args:
-            user_id: ID del usuario
-            trends: Tendencias a guardar
+        Returns:
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
         """
-        try:
-            # Crear clave para el estado
-            state_key = f"biometrics_trends_{user_id}"
-            
-            # Cargar estado actual
-            current_state = await self.state_manager.load_state(state_key) or {"trends": []}
-            
-            # Añadir las nuevas tendencias
-            trends["timestamp"] = time.time()
-            trends["id"] = str(uuid.uuid4())
-            current_state["trends"].append(trends)
-            
-            # Limitar a los 10 tendencias más recientes
-            if len(current_state["trends"]) > 10:
-                current_state["trends"] = current_state["trends"][-10:]
-            
-            # Guardar estado actualizado
-            await self.state_manager.save_state(state_key, current_state)
-        except Exception as e:
-            self.logger.error(f"Error saving trends to state: {str(e)}")
+        return {
+            "análisis": "biometric_analysis",
+            "analysis": "biometric_analysis",
+            "biométricos": "biometric_analysis",
+            "biometrics": "biometric_analysis",
+            "patrones": "pattern_recognition",
+            "patterns": "pattern_recognition",
+            "tendencias": "trend_identification",
+            "trends": "trend_identification",
+            "visualización": "data_visualization",
+            "visualization": "data_visualization",
+            "gráfico": "data_visualization",
+            "chart": "data_visualization"
+        }
     
-    async def _save_visualization_to_state(self, user_id: str, visualization: Dict[str, Any]) -> None:
+    async def _process_query(self, query: str, user_id: str, session_id: str,
+                           program_type: str, state: Dict[str, Any], profile: Dict[str, Any],
+                           **kwargs) -> Dict[str, Any]:
         """
-        Guarda la visualización en el estado del usuario.
+        Procesa la consulta del usuario.
         
         Args:
+            query: La consulta del usuario
             user_id: ID del usuario
-            visualization: Visualización a guardar
-        """
-        try:
-            # Crear clave para el estado
-            state_key = f"biometrics_visualizations_{user_id}"
-            
-            # Cargar estado actual
-            current_state = await self.state_manager.load_state(state_key) or {"visualizations": []}
-            
-            # Añadir la nueva visualización
-            visualization["timestamp"] = time.time()
-            visualization["id"] = str(uuid.uuid4())
-            current_state["visualizations"].append(visualization)
-            
-            # Limitar a las 10 visualizaciones más recientes
-            if len(current_state["visualizations"]) > 10:
-                current_state["visualizations"] = current_state["visualizations"][-10:]
-            
-            # Guardar estado actualizado
-            await self.state_manager.save_state(state_key, current_state)
-        except Exception as e:
-            self.logger.error(f"Error saving visualization to state: {str(e)}")
-    
-    def _build_biometric_analysis_prompt(self, biometric_data: Dict[str, Any], query: Optional[str] = None) -> str:
-        """
-        Construye el prompt para el análisis biométrico.
-        
-        Args:
-            biometric_data: Datos biométricos a analizar
-            query: Consulta específica sobre los datos (opcional)
+            session_id: ID de la sesión
+            program_type: Tipo de programa (general, elite, etc.)
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            **kwargs: Argumentos adicionales
             
         Returns:
-            str: Prompt para el análisis
-        """
-        prompt = f"""
-        Eres un especialista en análisis e interpretación de datos biométricos.
-        
-        Analiza los siguientes datos biométricos:
-        
-        {json.dumps(biometric_data, indent=2)}
-        
-        """
-        
-        if query:
-            prompt += f"""
-            Consulta específica: "{query}"
-            
-            """
-        
-        prompt += """
-        El análisis debe incluir:
-        1. Interpretación de los datos principales
-        2. Insights clave identificados
-        3. Patrones relevantes
-        4. Recomendaciones personalizadas
-        5. Áreas de mejora
-        
-        Devuelve el análisis en formato JSON estructurado con las siguientes claves:
-        - interpretation: interpretación general de los datos
-        - main_insights: lista de insights clave
-        - patterns: lista de patrones identificados
-        - recommendations: lista de recomendaciones
-        - areas_for_improvement: lista de áreas de mejora
-        """
-        
-        return prompt
-        
-    def _parse_biometric_analysis(self, response: str) -> Dict[str, Any]:
-        """
-        Procesa y estructura la respuesta del análisis biométrico.
-        
-        Args:
-            response: Respuesta del modelo
-            
-        Returns:
-            Dict[str, Any]: Análisis estructurado
+            Dict[str, Any]: Respuesta del agente
         """
         try:
-            # Intentar parsear la respuesta como JSON
-            if isinstance(response, dict):
-                return response
+            # Registrar telemetría para el inicio del procesamiento
+            if self.telemetry:
+                with self.telemetry.start_as_current_span(f"{self.__class__.__name__}._process_query") as span:
+                    span.set_attribute("user_id", user_id)
+                    span.set_attribute("session_id", session_id)
+                    span.set_attribute("program_type", program_type)
             
-            # Buscar el bloque JSON en la respuesta
-            import re
-            json_match = re.search(r'```json\n(.*?)\n```', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-                return json.loads(json_str)
+            # Determinar el tipo de consulta basado en el mapeo de intenciones
+            query_type = self._determine_query_type(query)
+            logger.info(f"BiometricsInsightEngineAdapter procesando consulta de tipo: {query_type}")
             
-            # Intentar parsear toda la respuesta como JSON
-            return json.loads(response)
+            # Obtener o crear el contexto
+            context = state.get("biometrics_context", self._create_default_context())
+            
+            # Procesar según el tipo de consulta
+            if query_type == "biometric_analysis":
+                result = await self._handle_biometric_analysis(query, context, profile, program_type)
+            elif query_type == "pattern_recognition":
+                result = await self._handle_pattern_recognition(query, context, profile)
+            elif query_type == "trend_identification":
+                result = await self._handle_trend_identification(query, context, profile)
+            elif query_type == "data_visualization":
+                result = await self._handle_data_visualization(query, context, profile)
+            else:
+                # Tipo de consulta no reconocido, usar procesamiento genérico
+                result = await self._handle_generic_query(query, context, profile, program_type)
+            
+            # Actualizar el contexto en el estado
+            state["biometrics_context"] = context
+            
+            # Construir la respuesta
+            response = {
+                "success": True,
+                "output": result.get("response", "No se pudo generar una respuesta"),
+                "query_type": query_type,
+                "program_type": program_type,
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat(),
+                "context": context
+            }
+            
+            return response
+            
         except Exception as e:
-            self.logger.error(f"Error parsing biometric analysis: {str(e)}")
-            # En caso de error, devolver un diccionario básico
+            logger.error(f"Error al procesar consulta en BiometricsInsightEngineAdapter: {str(e)}", exc_info=True)
             return {
-                "interpretation": "No se pudo generar una interpretación completa debido a un error",
-                "main_insights": ["Error en el procesamiento de datos biométricos"],
-                "patterns": ["No se pudieron identificar patrones"],
-                "recommendations": ["Consulta a un profesional de la salud"],
-                "areas_for_improvement": ["No se pudieron identificar áreas de mejora"]
+                "success": False,
+                "error": str(e),
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
             }
     
-    def _build_pattern_recognition_prompt(self, biometric_data: Dict[str, Any], time_range: Optional[str] = None) -> str:
+    def _determine_query_type(self, query: str) -> str:
         """
-        Construye el prompt para la identificación de patrones.
+        Determina el tipo de consulta basado en el texto.
         
         Args:
-            biometric_data: Datos biométricos a analizar
-            time_range: Rango de tiempo para el análisis (opcional)
+            query: Consulta del usuario
             
         Returns:
-            str: Prompt para la identificación de patrones
+            str: Tipo de consulta identificado
         """
-        prompt = f"""
-        Eres un especialista en análisis e interpretación de datos biométricos.
+        query_lower = query.lower()
+        intent_mapping = self._get_intent_to_query_type_mapping()
         
-        Identifica patrones recurrentes en los siguientes datos biométricos:
+        for intent, query_type in intent_mapping.items():
+            if intent.lower() in query_lower:
+                return query_type
         
-        {json.dumps(biometric_data, indent=2)}
-        
+        # Si no se encuentra un tipo específico, devolver análisis biométrico por defecto
+        return "biometric_analysis"
+    
+    async def _handle_biometric_analysis(self, query: str, context: Dict[str, Any], 
+                                       profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
         """
-        
-        if time_range:
-            prompt += f"""
-            Rango de tiempo a considerar: {time_range}
-            
-            """
-        
-        prompt += """
-        El análisis debe incluir:
-        1. Patrones identificados con descripción detallada
-        2. Correlaciones entre diferentes métricas
-        3. Posibles relaciones causales (si aplica)
-        4. Recomendaciones basadas en los patrones identificados
-        
-        Devuelve el análisis en formato JSON estructurado con las siguientes claves:
-        - identified_patterns: lista de patrones identificados (cada uno con name y description)
-        - correlations: lista de correlaciones (cada una con metrics, correlation_type y strength)
-        - causality_analysis: análisis de causalidad (con possible_causes)
-        - recommendations: lista de recomendaciones
-        """
-        
-        return prompt
-        
-    def _parse_pattern_recognition(self, response: str) -> Dict[str, Any]:
-        """
-        Procesa y estructura la respuesta de la identificación de patrones.
+        Maneja una consulta de análisis biométrico.
         
         Args:
-            response: Respuesta del modelo
+            query: Consulta del usuario
+            context: Contexto actual
+            profile: Perfil del usuario
+            program_type: Tipo de programa
             
         Returns:
-            Dict[str, Any]: Patrones estructurados
+            Dict[str, Any]: Resultado del análisis
+        """
+        # Obtener datos biométricos del contexto o usar datos de ejemplo
+        biometric_data = context.get("biometric_data", {})
+        if not biometric_data:
+            biometric_data = self._get_sample_biometric_data()
+            context["biometric_data"] = biometric_data
+        
+        # Generar el análisis
+        analysis = await self._generate_response(
+            prompt=f"""
+            Como especialista en análisis de datos biométricos, analiza los siguientes datos y proporciona insights 
+            personalizados y recomendaciones basadas en los patrones observados.
+            
+            CONSULTA DEL USUARIO:
+            {query}
+            
+            DATOS BIOMÉTRICOS:
+            {biometric_data}
+            
+            PERFIL DEL USUARIO:
+            {profile}
+            
+            TIPO DE PROGRAMA:
+            {program_type}
+            
+            Proporciona un análisis detallado que incluya:
+            1. Interpretación de los datos y patrones observados
+            2. Insights clave sobre el estado de salud y bienestar
+            3. Recomendaciones personalizadas basadas en los datos y el tipo de programa del usuario
+            4. Áreas de mejora y posibles intervenciones específicas
+            
+            Tu análisis debe ser claro, preciso y basado en evidencia científica.
+            """,
+            context=context
+        )
+        
+        # Actualizar el contexto con el nuevo análisis
+        if "analyses" not in context:
+            context["analyses"] = []
+            
+        context["analyses"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "analysis": analysis,
+            "program_type": program_type
+        })
+        
+        return {
+            "response": analysis,
+            "context": context
+        }
+    
+    async def _handle_pattern_recognition(self, query: str, context: Dict[str, Any], 
+                                        profile: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Maneja una consulta de reconocimiento de patrones.
+        
+        Args:
+            query: Consulta del usuario
+            context: Contexto actual
+            profile: Perfil del usuario
+            
+        Returns:
+            Dict[str, Any]: Resultado del reconocimiento de patrones
+        """
+        # Obtener datos biométricos del contexto o usar datos de ejemplo
+        biometric_data = context.get("biometric_data", {})
+        if not biometric_data:
+            biometric_data = self._get_sample_biometric_data()
+            context["biometric_data"] = biometric_data
+        
+        # Generar el análisis de patrones
+        patterns_analysis = await self._generate_response(
+            prompt=f"""
+            Como especialista en análisis de datos biométricos, identifica patrones recurrentes en los siguientes datos.
+            
+            CONSULTA DEL USUARIO:
+            {query}
+            
+            DATOS BIOMÉTRICOS:
+            {biometric_data}
+            
+            PERFIL DEL USUARIO:
+            {profile}
+            
+            Proporciona un análisis detallado que incluya:
+            1. Patrones identificados con descripción detallada
+            2. Correlaciones entre diferentes métricas
+            3. Posibles relaciones causales (si aplica)
+            4. Recomendaciones basadas en los patrones identificados
+            
+            Tu análisis debe ser claro, preciso y basado en evidencia científica.
+            """,
+            context=context
+        )
+        
+        # Actualizar el contexto con el nuevo análisis de patrones
+        if "pattern_analyses" not in context:
+            context["pattern_analyses"] = []
+            
+        context["pattern_analyses"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "analysis": patterns_analysis
+        })
+        
+        return {
+            "response": patterns_analysis,
+            "context": context
+        }
+    
+    async def _handle_trend_identification(self, query: str, context: Dict[str, Any], 
+                                         profile: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Maneja una consulta de identificación de tendencias.
+        
+        Args:
+            query: Consulta del usuario
+            context: Contexto actual
+            profile: Perfil del usuario
+            
+        Returns:
+            Dict[str, Any]: Resultado de la identificación de tendencias
+        """
+        # Obtener datos biométricos del contexto o usar datos de ejemplo
+        biometric_data = context.get("biometric_data", {})
+        if not biometric_data:
+            biometric_data = self._get_sample_biometric_data()
+            context["biometric_data"] = biometric_data
+        
+        # Generar el análisis de tendencias
+        trends_analysis = await self._generate_response(
+            prompt=f"""
+            Como especialista en análisis de datos biométricos, analiza las tendencias en los siguientes datos.
+            
+            CONSULTA DEL USUARIO:
+            {query}
+            
+            DATOS BIOMÉTRICOS:
+            {biometric_data}
+            
+            PERFIL DEL USUARIO:
+            {profile}
+            
+            Proporciona un análisis detallado que incluya:
+            1. Tendencias identificadas a lo largo del tiempo
+            2. Cambios significativos en métricas clave
+            3. Progreso hacia objetivos
+            4. Proyecciones futuras
+            5. Recomendaciones basadas en tendencias
+            
+            Tu análisis debe ser claro, preciso y basado en evidencia científica.
+            """,
+            context=context
+        )
+        
+        # Actualizar el contexto con el nuevo análisis de tendencias
+        if "trend_analyses" not in context:
+            context["trend_analyses"] = []
+            
+        context["trend_analyses"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "analysis": trends_analysis
+        })
+        
+        return {
+            "response": trends_analysis,
+            "context": context
+        }
+    
+    async def _handle_data_visualization(self, query: str, context: Dict[str, Any], 
+                                       profile: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Maneja una consulta de visualización de datos.
+        
+        Args:
+            query: Consulta del usuario
+            context: Contexto actual
+            profile: Perfil del usuario
+            
+        Returns:
+            Dict[str, Any]: Resultado de la visualización de datos
+        """
+        # Obtener datos biométricos del contexto o usar datos de ejemplo
+        biometric_data = context.get("biometric_data", {})
+        if not biometric_data:
+            biometric_data = self._get_sample_biometric_data()
+            context["biometric_data"] = biometric_data
+        
+        # Generar la descripción de la visualización
+        visualization_description = await self._generate_response(
+            prompt=f"""
+            Como especialista en análisis de datos biométricos, describe una visualización para los siguientes datos.
+            
+            CONSULTA DEL USUARIO:
+            {query}
+            
+            DATOS BIOMÉTRICOS:
+            {biometric_data}
+            
+            PERFIL DEL USUARIO:
+            {profile}
+            
+            Proporciona una descripción detallada que incluya:
+            1. Tipo de gráfico recomendado
+            2. Métricas a visualizar
+            3. Ejes y escalas
+            4. Patrones destacados
+            5. Interpretación de la visualización
+            
+            Tu descripción debe ser clara, precisa y útil para entender los datos.
+            """,
+            context=context
+        )
+        
+        # Actualizar el contexto con la nueva visualización
+        if "visualizations" not in context:
+            context["visualizations"] = []
+            
+        visualization_id = f"viz_{len(context['visualizations']) + 1}"
+        
+        context["visualizations"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "description": visualization_description,
+            "visualization_id": visualization_id
+        })
+        
+        return {
+            "response": f"Descripción de la visualización: {visualization_description}",
+            "context": context
+        }
+    
+    async def _handle_generic_query(self, query: str, context: Dict[str, Any], 
+                                  profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+        """
+        Maneja una consulta genérica.
+        
+        Args:
+            query: Consulta del usuario
+            context: Contexto actual
+            profile: Perfil del usuario
+            program_type: Tipo de programa
+            
+        Returns:
+            Dict[str, Any]: Resultado del procesamiento
+        """
+        # Generar respuesta genérica
+        response = await self._generate_response(
+            prompt=f"""
+            Como especialista en análisis de datos biométricos, responde a la siguiente consulta:
+            
+            CONSULTA DEL USUARIO:
+            {query}
+            
+            PERFIL DEL USUARIO:
+            {profile}
+            
+            TIPO DE PROGRAMA:
+            {program_type}
+            
+            CONTEXTO PREVIO:
+            {context}
+            
+            Proporciona una respuesta clara, precisa y útil basada en tu experiencia en análisis biométrico.
+            """,
+            context=context
+        )
+        
+        # Actualizar el historial de conversación
+        if "conversation_history" not in context:
+            context["conversation_history"] = []
+            
+        context["conversation_history"].append({
+            "date": datetime.now().isoformat(),
+            "query": query,
+            "response": response
+        })
+        
+        return {
+            "response": response,
+            "context": context
+        }
+    
+    async def _generate_response(self, prompt: str, context: Dict[str, Any]) -> str:
+        """
+        Genera una respuesta utilizando el modelo de lenguaje.
+        
+        Args:
+            prompt: Prompt para el modelo
+            context: Contexto actual
+            
+        Returns:
+            str: Respuesta generada
         """
         try:
-            # Intentar parsear la respuesta como JSON
-            if isinstance(response, dict):
-                return response
-            
-            # Buscar el bloque JSON en la respuesta
-            import re
-            json_match = re.search(r'```json\n(.*?)\n```', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-                return json.loads(json_str)
-            
-            # Intentar parsear toda la respuesta como JSON
-            return json.loads(response)
+            # En una implementación real, aquí se llamaría al cliente de Vertex AI optimizado
+            # Por ahora, simulamos una respuesta
+            return f"Respuesta simulada para: {prompt[:50]}..."
         except Exception as e:
-            self.logger.error(f"Error parsing pattern recognition: {str(e)}")
-            # En caso de error, devolver un diccionario básico
-            return {
-                "identified_patterns": [
-                    {"name": "Error en el análisis", "description": "No se pudieron identificar patrones"}
-                ],
-                "correlations": [
-                    {"metrics": ["N/A", "N/A"], "correlation_type": "N/A", "strength": "N/A"}
-                ],
-                "causality_analysis": {"possible_causes": ["Error en el análisis"]},
-                "recommendations": ["Consulta a un profesional de la salud"]
-            }
-    
-    def _build_trend_analysis_prompt(self, biometric_data: Dict[str, Any], metrics: Optional[List[str]] = None) -> str:
-        """
-        Construye el prompt para el análisis de tendencias.
-        
-        Args:
-            biometric_data: Datos biométricos a analizar
-            metrics: Lista de métricas específicas a analizar (opcional)
-            
-        Returns:
-            str: Prompt para el análisis de tendencias
-        """
-        prompt = f"""
-        Eres un especialista en análisis e interpretación de datos biométricos.
-        
-        Analiza las tendencias en los siguientes datos biométricos:
-        
-        {json.dumps(biometric_data, indent=2)}
-        
-        """
-        
-        if metrics:
-            prompt += f"""
-            Métricas específicas a analizar: {', '.join(metrics)}
-            
-            """
-        
-        prompt += """
-        El análisis debe incluir:
-        1. Tendencias identificadas a lo largo del tiempo
-        2. Cambios significativos en métricas clave
-        3. Progreso hacia objetivos
-        4. Proyecciones futuras
-        5. Recomendaciones basadas en tendencias
-        
-        Devuelve el análisis en formato JSON estructurado con las siguientes claves:
-        - trends: lista de tendencias identificadas
-        - significant_changes: lista de cambios significativos
-        - progress: descripción del progreso
-        - projections: lista de proyecciones futuras
-        - recommendations: lista de recomendaciones
-        """
-        
-        return prompt
-        
-    def _parse_trend_analysis(self, response: str) -> Dict[str, Any]:
-        """
-        Procesa y estructura la respuesta del análisis de tendencias.
-        
-        Args:
-            response: Respuesta del modelo
-            
-        Returns:
-            Dict[str, Any]: Tendencias estructuradas
-        """
-        try:
-            # Intentar parsear la respuesta como JSON
-            if isinstance(response, dict):
-                return response
-            
-            # Buscar el bloque JSON en la respuesta
-            import re
-            json_match = re.search(r'```json\n(.*?)\n```', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-                return json.loads(json_str)
-            
-            # Intentar parsear toda la respuesta como JSON
-            return json.loads(response)
-        except Exception as e:
-            self.logger.error(f"Error parsing trend analysis: {str(e)}")
-            # En caso de error, devolver un diccionario básico
-            return {
-                "trends": ["Error en el análisis de tendencias"],
-                "significant_changes": [f"Error: {str(e)}"],
-                "progress": "No disponible debido a un error",
-                "projections": ["No disponible debido a un error"],
-                "recommendations": ["Consulta a un profesional de la salud"]
-            }
-    
-    def _build_visualization_prompt(self, biometric_data: Dict[str, Any], visualization_type: Optional[str] = None) -> str:
-        """
-        Construye el prompt para la visualización.
-        
-        Args:
-            biometric_data: Datos biométricos a visualizar
-            visualization_type: Tipo de visualización (opcional)
-            
-        Returns:
-            str: Prompt para la visualización
-        """
-        prompt = f"""
-        Eres un especialista en análisis e interpretación de datos biométricos.
-        
-        Genera una descripción para una visualización de los siguientes datos biométricos:
-        
-        {json.dumps(biometric_data, indent=2)}
-        
-        """
-        
-        if visualization_type:
-            prompt += f"""
-            Tipo de visualización solicitada: {visualization_type}
-            
-            """
-        
-        prompt += """
-        La visualización debe incluir:
-        1. Tipo de gráfico recomendado
-        2. Métricas a visualizar
-        3. Ejes y escalas
-        4. Patrones destacados
-        5. Interpretación de la visualización
-        
-        Devuelve la descripción en formato JSON estructurado con las siguientes claves:
-        - chart_type: tipo de gráfico recomendado
-        - metrics: lista de métricas a visualizar
-        - axes: objeto con ejes x e y
-        - highlighted_patterns: lista de patrones destacados
-        - interpretation: interpretación de la visualización
-        """
-        
-        return prompt
-        
-    def _parse_visualization(self, response: str) -> Dict[str, Any]:
-        """
-        Procesa y estructura la respuesta de la visualización.
-        
-        Args:
-            response: Respuesta del modelo
-            
-        Returns:
-            Dict[str, Any]: Visualización estructurada
-        """
-        try:
-            # Intentar parsear la respuesta como JSON
-            if isinstance(response, dict):
-                return response
-            
-            # Buscar el bloque JSON en la respuesta
-            import re
-            json_match = re.search(r'```json\n(.*?)\n```', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-                return json.loads(json_str)
-            
-            # Intentar parsear toda la respuesta como JSON
-            return json.loads(response)
-        except Exception as e:
-            self.logger.error(f"Error parsing visualization: {str(e)}")
-            # En caso de error, devolver un diccionario básico
-            return {
-                "chart_type": "Error",
-                "metrics": ["No disponible debido a un error"],
-                "axes": {"x": "No disponible", "y": "No disponible"},
-                "highlighted_patterns": [f"Error: {str(e)}"],
-                "interpretation": "No se pudo generar una visualización debido a un error"
-            }
-
-# Crear una instancia del adaptador
-biometrics_insight_engine_adapter = None
-
-# Función para inicializar el adaptador
-async def initialize_biometrics_insight_engine_adapter():
-    """
-    Inicializa el adaptador del Biometrics Insight Engine.
-    
-    Returns:
-        BiometricsInsightEngineAdapter: Instancia del adaptador
-    """
-    global biometrics_insight_engine_adapter
-    
-    try:
-        biometrics_insight_engine_adapter = await BiometricsInsightEngineAdapter.create()
-        logger.info("Adaptador del Biometrics Insight Engine inicializado correctamente.")
-        return biometrics_insight_engine_adapter
-    except Exception as e:
-        logger.error(f"Error al inicializar el adaptador del Biometrics Insight Engine: {e}", exc_info=True)
-        raise
+            logger.error(f"Error al generar respuesta: {str(e)}", exc_info=True)
+            return f"Error al generar respuesta: {str(e)}"

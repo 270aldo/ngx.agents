@@ -36,8 +36,8 @@ app.add_middleware(
     excluded_paths=["/excluded", "/health"]
 )
 
-# Configurar el cliente de prueba
-client = TestClient(app)
+# Configurar el cliente de prueba sin pasar app directamente
+client = TestClient(app=app)
 
 # Definir rutas de prueba
 @app.get("/protected")

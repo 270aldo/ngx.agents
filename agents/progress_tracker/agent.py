@@ -31,7 +31,14 @@ from agents.progress_tracker.schemas import (
     CompareProgressInput,
     CompareProgressOutput,
     ProgressAnalysisArtifact,
-    ProgressVisualizationArtifact
+    ProgressVisualizationArtifact,
+    AnalyzeBodyProgressInput,
+    AnalyzeBodyProgressOutput,
+    BodyChangeMetric,
+    BodyAreaChange,
+    GenerateProgressVisualizationInput,
+    GenerateProgressVisualizationOutput,
+    BodyProgressAnalysisArtifact
 )
 
 from clients.gemini_client import GeminiClient
@@ -99,6 +106,20 @@ class ProgressTracker(ADKAgent):
                 handler=self._skill_compare_progress,
                 input_schema=CompareProgressInput,
                 output_schema=CompareProgressOutput
+            ),
+            Skill(
+                name="analyze_body_progress",
+                description="Analiza el progreso corporal mediante imágenes antes/después.",
+                handler=self._skill_analyze_body_progress,
+                input_schema=AnalyzeBodyProgressInput,
+                output_schema=AnalyzeBodyProgressOutput
+            ),
+            Skill(
+                name="generate_progress_visualization",
+                description="Genera visualizaciones de progreso a partir de múltiples imágenes.",
+                handler=self._skill_generate_progress_visualization,
+                input_schema=GenerateProgressVisualizationInput,
+                output_schema=GenerateProgressVisualizationOutput
             )
         ]
 
@@ -108,7 +129,9 @@ class ProgressTracker(ADKAgent):
             "visualize_progress",
             "compare_progress",
             "data_analysis",
-            "trend_identification"
+            "trend_identification",
+            "body_progress_analysis",
+            "visual_comparison"
         ]
 
         # Crear un toolkit de ADK
@@ -743,3 +766,450 @@ class ProgressTracker(ADKAgent):
                 "agent_id": agent_id,
                 "agent_name": agent_id
             }
+    
+    async def _skill_analyze_body_progress(self, input_data: AnalyzeBodyProgressInput) -> AnalyzeBodyProgressOutput:
+        """
+        Skill para analizar el progreso corporal mediante imágenes antes/después.
+        
+        Args:
+            input_data: Datos de entrada para la skill
+            
+        Returns:
+            AnalyzeBodyProgressOutput: Análisis del progreso corporal
+        """
+        logger.info(f"Ejecutando habilidad: _skill_analyze_body_progress para usuario: {input_data.user_id}")
+        
+        try:
+            # Obtener datos de las imágenes
+            before_image = input_data.before_image
+            after_image = input_data.after_image
+            user_id = input_data.user_id or "usuario_anónimo"
+            time_between_images = input_data.time_between_images or "No especificado"
+            focus_areas = input_data.focus_areas or ["composición corporal", "postura", "masa muscular", "definición"]
+            user_profile = input_data.user_profile or {}
+            
+            # Determinar el tipo de programa del usuario para personalizar el análisis
+            context = {
+                "user_profile": user_profile,
+                "goals": user_profile.get("goals", []) if user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para análisis de progreso corporal: {program_type}")
+                
+                # Obtener definición del programa para personalizar el análisis
+                program_def = get_program_definition(program_type)
+                program_context = f"""\nCONTEXTO DEL PROGRAMA {program_type}:\n"""
+                
+                if program_def:
+                    program_context += f"- {program_def.get('description', '')}\n"
+                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                    
+                    # Añadir consideraciones específicas del programa
+                    if program_type == "PRIME":
+                        program_context += "- Enfoque en desarrollo muscular y rendimiento físico\n"
+                    elif program_type == "LONGEVITY":
+                        program_context += "- Enfoque en composición corporal saludable y postura\n"
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando análisis general.")
+                program_type = "GENERAL"
+                program_context = ""
+            
+            # Utilizar las capacidades de visión del agente base
+            with self.tracer.start_as_current_span("body_progress_analysis"):
+                # Analizar ambas imágenes utilizando el procesador de visión
+                before_analysis = await self.vision_processor.analyze_image(before_image)
+                after_analysis = await self.vision_processor.analyze_image(after_image)
+                
+                # Extraer análisis de progreso corporal usando el modelo multimodal
+                prompt = f"""
+                Eres un experto en análisis de progreso físico y composición corporal. Analiza estas dos imágenes
+                de antes y después de un usuario con programa tipo {program_type} y proporciona un análisis detallado
+                del progreso corporal.
+                
+                Tiempo transcurrido entre imágenes: {time_between_images}
+                
+                Enfócate específicamente en las siguientes áreas:
+                {', '.join(focus_areas)}
+                
+                {program_context}
+                
+                Proporciona:
+                1. Un resumen general del progreso observado
+                2. Métricas específicas de cambio corporal (con valores estimados si es posible)
+                3. Análisis por áreas corporales
+                4. Una puntuación general de progreso (0-10)
+                5. Recomendaciones basadas en los cambios observados
+                
+                Sé objetivo, detallado y proporciona feedback constructivo basado en los cambios visibles.
+                """
+                
+                multimodal_result = await self.multimodal_adapter.compare_images(
+                    image_data1=before_image,
+                    image_data2=after_image,
+                    comparison_prompt=prompt,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Extraer métricas de cambio corporal estructuradas
+                metrics_prompt = f"""
+                Basándote en el siguiente análisis de progreso corporal, extrae métricas específicas de cambio
+                en formato estructurado. Para cada métrica, incluye:
+                1. Nombre de la métrica
+                2. Valor antes (si es posible)
+                3. Valor después (si es posible)
+                4. Cambio (absoluto o porcentual)
+                5. Confianza en la medición (0.0-1.0)
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                metrics_response = await self.gemini_client.generate_structured_output(metrics_prompt)
+                
+                # Procesar métricas de cambio
+                metrics = []
+                if isinstance(metrics_response, list):
+                    for metric in metrics_response:
+                        if isinstance(metric, dict) and "metric_name" in metric:
+                            metrics.append(BodyChangeMetric(
+                                metric_name=metric.get("metric_name", "No especificado"),
+                                before_value=metric.get("before_value"),
+                                after_value=metric.get("after_value"),
+                                change=metric.get("change"),
+                                confidence=metric.get("confidence", 0.7)
+                            ))
+                elif isinstance(metrics_response, dict) and "metrics" in metrics_response:
+                    for metric in metrics_response["metrics"]:
+                        if isinstance(metric, dict) and "metric_name" in metric:
+                            metrics.append(BodyChangeMetric(
+                                metric_name=metric.get("metric_name", "No especificado"),
+                                before_value=metric.get("before_value"),
+                                after_value=metric.get("after_value"),
+                                change=metric.get("change"),
+                                confidence=metric.get("confidence", 0.7)
+                            ))
+                
+                # Si no hay métricas, crear algunas genéricas
+                if not metrics:
+                    metrics.append(BodyChangeMetric(
+                        metric_name="Composición corporal general",
+                        before_value="No disponible",
+                        after_value="No disponible",
+                        change="Cambio visible pero no cuantificable",
+                        confidence=0.6
+                    ))
+                
+                # Extraer cambios por áreas corporales
+                body_areas_prompt = f"""
+                Basándote en el siguiente análisis de progreso corporal, extrae cambios específicos por áreas corporales
+                en formato estructurado. Para cada área corporal, incluye:
+                1. Nombre del área corporal
+                2. Cambios observados (lista de strings)
+                3. Nivel de mejora (ninguno, leve, moderado, significativo)
+                4. Notas adicionales (opcional)
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                body_areas_response = await self.gemini_client.generate_structured_output(body_areas_prompt)
+                
+                # Procesar cambios por áreas corporales
+                body_areas = []
+                if isinstance(body_areas_response, list):
+                    for area in body_areas_response:
+                        if isinstance(area, dict) and "body_area" in area:
+                            body_areas.append(BodyAreaChange(
+                                body_area=area.get("body_area", "No especificado"),
+                                changes_observed=area.get("changes_observed", ["No especificado"]),
+                                improvement_level=area.get("improvement_level", "leve"),
+                                notes=area.get("notes")
+                            ))
+                elif isinstance(body_areas_response, dict) and "body_areas" in body_areas_response:
+                    for area in body_areas_response["body_areas"]:
+                        if isinstance(area, dict) and "body_area" in area:
+                            body_areas.append(BodyAreaChange(
+                                body_area=area.get("body_area", "No especificado"),
+                                changes_observed=area.get("changes_observed", ["No especificado"]),
+                                improvement_level=area.get("improvement_level", "leve"),
+                                notes=area.get("notes")
+                            ))
+                
+                # Si no hay áreas corporales, crear algunas genéricas
+                if not body_areas:
+                    for area in ["Torso", "Brazos", "Piernas"]:
+                        body_areas.append(BodyAreaChange(
+                            body_area=area,
+                            changes_observed=["Cambios no especificados"],
+                            improvement_level="leve",
+                            notes=None
+                        ))
+                
+                # Extraer recomendaciones
+                recommendations_prompt = f"""
+                Basándote en el siguiente análisis de progreso corporal, genera 3-5 recomendaciones específicas
+                y accionables para continuar o mejorar el progreso. Considera el contexto del programa {program_type}.
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve las recomendaciones como una lista de strings.
+                """
+                
+                recommendations_response = await self.gemini_client.generate_structured_output(recommendations_prompt)
+                
+                # Procesar recomendaciones
+                recommendations = []
+                if isinstance(recommendations_response, list):
+                    recommendations = [rec for rec in recommendations_response if isinstance(rec, str)]
+                elif isinstance(recommendations_response, dict) and "recommendations" in recommendations_response:
+                    recommendations = [rec for rec in recommendations_response["recommendations"] if isinstance(rec, str)]
+                
+                # Si no hay recomendaciones, crear algunas genéricas
+                if not recommendations:
+                    recommendations = [
+                        "Mantener consistencia en el programa actual",
+                        "Considerar ajustes en la nutrición para optimizar resultados",
+                        "Documentar el progreso regularmente con fotos en las mismas condiciones"
+                    ]
+                
+                # Calcular puntuación general de progreso (simulada)
+                overall_progress_score = 7.5  # Valor simulado entre 0-10
+                
+                # Crear artefacto con el análisis
+                analysis_id = str(uuid.uuid4())
+                artifact = BodyProgressAnalysisArtifact(
+                    analysis_id=analysis_id,
+                    created_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                    user_id=user_id,
+                    progress_score=overall_progress_score,
+                    comparison_image_url="",  # En un caso real, aquí iría la URL de la imagen comparativa
+                    time_period=time_between_images
+                )
+                
+                # Extraer resumen del progreso
+                progress_summary = multimodal_result.get("text", "").split("\n\n")[0] if multimodal_result.get("text") else "No se pudo generar un resumen del progreso."
+                
+                # Crear la salida de la skill
+                return AnalyzeBodyProgressOutput(
+                    analysis_id=analysis_id,
+                    progress_summary=progress_summary,
+                    metrics=metrics,
+                    body_areas=body_areas,
+                    overall_progress_score=overall_progress_score,
+                    recommendations=recommendations,
+                    comparison_image_url=""  # En un caso real, aquí iría la URL de la imagen comparativa
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al analizar progreso corporal: {e}", exc_info=True)
+            
+            # En caso de error, devolver un análisis básico
+            return AnalyzeBodyProgressOutput(
+                analysis_id=str(uuid.uuid4()),
+                progress_summary="No se pudo realizar el análisis debido a un error en el procesamiento.",
+                metrics=[
+                    BodyChangeMetric(
+                        metric_name="Error en análisis",
+                        before_value=None,
+                        after_value=None,
+                        change=None,
+                        confidence=0.0
+                    )
+                ],
+                body_areas=[
+                    BodyAreaChange(
+                        body_area="General",
+                        changes_observed=["No se pudieron determinar cambios debido a un error"],
+                        improvement_level="ninguno",
+                        notes="Error en el procesamiento de imágenes"
+                    )
+                ],
+                overall_progress_score=0.0,
+                recommendations=["Intente nuevamente con imágenes de mejor calidad o en mejor iluminación."],
+                comparison_image_url=None
+            )
+    
+    async def _skill_generate_progress_visualization(self, input_data: GenerateProgressVisualizationInput) -> GenerateProgressVisualizationOutput:
+        """
+        Skill para generar visualizaciones de progreso a partir de múltiples imágenes.
+        
+        Args:
+            input_data: Datos de entrada para la skill
+            
+        Returns:
+            GenerateProgressVisualizationOutput: Visualización del progreso generada
+        """
+        logger.info(f"Ejecutando habilidad: _skill_generate_progress_visualization para usuario: {input_data.user_id}")
+        
+        try:
+            # Obtener datos de las imágenes
+            images = input_data.images
+            user_id = input_data.user_id or "usuario_anónimo"
+            visualization_type = input_data.visualization_type
+            metrics_to_highlight = input_data.metrics_to_highlight or []
+            include_measurements = input_data.include_measurements
+            
+            if not images or len(images) < 2:
+                raise ValueError("Se requieren al menos dos imágenes para generar una visualización de progreso.")
+            
+            # Ordenar imágenes por fecha si es posible
+            try:
+                images = sorted(images, key=lambda x: x.get("date", ""))
+            except Exception as e:
+                logger.warning(f"No se pudieron ordenar las imágenes por fecha: {e}")
+            
+            # Utilizar las capacidades de visión del agente base
+            with self.tracer.start_as_current_span("progress_visualization_generation"):
+                # Procesar cada imagen para preparar la visualización
+                processed_images = []
+                for idx, img_data in enumerate(images):
+                    image_data = img_data.get("image_data")
+                    if not image_data:
+                        continue
+                    
+                    # Analizar la imagen para extraer información relevante
+                    analysis = await self.vision_processor.analyze_image(image_data)
+                    
+                    # Añadir a la lista de imágenes procesadas
+                    processed_images.append({
+                        "image_data": image_data,
+                        "date": img_data.get("date", f"Imagen {idx+1}"),
+                        "analysis": analysis
+                    })
+                
+                # Generar la visualización según el tipo especificado
+                visualization_id = str(uuid.uuid4())
+                visualization_filename = f"progress_viz_{user_id}_{visualization_id}.png"
+                visualization_filepath = os.path.join(self.tmp_dir, visualization_filename)
+                
+                # Crear una figura para la visualización
+                if visualization_type == "side_by_side":
+                    # Visualización lado a lado
+                    fig, axes = plt.subplots(1, len(processed_images), figsize=(5*len(processed_images), 5))
+                    
+                    # Si solo hay una imagen, axes no será un array
+                    if len(processed_images) == 1:
+                        axes = [axes]
+                    
+                    for i, img_data in enumerate(processed_images):
+                        # Aquí iría el código para cargar y mostrar la imagen
+                        # Como no podemos procesar imágenes reales en este ejemplo, simulamos
+                        axes[i].text(0.5, 0.5, f"Imagen {i+1}\n{img_data['date']}",
+                                    horizontalalignment='center', verticalalignment='center')
+                        axes[i].set_title(img_data['date'])
+                        axes[i].axis('off')
+                    
+                    plt.tight_layout()
+                    
+                elif visualization_type == "grid":
+                    # Visualización en cuadrícula
+                    rows = (len(processed_images) + 2) // 3  # Calcular filas necesarias
+                    cols = min(3, len(processed_images))  # Máximo 3 columnas
+                    
+                    fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 5*rows))
+                    axes = axes.flatten() if rows > 1 or cols > 1 else [axes]
+                    
+                    for i, img_data in enumerate(processed_images):
+                        if i < len(axes):
+                            # Aquí iría el código para cargar y mostrar la imagen
+                            axes[i].text(0.5, 0.5, f"Imagen {i+1}\n{img_data['date']}",
+                                        horizontalalignment='center', verticalalignment='center')
+                            axes[i].set_title(img_data['date'])
+                            axes[i].axis('off')
+                    
+                    # Ocultar ejes vacíos
+                    for i in range(len(processed_images), len(axes)):
+                        axes[i].axis('off')
+                    
+                    plt.tight_layout()
+                    
+                elif visualization_type == "timeline":
+                    # Visualización en línea de tiempo
+                    fig, ax = plt.subplots(figsize=(12, 6))
+                    
+                    # Crear una línea de tiempo con marcadores para cada imagen
+                    ax.plot([i for i in range(len(processed_images))],
+                           [0 for _ in range(len(processed_images))],
+                           'o-', markersize=15, linewidth=2)
+                    
+                    # Añadir etiquetas con fechas
+                    for i, img_data in enumerate(processed_images):
+                        ax.annotate(img_data['date'],
+                                   xy=(i, 0),
+                                   xytext=(0, 10),
+                                   textcoords="offset points",
+                                   ha='center')
+                    
+                    ax.set_title("Línea de tiempo de progreso")
+                    ax.axis('off')
+                    
+                    plt.tight_layout()
+                    
+                else:  # Default: side_by_side
+                    fig, axes = plt.subplots(1, len(processed_images), figsize=(5*len(processed_images), 5))
+                    
+                    # Si solo hay una imagen, axes no será un array
+                    if len(processed_images) == 1:
+                        axes = [axes]
+                    
+                    for i, img_data in enumerate(processed_images):
+                        # Aquí iría el código para cargar y mostrar la imagen
+                        axes[i].text(0.5, 0.5, f"Imagen {i+1}\n{img_data['date']}",
+                                    horizontalalignment='center', verticalalignment='center')
+                        axes[i].set_title(img_data['date'])
+                        axes[i].axis('off')
+                    
+                    plt.tight_layout()
+                
+                # Añadir título general
+                fig.suptitle(f"Visualización de Progreso - {user_id}", fontsize=16)
+                
+                # Guardar la visualización
+                plt.savefig(visualization_filepath)
+                plt.close()
+                
+                # Calcular el período de tiempo cubierto
+                time_span = "No disponible"
+                if len(processed_images) >= 2:
+                    try:
+                        first_date = processed_images[0].get("date", "")
+                        last_date = processed_images[-1].get("date", "")
+                        if first_date and last_date and first_date != last_date:
+                            time_span = f"{first_date} a {last_date}"
+                    except Exception as e:
+                        logger.warning(f"No se pudo calcular el período de tiempo: {e}")
+                
+                # Crear la salida de la skill
+                return GenerateProgressVisualizationOutput(
+                    visualization_id=visualization_id,
+                    visualization_url=f"file://{visualization_filepath}",  # En un caso real, aquí iría la URL de la visualización
+                    visualization_type=visualization_type,
+                    image_count=len(processed_images),
+                    time_span=time_span,
+                    notes=f"Visualización generada con {len(processed_images)} imágenes en formato {visualization_type}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al generar visualización de progreso: {e}", exc_info=True)
+            
+            # Limpiar figura si hubo error
+            plt.close()
+            
+            # En caso de error, devolver una respuesta básica
+            return GenerateProgressVisualizationOutput(
+                visualization_id=str(uuid.uuid4()),
+                visualization_url="",
+                visualization_type=input_data.visualization_type,
+                image_count=len(input_data.images) if input_data.images else 0,
+                time_span=None,
+                notes="No se pudo generar la visualización debido a un error en el procesamiento."
+            )

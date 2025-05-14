@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from core.logging_config import get_logger
 from agents.orchestrator.agent import NGXNexusOrchestrator
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 from infrastructure.adapters.a2a_adapter import a2a_adapter
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
@@ -23,7 +24,7 @@ from infrastructure.a2a_optimized import MessagePriority
 
 logger = get_logger(__name__)
 
-class OrchestratorAdapter(NGXNexusOrchestrator):
+class OrchestratorAdapter(NGXNexusOrchestrator, BaseAgentAdapter):
     """
     Adaptador para el agente Orchestrator.
     
@@ -73,7 +74,145 @@ class OrchestratorAdapter(NGXNexusOrchestrator):
             }
         }
         
+        # Configuración de clasificación específica para este agente
+        self.fallback_keywords = [
+            "orquestar", "orchestrate", "coordinar", "coordinate", "múltiples", "multiple",
+            "agentes", "agents", "integrar", "integrate", "combinar", "combine"
+        ]
+        
         logger.info(f"Adaptador del Orchestrator inicializado: {self.agent_id}")
+    
+    def _create_default_context(self) -> Dict[str, Any]:
+        """
+        Crea un contexto predeterminado para el agente Orchestrator.
+        
+        Returns:
+            Dict[str, Any]: Contexto predeterminado
+        """
+        return {
+            "conversation_history": [],
+            "user_profile": {},
+            "agent_interactions": [],
+            "routing_decisions": [],
+            "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+    
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
+        """
+        Obtiene el mapeo de intenciones a tipos de consulta específico para Orchestrator.
+        
+        Returns:
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
+        """
+        return {
+            "route_message": "route_message",
+            "coordinate_agents": "coordinate_agents",
+            "aggregate_responses": "aggregate_responses",
+            "prioritize_message": "prioritize_message",
+            "analyze_intent": "analyze_intent"
+        }
+    
+    def _adjust_score_based_on_context(self, score: float, context: Dict[str, Any]) -> float:
+        """
+        Ajusta la puntuación de clasificación basada en el contexto.
+        
+        Args:
+            score: Puntuación de clasificación original
+            context: Contexto adicional para la clasificación
+            
+        Returns:
+            float: Puntuación ajustada
+        """
+        # El Orchestrator siempre debe tener una puntuación base alta ya que es el coordinador principal
+        base_score = max(0.3, score)
+        
+        # Si la consulta menciona múltiples agentes o coordinación, aumentar la puntuación
+        if context.get("requires_coordination", False):
+            base_score += 0.2
+        
+        # Si hay interacciones previas con múltiples agentes, aumentar la puntuación
+        if len(context.get("agent_interactions", [])) > 2:
+            base_score += 0.1
+        
+        # Limitar la puntuación máxima a 1.0
+        return min(1.0, base_score)
+    
+    async def _process_query(self, query: str, user_id: str, session_id: str,
+                           program_type: str, state: Dict[str, Any], profile: Dict[str, Any],
+                           **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la consulta del usuario.
+        
+        Este método implementa la lógica específica del Orchestrator utilizando la funcionalidad
+        de la clase base BaseAgentAdapter.
+        
+        Args:
+            query: La consulta del usuario
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            program_type: Tipo de programa (general, elite, etc.)
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta del agente
+        """
+        try:
+            with telemetry.start_span("orchestrator.process_query"):
+                # Analizar la intención del usuario
+                intent = await self._analyze_intent(query, state)
+                
+                # Determinar los agentes objetivo y prioridades
+                target_agents, priority = await self._determine_target_agents(intent, query, state)
+                
+                # Registrar la distribución de prioridades
+                priority_name = self._get_priority_name(priority)
+                self.metrics["priority_distribution"][priority_name] += 1
+                
+                # Enrutar el mensaje a los agentes objetivo
+                start_time = time.time()
+                response = await self._route_message(query, target_agents, priority, user_id, session_id, state)
+                end_time = time.time()
+                
+                # Actualizar métricas
+                self._update_metrics(target_agents, end_time - start_time)
+                
+                # Registrar telemetría
+                telemetry.record_event("orchestrator", "message_routed", {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "target_agents": target_agents,
+                    "priority": priority_name,
+                    "response_time_ms": telemetry.get_current_span().duration_ms
+                })
+                
+                # Actualizar el estado con la información de enrutamiento
+                if "routing_decisions" not in state:
+                    state["routing_decisions"] = []
+                
+                state["routing_decisions"].append({
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "query": query,
+                    "target_agents": target_agents,
+                    "priority": priority_name,
+                    "response_time": end_time - start_time
+                })
+                
+                return response
+        except Exception as e:
+            logger.error(f"Error en _process_query: {e}", exc_info=True)
+            telemetry.record_error("orchestrator", "process_query_failed", {
+                "error": str(e),
+                "user_id": user_id,
+                "session_id": session_id
+            })
+            return {
+                "status": "error",
+                "error": str(e),
+                "output": "Lo siento, ha ocurrido un error al procesar tu solicitud.",
+                "agent": self.__class__.__name__
+            }
     
     async def _run_async_impl(self, user_input: str, user_id: Optional[str] = None, 
                              session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
@@ -637,7 +776,7 @@ class OrchestratorAdapter(NGXNexusOrchestrator):
                     agent_description=self.description,
                     agent_version=self.version,
                     agent_capabilities=self.capabilities,
-                    handler=self._run_async_impl
+                    handler=self.run_async_impl
                 )
                 
                 # Registrar telemetría

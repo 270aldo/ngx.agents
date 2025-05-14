@@ -10,13 +10,16 @@ import base64
 import mimetypes
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, BinaryIO
+from typing import Any, Dict, List, Optional, Union, BinaryIO, Tuple
 
 import google.generativeai as genai
 from google.generativeai.types import GenerationConfig
 
 from clients.base_client import BaseClient, retry_with_backoff
 from config.secrets import settings
+from core.budget import budget_manager
+from core.prompt_analyzer import prompt_analyzer
+from core.domain_cache import domain_cache, CacheStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +42,19 @@ class GeminiClient(BaseClient):
             cls._instance._initialized = False
         return cls._instance
     
-    def __init__(self, model_name: str = "gemini-1.5-pro"):
+    def __init__(self,
+                model_name: str = "gemini-1.5-pro",
+                optimize_prompts: bool = True,
+                use_cache: bool = True,
+                cache_ttl: Optional[int] = 3600 * 24):  # 24 horas por defecto
         """
         Inicializa el cliente de Gemini.
         
         Args:
             model_name: Nombre del modelo de Gemini a utilizar
+            optimize_prompts: Si se deben optimizar los prompts para reducir tokens
+            use_cache: Si se debe utilizar el sistema de caché
+            cache_ttl: Tiempo de vida de las entradas en caché (en segundos)
         """
         # Evitar reinicialización en el patrón Singleton
         if getattr(self, "_initialized", False):
@@ -53,6 +63,9 @@ class GeminiClient(BaseClient):
         super().__init__(service_name="gemini")
         self.model_name = model_name
         self.model = None
+        self.optimize_prompts = optimize_prompts
+        self.use_cache = use_cache
+        self.cache_ttl = cache_ttl
         self._initialized = True
     
     async def initialize(self) -> None:
@@ -108,12 +121,93 @@ class GeminiClient(BaseClient):
         )
         
         try:
-            response = await self.model.generate_content_async(
-                prompt,
-                generation_config=generation_config,
-                safety_settings=safety_settings
+            # Verificar caché primero si está habilitado
+            agent_id = getattr(self, "current_agent_id", "default")
+            cache_domain = f"gemini:{agent_id}"
+            
+            if self.use_cache:
+                cached_result = await domain_cache.get(
+                    prompt=prompt,
+                    domain=cache_domain,
+                    strategy=CacheStrategy.EXACT_MATCH
+                )
+                
+                if cached_result is not None:
+                    logger.info(f"Resultado obtenido de caché para agente {agent_id}")
+                    return cached_result
+            
+            # Optimizar prompt si está habilitado
+            original_prompt = prompt
+            if self.optimize_prompts:
+                analysis = prompt_analyzer.analyze_prompt(prompt)
+                prompt = analysis["optimized_prompt"]
+                if analysis["token_reduction"] > 0:
+                    logger.info(f"Prompt optimizado: {analysis['token_reduction']} tokens reducidos ({analysis['percentage_reduction']:.1f}%)")
+            
+            # Estimar tokens de entrada (aproximado)
+            prompt_tokens = self._estimate_tokens(prompt)
+            
+            # Verificar presupuesto antes de la llamada
+            allowed, fallback_model = await budget_manager.record_usage(
+                agent_id=agent_id,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,  # Se actualizará después
+                model=self.model_name
             )
-            return response.text
+            
+            if not allowed:
+                logger.warning(f"Llamada bloqueada por límite de presupuesto para agente {agent_id}")
+                return "Lo siento, no puedo procesar esta solicitud debido a restricciones de presupuesto."
+            
+            # Si se debe degradar a un modelo más económico
+            if fallback_model:
+                logger.info(f"Cambiando de {self.model_name} a {fallback_model} por restricciones de presupuesto")
+                original_model = self.model
+                self.model = genai.GenerativeModel(fallback_model)
+                
+                response = await self.model.generate_content_async(
+                    prompt,
+                    generation_config=generation_config,
+                    safety_settings=safety_settings
+                )
+                
+                # Restaurar modelo original para futuras llamadas
+                self.model = original_model
+            else:
+                response = await self.model.generate_content_async(
+                    prompt,
+                    generation_config=generation_config,
+                    safety_settings=safety_settings
+                )
+            
+            # Estimar tokens de salida y actualizar presupuesto
+            completion_tokens = self._estimate_tokens(response.text)
+            await budget_manager.record_usage(
+                agent_id=agent_id,
+                prompt_tokens=0,  # Ya contabilizados antes
+                completion_tokens=completion_tokens,
+                model=self.model_name
+            )
+            
+            result_text = response.text
+            
+            # Guardar en caché si está habilitado
+            if self.use_cache:
+                await domain_cache.set(
+                    prompt=original_prompt,  # Usar el prompt original como clave
+                    value=result_text,
+                    domain=cache_domain,
+                    ttl=self.cache_ttl,
+                    strategy=CacheStrategy.EXACT_MATCH,
+                    metadata={
+                        "model": self.model_name,
+                        "agent_id": agent_id,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens
+                    }
+                )
+            
+            return result_text
         except Exception as e:
             logger.error(f"Error al generar texto con Gemini: {str(e)}")
             raise
@@ -141,17 +235,116 @@ class GeminiClient(BaseClient):
         
         self._record_call("chat")
         
-        chat = self.model.start_chat(history=[])
+        # Verificar caché primero si está habilitado
+        agent_id = getattr(self, "current_agent_id", "default")
+        cache_domain = f"gemini_chat:{agent_id}"
         
-        # Agregar mensajes previos al historial
-        for msg in messages[:-1]:
-            if msg["role"] == "user":
-                chat.send_message(msg["content"])
-            # Los mensajes del modelo se agregan automáticamente
+        # Crear una clave de caché basada en los mensajes
+        import json
+        cache_key = json.dumps([{
+            "role": msg.get("role", ""),
+            "content": msg.get("content", "")
+        } for msg in messages], sort_keys=True)
         
-        # Enviar el último mensaje y obtener respuesta
-        response = await chat.send_message_async(messages[-1]["content"])
-        return response.text
+        if self.use_cache:
+            cached_result = await domain_cache.get(
+                prompt=cache_key,
+                domain=cache_domain,
+                strategy=CacheStrategy.EXACT_MATCH
+            )
+            
+            if cached_result is not None:
+                logger.info(f"Resultado de chat obtenido de caché para agente {agent_id}")
+                return cached_result
+        
+        # Optimizar mensajes si está habilitado
+        original_messages = messages.copy()
+        if self.optimize_prompts:
+            messages = prompt_analyzer.optimize_chat_messages(messages)
+            # Calcular reducción de tokens
+            original_tokens = sum(self._estimate_tokens(msg.get("content", "")) for msg in original_messages)
+            optimized_tokens = sum(self._estimate_tokens(msg.get("content", "")) for msg in messages)
+            token_reduction = original_tokens - optimized_tokens
+            if token_reduction > 0:
+                percentage_reduction = (token_reduction / original_tokens) * 100 if original_tokens > 0 else 0
+                logger.info(f"Mensajes de chat optimizados: {token_reduction} tokens reducidos ({percentage_reduction:.1f}%)")
+        
+        # Estimar tokens de entrada (aproximado)
+        prompt_tokens = sum(self._estimate_tokens(msg.get("content", "")) for msg in messages)
+        
+        # Verificar presupuesto antes de la llamada
+        agent_id = getattr(self, "current_agent_id", "default")
+        allowed, fallback_model = await budget_manager.record_usage(
+            agent_id=agent_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=0,  # Se actualizará después
+            model=self.model_name
+        )
+        
+        if not allowed:
+            logger.warning(f"Llamada de chat bloqueada por límite de presupuesto para agente {agent_id}")
+            return "Lo siento, no puedo procesar esta solicitud debido a restricciones de presupuesto."
+        
+        # Si se debe degradar a un modelo más económico
+        if fallback_model:
+            logger.info(f"Cambiando de {self.model_name} a {fallback_model} por restricciones de presupuesto")
+            original_model = self.model
+            self.model = genai.GenerativeModel(fallback_model)
+            
+            chat = self.model.start_chat(history=[])
+            
+            # Agregar mensajes previos al historial
+            for msg in messages[:-1]:
+                if msg["role"] == "user":
+                    chat.send_message(msg["content"])
+                # Los mensajes del modelo se agregan automáticamente
+            
+            # Enviar el último mensaje y obtener respuesta
+            response = await chat.send_message_async(messages[-1]["content"])
+            
+            # Restaurar modelo original para futuras llamadas
+            self.model = original_model
+        else:
+            chat = self.model.start_chat(history=[])
+            
+            # Agregar mensajes previos al historial
+            for msg in messages[:-1]:
+                if msg["role"] == "user":
+                    chat.send_message(msg["content"])
+                # Los mensajes del modelo se agregan automáticamente
+            
+            # Enviar el último mensaje y obtener respuesta
+            response = await chat.send_message_async(messages[-1]["content"])
+        
+        # Estimar tokens de salida y actualizar presupuesto
+        completion_tokens = self._estimate_tokens(response.text)
+        await budget_manager.record_usage(
+            agent_id=agent_id,
+            prompt_tokens=0,  # Ya contabilizados antes
+            completion_tokens=completion_tokens,
+            model=self.model_name
+        )
+        
+        result_text = response.text
+        
+        # Guardar en caché si está habilitado
+        if self.use_cache:
+            await domain_cache.set(
+                prompt=cache_key,
+                value=result_text,
+                domain=cache_domain,
+                ttl=self.cache_ttl,
+                strategy=CacheStrategy.EXACT_MATCH,
+                metadata={
+                    "model": self.model_name,
+                    "agent_id": agent_id,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "message_count": len(messages)
+                }
+            )
+        
+        return result_text
     
     @retry_with_backoff()
     async def analyze_intent(self, user_input: str) -> Dict[str, Any]:
@@ -409,6 +602,39 @@ class GeminiClient(BaseClient):
                 "dominant_emotion": "none",
                 "error": str(e)
             }
+
+
+    def set_current_agent(self, agent_id: str) -> None:
+        """
+        Establece el agente actual para el seguimiento de presupuesto.
+        
+        Args:
+            agent_id: ID del agente que está realizando la llamada
+        """
+        self.current_agent_id = agent_id
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        Estima el número de tokens en un texto.
+        
+        Esta es una estimación aproximada basada en palabras y caracteres.
+        Para una estimación más precisa, se debería usar un tokenizador real.
+        
+        Args:
+            text: Texto a analizar
+            
+        Returns:
+            Número estimado de tokens
+        """
+        if not text:
+            return 0
+            
+        # Estimación simple: aproximadamente 4 caracteres por token en promedio
+        # Esta es una aproximación muy básica y puede variar según el modelo y el idioma
+        char_count = len(text)
+        estimated_tokens = max(1, char_count // 4)
+        
+        return estimated_tokens
 
 
 # Instancia global para uso en toda la aplicación

@@ -174,6 +174,141 @@ resource "google_monitoring_dashboard" "vertex_ai_usage" {
             "label": "Tokens"
           }
         }
+      },
+      {
+        "title": "Vertex AI Client Cache Hit Rate",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/vertex_ai.client.cache_hits\" resource.type=\"k8s_container\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "alignmentPeriod": "300s"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "legendTemplate": "Cache Hits"
+            },
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/vertex_ai.client.cache_misses\" resource.type=\"k8s_container\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "alignmentPeriod": "300s"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "legendTemplate": "Cache Misses"
+            }
+          ],
+          "yAxis": {
+            "scale": "LINEAR",
+            "label": "Requests/minute"
+          }
+        }
+      },
+      {
+        "title": "Vertex AI Client Latency by Operation",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/vertex_ai.client.latency\" resource.type=\"k8s_container\" metric.label.operation=\"content_generation\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                    "alignmentPeriod": "60s"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "legendTemplate": "Content Generation"
+            },
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/vertex_ai.client.latency\" resource.type=\"k8s_container\" metric.label.operation=\"embedding\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                    "alignmentPeriod": "60s"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "legendTemplate": "Embedding"
+            },
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/vertex_ai.client.latency\" resource.type=\"k8s_container\" metric.label.operation=\"multimodal\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                    "alignmentPeriod": "60s"
+                  }
+                }
+              },
+              "plotType": "LINE",
+              "legendTemplate": "Multimodal"
+            }
+          ],
+          "yAxis": {
+            "scale": "LINEAR",
+            "label": "Latency (ms)"
+          }
+        }
+      },
+      {
+        "title": "Estimated Cost (Tokens per day)",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/vertex_ai.client.tokens\" resource.type=\"k8s_container\" metric.label.type=\"total\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_SUM",
+                    "alignmentPeriod": "86400s"
+                  }
+                }
+              },
+              "plotType": "COLUMN"
+            }
+          ],
+          "yAxis": {
+            "scale": "LINEAR",
+            "label": "Tokens/day"
+          }
+        }
+      },
+      {
+        "title": "Vertex AI Client Errors by Type",
+        "xyChart": {
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/vertex_ai.client.errors\" resource.type=\"k8s_container\"",
+                  "aggregation": {
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "alignmentPeriod": "300s",
+                    "crossSeriesReducer": "REDUCE_NONE",
+                    "groupByFields": ["metric.label.error_type"]
+                  }
+                }
+              },
+              "plotType": "STACKED_BAR"
+            }
+          ],
+          "yAxis": {
+            "scale": "LINEAR",
+            "label": "Errors/minute"
+          }
+        }
       }
     ]
   }
