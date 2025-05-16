@@ -1,5 +1,7 @@
 # Plan de Migración del Orchestrator al Intent Analyzer Optimizado
 
+> **Nota**: La migración del Intent Analyzer ha sido completada con éxito. Este documento se mantiene como referencia para la migración pendiente del Orchestrator.
+
 ## Objetivo
 
 Migrar el agente Orchestrator para utilizar el adaptador del Intent Analyzer (`intent_analyzer_adapter.py`) en lugar del Intent Analyzer original. Esto permitirá aprovechar las mejoras de rendimiento y capacidades del nuevo Intent Analyzer optimizado.
@@ -84,4 +86,8 @@ Para validar la migración, se deben realizar las siguientes pruebas:
 
 ## Próximos Pasos
 
-Una vez completada la migración del agente Orchestrator, se procederá a migrar el resto de los agentes que utilicen el Intent Analyzer.
+1. La migración del Intent Analyzer ha sido completada al 100% (ver documento `progress_intent_analyzer_migration.md`).
+2. Ahora se debe proceder con la migración del agente Orchestrator para que utilice el adaptador del Intent Analyzer.
+3. Una vez completada la migración del Orchestrator, se deberán realizar pruebas de integración completas.
+
+Para más detalles sobre el estado actual de la migración del Intent Analyzer, consultar el documento `progress_intent_analyzer_migration.md`.
