@@ -1,0 +1,51 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vertex-ai-alerts
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: monitoring
+spec:
+  groups:
+  - name: vertex-ai
+    rules:
+    # Alerta para uso excesivo de la API
+    - alert: VertexAIHighUsage
+      expr: sum(rate(vertex_ai_client_tokens{type="total"}[5m])) > 100000
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Alto uso de Vertex AI API"
+        description: "La tasa de tokens de Vertex AI supera los 100,000 por minuto durante 15 minutos"
+        
+    # Alerta para alta tasa de errores
+    - alert: VertexAIHighErrorRate
+      expr: sum(rate(vertex_ai_client_errors[5m])) / sum(rate(serviceruntime_googleapis_com_api_request_count{service="aiplatform.googleapis.com"}[5m])) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Alta tasa de errores en Vertex AI"
+        description: "La tasa de errores en llamadas a Vertex AI supera el 5% durante 5 minutos"
+        
+    # Alerta para alta latencia
+    - alert: VertexAIHighLatency
+      expr: histogram_quantile(0.95, sum(rate(vertex_ai_client_latency_bucket{operation="content_generation"}[5m])) by (le)) > 2000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Alta latencia en Vertex AI"
+        description: "La latencia p95 para generación de contenido supera los 2 segundos durante 5 minutos"
+        
+    # Alerta para baja tasa de aciertos de caché
+    - alert: VertexAILowCacheHitRate
+      expr: sum(rate(vertex_ai_client_cache_hits[30m])) / (sum(rate(vertex_ai_client_cache_hits[30m])) + sum(rate(vertex_ai_client_cache_misses[30m]))) < 0.5
+      for: 30m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Baja tasa de aciertos de caché en Vertex AI"
+        description: "La tasa de aciertos de caché es menor al 50% durante 30 minutos, lo que puede aumentar costos y latencia"

@@ -1,3 +1,4 @@
+\
 """
 Cliente para interactuar con la API de Gemini de Google.
 

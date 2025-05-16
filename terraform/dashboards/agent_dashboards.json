@@ -1,0 +1,378 @@
+{
+  "displayName": "NGX Agents - Rendimiento por Agente",
+  "gridLayout": {
+    "columns": "2",
+    "widgets": [
+      {
+        "title": "Tiempo de Procesamiento por Agente",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_processing_time\" AND resource.type=\"global\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metric.label.agent_name"
+                    ]
+                  }
+                },
+                "unitOverride": "ms"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Tiempo (ms)",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Solicitudes por Agente",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_requests_by_agent\" AND resource.type=\"global\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metric.label.agent_name"
+                    ]
+                  }
+                },
+                "unitOverride": "1/min"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Solicitudes por minuto",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Errores por Agente",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_errors_by_agent\" AND resource.type=\"global\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metric.label.agent_name"
+                    ]
+                  }
+                },
+                "unitOverride": "1/min"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Errores por minuto",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Uso de Skills por Agente",
+        "pieChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_skill_usage\" AND resource.type=\"global\"",
+                  "aggregation": {
+                    "alignmentPeriod": "300s",
+                    "perSeriesAligner": "ALIGN_SUM",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metric.label.skill_name"
+                    ]
+                  }
+                },
+                "unitOverride": "1"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "title": "Uso de Tokens por Agente",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_tokens_used\" AND resource.type=\"global\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_SUM",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": [
+                      "metric.label.agent_name"
+                    ]
+                  }
+                },
+                "unitOverride": "1"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Tokens",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Latencia de Comunicación A2A",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_a2a_latency_seconds\" AND resource.type=\"global\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metric.label.source_agent",
+                      "metric.label.target_agent"
+                    ]
+                  }
+                },
+                "unitOverride": "s"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Latencia (segundos)",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Tasa de Aciertos de Caché por Agente",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_cache_hit_rate\" AND resource.type=\"global\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metric.label.agent_name"
+                    ]
+                  }
+                },
+                "unitOverride": "%"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Tasa de aciertos (%)",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Distribución de Tiempo por Fase de Procesamiento",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_processing_phase_time\" AND resource.type=\"global\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metric.label.phase"
+                    ]
+                  }
+                },
+                "unitOverride": "ms"
+              },
+              "plotType": "STACKED_BAR",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Tiempo (ms)",
+            "scale": "LINEAR"
+          }
+        }
+      }
+    ]
+  },
+  "mosaicLayout": {
+    "columns": 12,
+    "tiles": [
+      {
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Precision Nutrition Architect - Métricas Clave",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"custom.googleapis.com/ngx_agents_processing_time\" AND metric.label.agent_name=\"precision_nutrition_architect\"",
+                "aggregation": {
+                  "alignmentPeriod": "60s",
+                  "perSeriesAligner": "ALIGN_MEAN"
+                }
+              },
+              "unitOverride": "ms"
+            },
+            "gaugeView": {
+              "lowerBound": 0,
+              "upperBound": 5000
+            }
+          }
+        },
+        "xPos": 0,
+        "yPos": 0
+      },
+      {
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Biohacking Innovator - Métricas Clave",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"custom.googleapis.com/ngx_agents_processing_time\" AND metric.label.agent_name=\"biohacking_innovator\"",
+                "aggregation": {
+                  "alignmentPeriod": "60s",
+                  "perSeriesAligner": "ALIGN_MEAN"
+                }
+              },
+              "unitOverride": "ms"
+            },
+            "gaugeView": {
+              "lowerBound": 0,
+              "upperBound": 5000
+            }
+          }
+        },
+        "xPos": 6,
+        "yPos": 0
+      },
+      {
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Elite Training Strategist - Métricas Clave",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"custom.googleapis.com/ngx_agents_processing_time\" AND metric.label.agent_name=\"elite_training_strategist\"",
+                "aggregation": {
+                  "alignmentPeriod": "60s",
+                  "perSeriesAligner": "ALIGN_MEAN"
+                }
+              },
+              "unitOverride": "ms"
+            },
+            "gaugeView": {
+              "lowerBound": 0,
+              "upperBound": 5000
+            }
+          }
+        },
+        "xPos": 0,
+        "yPos": 4
+      },
+      {
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Motivation Behavior Coach - Métricas Clave",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"custom.googleapis.com/ngx_agents_processing_time\" AND metric.label.agent_name=\"motivation_behavior_coach\"",
+                "aggregation": {
+                  "alignmentPeriod": "60s",
+                  "perSeriesAligner": "ALIGN_MEAN"
+                }
+              },
+              "unitOverride": "ms"
+            },
+            "gaugeView": {
+              "lowerBound": 0,
+              "upperBound": 5000
+            }
+          }
+        },
+        "xPos": 6,
+        "yPos": 4
+      }
+    ]
+  }
+}

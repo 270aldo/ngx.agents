@@ -14,7 +14,12 @@ from typing import Any, Dict, List, Optional, Union
 from core.intent_analyzer import Intent, IntentEntity, intent_analyzer
 from core.intent_analyzer_optimized import IntentAnalyzerOptimized
 from core.logging_config import get_logger
-from core.telemetry import telemetry_manager
+
+# Intentar importar telemetry_manager del módulo real, si falla usar el mock
+try:
+    from core.telemetry import telemetry_manager
+except ImportError:
+    from tests.mocks.core.telemetry import telemetry_manager
 
 # Configurar logger
 logger = get_logger(__name__)

@@ -1,0 +1,258 @@
+{
+  "displayName": "NGX Agents - KPIs Operativos",
+  "gridLayout": {
+    "columns": "2",
+    "widgets": [
+      {
+        "title": "Disponibilidad del Servicio",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_health_status\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_MEAN"
+                  }
+                },
+                "unitOverride": "1"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Disponibilidad",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Latencia de Solicitudes (p95)",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_request_duration_seconds\" AND metric.label.quantile=\"0.95\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_PERCENTILE_95"
+                  }
+                },
+                "unitOverride": "s"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Latencia (segundos)",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Tasa de Errores",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_errors_total\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": []
+                  }
+                },
+                "unitOverride": "1/s"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Errores por segundo",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Cumplimiento de SLO",
+        "pieChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_slo_compliance\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metric.label.slo_name"
+                    ]
+                  }
+                },
+                "unitOverride": "%"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "title": "Uso de CPU por Servicio",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_cpu_usage\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metric.label.service"
+                    ]
+                  }
+                },
+                "unitOverride": "%"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Uso de CPU (%)",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Uso de Memoria por Servicio",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_memory_usage\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_MEAN",
+                    "crossSeriesReducer": "REDUCE_MEAN",
+                    "groupByFields": [
+                      "metric.label.service"
+                    ]
+                  }
+                },
+                "unitOverride": "%"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Uso de Memoria (%)",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Solicitudes por Minuto",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_requests_total\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": []
+                  }
+                },
+                "unitOverride": "1/min"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Solicitudes por minuto",
+            "scale": "LINEAR"
+          }
+        }
+      },
+      {
+        "title": "Mensajes A2A por Minuto",
+        "xyChart": {
+          "chartOptions": {
+            "mode": "COLOR"
+          },
+          "dataSets": [
+            {
+              "timeSeriesQuery": {
+                "timeSeriesFilter": {
+                  "filter": "metric.type=\"custom.googleapis.com/ngx_agents_a2a_messages_total\"",
+                  "aggregation": {
+                    "alignmentPeriod": "60s",
+                    "perSeriesAligner": "ALIGN_RATE",
+                    "crossSeriesReducer": "REDUCE_SUM",
+                    "groupByFields": []
+                  }
+                },
+                "unitOverride": "1/min"
+              },
+              "plotType": "LINE",
+              "targetAxis": "Y1",
+              "minAlignmentPeriod": "60s"
+            }
+          ],
+          "timeshiftDuration": "0s",
+          "yAxis": {
+            "label": "Mensajes por minuto",
+            "scale": "LINEAR"
+          }
+        }
+      }
+    ]
+  }
+}

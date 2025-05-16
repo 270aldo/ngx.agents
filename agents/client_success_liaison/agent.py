@@ -21,6 +21,21 @@ from core.agent_card import AgentCard, Example
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from core.logging_config import get_logger
 
+# Importar esquemas para las skills
+from agents.client_success_liaison.schemas import (
+    CommunityBuildingInput, CommunityBuildingOutput,
+    UserExperienceInput, UserExperienceOutput,
+    CustomerSupportInput, CustomerSupportOutput,
+    RetentionStrategyInput, RetentionStrategyOutput,
+    CommunicationManagementInput, CommunicationManagementOutput,
+    WebSearchInput, WebSearchOutput,
+    GeneralRequestInput, GeneralRequestOutput,
+    # Nuevos esquemas para capacidades de visión
+    FeedbackImageAnalysisInput, FeedbackImageAnalysisOutput,
+    CommunityContentAnalysisInput, CommunityContentAnalysisOutput,
+    UserJourneyVisualizationInput, UserJourneyVisualizationOutput
+)
+
 # Configurar logger
 logger = get_logger(__name__)
 
@@ -647,6 +662,304 @@ class GeneralRequestSkill(GoogleADKSkill):
             response=response_text
         )
 
+# Nuevas skills para capacidades de visión
+class FeedbackImageAnalysisSkill(GoogleADKSkill):
+    name = "feedback_image_analysis"
+    description = "Analiza imágenes compartidas por clientes para proporcionar feedback y recomendaciones"
+    input_schema = FeedbackImageAnalysisInput
+    output_schema = FeedbackImageAnalysisOutput
+    
+    async def handler(self, input_data: FeedbackImageAnalysisInput) -> FeedbackImageAnalysisOutput:
+        """Implementación de la skill de análisis de imágenes de feedback"""
+        query = input_data.query
+        image_data = input_data.image_data
+        feedback_type = input_data.feedback_type or "general"
+        user_profile = input_data.user_profile or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+            return self._generate_mock_feedback_analysis(input_data)
+        
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            vision_result = await self.agent.vision_processor.analyze_image(image_data)
+            
+            # Construir el prompt para el análisis detallado
+            prompt = f"""
+            Eres un experto en análisis de feedback de clientes y experiencia de usuario.
+            
+            Analiza esta imagen compartida por un cliente con la siguiente consulta:
+            "{query}"
+            
+            Tipo de feedback: {feedback_type}
+            
+            Descripción de la imagen según el análisis inicial:
+            {vision_result.get('text', 'No disponible')}
+            
+            Proporciona un análisis detallado que incluya:
+            1. Resumen del contenido de la imagen
+            2. Categorización del feedback (problema, sugerencia, pregunta, etc.)
+            3. Elementos clave identificados en la imagen
+            4. Recomendaciones específicas basadas en lo observado
+            5. Una respuesta personalizada para el cliente
+            
+            Estructura tu análisis de forma clara y accionable.
+            """
+            
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Generar análisis utilizando Gemini
+            analysis_text = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados del análisis
+            extraction_prompt = f"""
+            Basándote en el siguiente análisis de una imagen de feedback de cliente:
+            
+            {analysis_text}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. analysis_summary: resumen conciso del análisis
+            2. feedback_category: categoría principal del feedback
+            3. content_type: tipo de contenido identificado en la imagen
+            4. key_elements: lista de elementos clave identificados (array de objetos con "element" y "description")
+            5. recommendations: lista de recomendaciones específicas (array de strings)
+            6. confidence_score: puntuación de confianza del análisis (0-1)
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para el análisis
+            analysis_id = str(uuid.uuid4())
+            
+            # Crear respuesta estructurada
+            return FeedbackImageAnalysisOutput(
+                analysis_id=analysis_id,
+                analysis_summary=structured_data.get("analysis_summary", "Análisis de imagen de feedback"),
+                feedback_category=structured_data.get("feedback_category", "general"),
+                content_type=structured_data.get("content_type", "imagen"),
+                key_elements=structured_data.get("key_elements", [{"element": "general", "description": "Contenido general"}]),
+                recommendations=structured_data.get("recommendations", ["Revisar el feedback en detalle"]),
+                response=analysis_text,
+                confidence_score=structured_data.get("confidence_score", 0.7)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en análisis de imagen de feedback: {e}", exc_info=True)
+            return self._generate_mock_feedback_analysis(input_data)
+    
+    def _generate_mock_feedback_analysis(self, input_data: FeedbackImageAnalysisInput) -> FeedbackImageAnalysisOutput:
+        """Genera un análisis simulado cuando las capacidades de visión no están disponibles"""
+        analysis_id = str(uuid.uuid4())
+        
+        return FeedbackImageAnalysisOutput(
+            analysis_id=analysis_id,
+            analysis_summary="Análisis simulado de imagen de feedback",
+            feedback_category="no determinado",
+            content_type="imagen",
+            key_elements=[
+                {"element": "contenido", "description": "No se pudo analizar el contenido específico"}
+            ],
+            recommendations=[
+                "Proporcionar una descripción textual de la imagen",
+                "Intentar nuevamente cuando las capacidades de visión estén disponibles"
+            ],
+            response="No se pudo realizar un análisis detallado de la imagen. Por favor, proporciona una descripción textual de lo que muestra la imagen para poder ayudarte mejor.",
+            confidence_score=0.1
+        )
+
+class CommunityContentAnalysisSkill(GoogleADKSkill):
+    name = "community_content_analysis"
+    description = "Analiza contenido visual para comunidades y proporciona recomendaciones de engagement"
+    input_schema = CommunityContentAnalysisInput
+    output_schema = CommunityContentAnalysisOutput
+    
+    async def handler(self, input_data: CommunityContentAnalysisInput) -> CommunityContentAnalysisOutput:
+        """Implementación de la skill de análisis de contenido de comunidad"""
+        query = input_data.query
+        image_data = input_data.image_data
+        community_context = input_data.community_context or {}
+        content_purpose = input_data.content_purpose or "general"
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+            return self._generate_mock_content_analysis(input_data)
+        
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            vision_result = await self.agent.vision_processor.analyze_image(image_data)
+            
+            # Construir el prompt para el análisis detallado
+            prompt = f"""
+            Eres un experto en marketing de contenidos y construcción de comunidades.
+            
+            Analiza esta imagen propuesta para contenido de comunidad con la siguiente consulta:
+            "{query}"
+            
+            Propósito del contenido: {content_purpose}
+            
+            Descripción de la imagen según el análisis inicial:
+            {vision_result.get('text', 'No disponible')}
+            
+            Proporciona un análisis detallado que incluya:
+            1. Resumen del contenido de la imagen
+            2. Evaluación del potencial de engagement (alto, medio, bajo)
+            3. Audiencia objetivo identificada
+            4. Recomendaciones para mejorar el contenido
+            5. Canales de distribución recomendados
+            
+            Estructura tu análisis de forma clara y accionable.
+            """
+            
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Generar análisis utilizando Gemini
+            analysis_text = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados del análisis
+            extraction_prompt = f"""
+            Basándote en el siguiente análisis de contenido para comunidad:
+            
+            {analysis_text}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. content_summary: resumen conciso del contenido
+            2. engagement_potential: potencial de engagement estimado (alto, medio, bajo)
+            3. target_audience: lista de audiencias objetivo identificadas (array de strings)
+            4. content_recommendations: lista de recomendaciones para mejorar (array de objetos con "aspect" y "recommendation")
+            5. distribution_channels: canales de distribución recomendados (array de strings)
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para el análisis
+            analysis_id = str(uuid.uuid4())
+            
+            # Crear respuesta estructurada
+            return CommunityContentAnalysisOutput(
+                analysis_id=analysis_id,
+                content_summary=structured_data.get("content_summary", "Análisis de contenido de comunidad"),
+                engagement_potential=structured_data.get("engagement_potential", "medio"),
+                target_audience=structured_data.get("target_audience", ["Comunidad general"]),
+                content_recommendations=structured_data.get("content_recommendations", [{"aspect": "general", "recommendation": "Revisar el contenido"}]),
+                distribution_channels=structured_data.get("distribution_channels", ["Redes sociales"]),
+                response=analysis_text
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en análisis de contenido de comunidad: {e}", exc_info=True)
+            return self._generate_mock_content_analysis(input_data)
+    
+    def _generate_mock_content_analysis(self, input_data: CommunityContentAnalysisInput) -> CommunityContentAnalysisOutput:
+        """Genera un análisis simulado cuando las capacidades de visión no están disponibles"""
+        analysis_id = str(uuid.uuid4())
+        
+        return CommunityContentAnalysisOutput(
+            analysis_id=analysis_id,
+            content_summary="Análisis simulado de contenido de comunidad",
+            engagement_potential="no determinado",
+            target_audience=["Comunidad general"],
+            content_recommendations=[
+                {"aspect": "descripción", "recommendation": "Proporcionar una descripción textual del contenido"}
+            ],
+            distribution_channels=["Redes sociales", "Email", "Foro de comunidad"],
+            response="No se pudo realizar un análisis detallado del contenido visual. Por favor, proporciona una descripción textual de lo que muestra la imagen para poder ayudarte mejor con recomendaciones de engagement para tu comunidad."
+        )
+
+class UserJourneyVisualizationSkill(GoogleADKSkill):
+    name = "user_journey_visualization"
+    description = "Genera visualizaciones de journey de usuario para mejorar la experiencia"
+    input_schema = UserJourneyVisualizationInput
+    output_schema = UserJourneyVisualizationOutput
+    
+    async def handler(self, input_data: UserJourneyVisualizationInput) -> UserJourneyVisualizationOutput:
+        """Implementación de la skill de visualización de journey de usuario"""
+        journey_data = input_data.journey_data
+        visualization_type = input_data.visualization_type
+        focus_points = input_data.focus_points or []
+        
+        try:
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Construir el prompt para la generación de la visualización
+            prompt = f"""
+            Eres un experto en experiencia de usuario y customer journey mapping.
+            
+            Genera una descripción detallada de una visualización de journey de usuario con los siguientes datos:
+            {json.dumps(journey_data, indent=2)}
+            
+            Tipo de visualización: {visualization_type}
+            Puntos de enfoque: {', '.join(focus_points) if focus_points else 'No especificados'}
+            
+            Proporciona una descripción detallada que incluya:
+            1. Resumen del journey visualizado
+            2. Puntos de contacto clave identificados
+            3. Áreas de mejora identificadas
+            4. Recomendaciones para optimizar el journey
+            
+            Estructura tu descripción de forma clara y accionable.
+            """
+            
+            # Generar descripción utilizando Gemini
+            visualization_description = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados de la descripción
+            extraction_prompt = f"""
+            Basándote en la siguiente descripción de visualización de journey de usuario:
+            
+            {visualization_description}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. journey_summary: resumen conciso del journey
+            2. key_touchpoints: lista de puntos de contacto clave (array de objetos con "touchpoint" y "description")
+            3. improvement_areas: lista de áreas de mejora (array de objetos con "area" y "issue")
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para la visualización
+            visualization_id = str(uuid.uuid4())
+            
+            # En un caso real, aquí se generaría una visualización gráfica
+            # Por ahora, simulamos una URL
+            visualization_url = f"https://example.com/visualizations/{visualization_id}"
+            
+            # Crear respuesta estructurada
+            return UserJourneyVisualizationOutput(
+                visualization_id=visualization_id,
+                visualization_url=visualization_url,
+                journey_summary=structured_data.get("journey_summary", "Visualización de journey de usuario"),
+                key_touchpoints=structured_data.get("key_touchpoints", [{"touchpoint": "general", "description": "Punto de contacto general"}]),
+                improvement_areas=structured_data.get("improvement_areas", [{"area": "general", "issue": "Área de mejora general"}]),
+                response=visualization_description
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en visualización de journey de usuario: {e}", exc_info=True)
+            
+            # Generar ID único para la visualización
+            visualization_id = str(uuid.uuid4())
+            
+            # Crear respuesta de error
+            return UserJourneyVisualizationOutput(
+                visualization_id=visualization_id,
+                visualization_url=f"https://example.com/visualizations/{visualization_id}",
+                journey_summary="No se pudo generar la visualización del journey",
+                key_touchpoints=[{"touchpoint": "error", "description": "Error en la generación de la visualización"}],
+                improvement_areas=[{"area": "proceso", "issue": "Revisar los datos de entrada del journey"}],
+                response="Lo siento, no se pudo generar la visualización del journey de usuario. Por favor, verifica los datos proporcionados e intenta nuevamente."
+            )
+
 class ClientSuccessLiaison(ADKAgent):
     """
     Agente especializado en comunidad y éxito del cliente.
@@ -671,7 +984,11 @@ class ClientSuccessLiaison(ADKAgent):
             RetentionStrategySkill(),
             CommunicationManagementSkill(),
             WebSearchSkill(),
-            GeneralRequestSkill()
+            GeneralRequestSkill(),
+            # Nuevas skills para capacidades de visión
+            FeedbackImageAnalysisSkill(),
+            CommunityContentAnalysisSkill(),
+            UserJourneyVisualizationSkill()
         ]
         
         # Definir capacidades según el protocolo ADK
@@ -682,7 +999,11 @@ class ClientSuccessLiaison(ADKAgent):
             "retention_strategies", 
             "communication_management",
             "information_retrieval",
-            "database_query"
+            "database_query",
+            # Nuevas capacidades de visión
+            "image_analysis",
+            "visual_content_optimization",
+            "journey_visualization"
         ]
         
         # Inicializar clientes si no se proporcionan
@@ -732,6 +1053,13 @@ class ClientSuccessLiaison(ADKAgent):
            - Timing y frecuencia óptimos
            - Tono y estilo adaptados al contexto
            - Medición de efectividad comunicativa
+           
+        6. Análisis de contenido visual
+           - Evaluación de imágenes compartidas por clientes
+           - Análisis de contenido para comunidades
+           - Recomendaciones para optimizar contenido visual
+           - Identificación de oportunidades de engagement
+           - Visualización de journeys de usuario
         
         Debes adaptar tu enfoque según el perfil del usuario, considerando:
         - Su nivel de experiencia con el producto/servicio
@@ -765,6 +1093,10 @@ class ClientSuccessLiaison(ADKAgent):
             Example(
                 input={"message": "¿Qué métricas debo seguir para evaluar la salud de mi comunidad?"},
                 output={"response": "Las métricas clave para evaluar la salud de tu comunidad incluyen..."}
+            ),
+            Example(
+                input={"message": "¿Puedes analizar esta imagen de feedback que compartió un cliente?"},
+                output={"response": "Basado en el análisis de la imagen compartida por el cliente, puedo identificar..."}
             )
         ]
         
@@ -811,6 +1143,51 @@ class ClientSuccessLiaison(ADKAgent):
             logger.info("AI Platform inicializado correctamente.")
         except Exception as e:
             logger.error(f"Error al inicializar AI Platform: {e}", exc_info=True)
+            
+        # Inicializar componentes para capacidades de visión y multimodales
+        try:
+            from core.vision_processor import VisionProcessor
+            from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
+            from opentelemetry import trace
+            
+            # Inicializar procesador de visión
+            self.vision_processor = VisionProcessor()
+            
+            # Inicializar adaptador multimodal
+            self.multimodal_adapter = MultimodalAdapter()
+            
+            # Inicializar tracer para telemetría
+            self.tracer = trace.get_tracer(__name__)
+            
+            # Bandera para verificar disponibilidad de capacidades de visión
+            self._vision_capabilities_available = True
+            
+            logger.info("Capacidades de visión y multimodales inicializadas correctamente para Client Success Liaison")
+        except Exception as e:
+            logger.warning(f"No se pudieron inicializar las capacidades de visión y multimodales: {e}")
+            
+            # Crear implementaciones simuladas para mantener la funcionalidad básica
+            class MockVisionProcessor:
+                async def analyze_image(self, image_data):
+                    return {"text": "Análisis de imagen simulado"}
+            
+            class MockMultimodalAdapter:
+                async def process_multimodal(self, prompt, image_data, **kwargs):
+                    return {"text": "Procesamiento multimodal simulado"}
+            
+            class MockTracer:
+                def start_as_current_span(self, name):
+                    class MockSpan:
+                        def __enter__(self): return self
+                        def __exit__(self, exc_type, exc_val, exc_tb): pass
+                    return MockSpan()
+            
+            self.vision_processor = MockVisionProcessor()
+            self.multimodal_adapter = MockMultimodalAdapter()
+            self.tracer = MockTracer()
+            self._vision_capabilities_available = False
+            
+            logger.warning("Usando implementaciones simuladas para capacidades de visión y multimodales")
         
         # Inicializar estado del agente
         self.update_state("community_calendars", {})  # Almacenar calendarios de comunidad generados

@@ -27,18 +27,22 @@ echo -e "${YELLOW}Configurando Poetry para crear el entorno virtual en el direct
 poetry config virtualenvs.in-project true
 
 # Eliminar entorno virtual existente si existe
-if [ -d ".venv_test" ]; then
-    echo -e "${YELLOW}Eliminando entorno virtual existente...${NC}"
-    rm -rf .venv_test
+if [ -d ".venv" ]; then
+    echo -e "${YELLOW}Eliminando entorno virtual existente .venv...${NC}"
+    rm -rf .venv
 fi
 
 # Crear nuevo entorno virtual e instalar dependencias mínimas para pruebas
 echo -e "${YELLOW}Creando nuevo entorno virtual e instalando dependencias para pruebas...${NC}"
-POETRY_VIRTUALENVS_PATH=".venv_test" poetry install --no-root --only test
+poetry install --no-root --with dev,test,core,agents,clients
 
 # Activar entorno virtual
 echo -e "${YELLOW}Activando entorno virtual...${NC}"
-source .venv_test/bin/activate
+source .venv/bin/activate
+
+# Configurar Vertex AI en modo mock para pruebas
+echo -e "${YELLOW}Configurando Vertex AI en modo mock para pruebas...${NC}"
+export MOCK_VERTEX_AI=true
 
 # Crear un mock de adk.toolkit si es necesario
 echo -e "${YELLOW}Verificando si se necesita crear mock de adk.toolkit...${NC}"
@@ -71,7 +75,7 @@ EOF
 fi
 
 echo -e "${GREEN}¡Entorno de pruebas configurado correctamente con Poetry!${NC}"
-echo -e "${YELLOW}Para activar el entorno virtual, ejecuta:${NC} source .venv_test/bin/activate"
+echo -e "${YELLOW}Para activar el entorno virtual, ejecuta:${NC} source .venv/bin/activate"
 echo -e "${YELLOW}Para ejecutar pruebas unitarias:${NC} pytest -m unit"
 echo -e "${YELLOW}Para ejecutar pruebas de agentes:${NC} pytest -m agents"
 echo -e "${YELLOW}Para ejecutar todas las pruebas:${NC} pytest"

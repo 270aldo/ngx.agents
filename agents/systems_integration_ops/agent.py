@@ -18,6 +18,9 @@ from agents.base.adk_agent import ADKAgent
 from core.agent_card import AgentCard, Example
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from core.logging_config import get_logger
+from core.vision_processor import VisionProcessor
+from infrastructure.adapters.vision_adapter import VisionAdapter
+from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -71,6 +74,51 @@ class GeneralRequestInput(BaseModel):
 
 class GeneralRequestOutput(BaseModel):
     response: str = Field(..., description="Respuesta detallada a la consulta general")
+
+# Esquemas para capacidades de visión
+class VisualSystemAnalysisInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre análisis visual de sistemas")
+    image_data: str = Field(..., description="Datos de la imagen en formato base64")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class VisualSystemAnalysisOutput(BaseModel):
+    analysis_id: str = Field(..., description="ID único del análisis")
+    response: str = Field(..., description="Respuesta detallada del análisis visual de sistemas")
+    analysis_summary: str = Field(..., description="Resumen del análisis")
+    system_components: List[Dict[str, Any]] = Field(..., description="Componentes del sistema identificados")
+    integration_points: List[Dict[str, Any]] = Field(..., description="Puntos de integración identificados")
+    recommendations: List[str] = Field(..., description="Recomendaciones basadas en el análisis visual")
+    confidence_score: float = Field(..., description="Puntuación de confianza del análisis")
+
+class VisualIntegrationVerificationInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre verificación visual de integración")
+    image_data: str = Field(..., description="Datos de la imagen en formato base64")
+    integration_type: Optional[str] = Field(None, description="Tipo de integración a verificar")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class VisualIntegrationVerificationOutput(BaseModel):
+    verification_id: str = Field(..., description="ID único de la verificación")
+    response: str = Field(..., description="Respuesta detallada de la verificación visual de integración")
+    verification_summary: str = Field(..., description="Resumen de la verificación")
+    integration_status: Dict[str, Any] = Field(..., description="Estado de la integración verificada")
+    issues_detected: List[Dict[str, Any]] = Field(..., description="Problemas detectados en la integración")
+    recommendations: List[str] = Field(..., description="Recomendaciones para mejorar la integración")
+    confidence_score: float = Field(..., description="Puntuación de confianza de la verificación")
+
+class VisualDataFlowAnalysisInput(BaseModel):
+    query: str = Field(..., description="Consulta del usuario sobre análisis visual de flujo de datos")
+    image_data: str = Field(..., description="Datos de la imagen en formato base64")
+    flow_type: Optional[str] = Field(None, description="Tipo de flujo de datos a analizar")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexto adicional para la consulta")
+
+class VisualDataFlowAnalysisOutput(BaseModel):
+    analysis_id: str = Field(..., description="ID único del análisis")
+    response: str = Field(..., description="Respuesta detallada del análisis visual de flujo de datos")
+    analysis_summary: str = Field(..., description="Resumen del análisis")
+    data_flow_components: List[Dict[str, Any]] = Field(..., description="Componentes del flujo de datos identificados")
+    bottlenecks: List[Dict[str, Any]] = Field(..., description="Cuellos de botella identificados")
+    optimization_suggestions: List[str] = Field(..., description="Sugerencias de optimización")
+    confidence_score: float = Field(..., description="Puntuación de confianza del análisis")
 
 # Definir las skills como clases que heredan de GoogleADKSkill
 class IntegrationRequestSkill(GoogleADKSkill):
@@ -417,6 +465,332 @@ class GeneralRequestSkill(GoogleADKSkill):
             response=response_text
         )
 
+# Skills para capacidades de visión
+class VisualSystemAnalysisSkill(GoogleADKSkill):
+    name = "visual_system_analysis"
+    description = "Analiza visualmente diagramas y capturas de sistemas para identificar componentes y puntos de integración"
+    input_schema = VisualSystemAnalysisInput
+    output_schema = VisualSystemAnalysisOutput
+    
+    async def handler(self, input_data: VisualSystemAnalysisInput) -> VisualSystemAnalysisOutput:
+        """Implementación de la skill de análisis visual de sistemas"""
+        query = input_data.query
+        image_data = input_data.image_data
+        context = input_data.context or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+            return self._generate_mock_system_analysis(input_data)
+        
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            vision_result = await self.agent.vision_processor.analyze_image(image_data)
+            
+            # Construir el prompt para el análisis detallado
+            prompt = f"""
+            Eres un experto en integración de sistemas y arquitectura tecnológica.
+            
+            Analiza esta imagen con la siguiente consulta:
+            "{query}"
+            
+            Descripción de la imagen según el análisis inicial:
+            {vision_result.get('text', 'No disponible')}
+            
+            Proporciona un análisis detallado del sistema mostrado en la imagen que incluya:
+            1. Resumen del sistema visualizado
+            2. Componentes principales identificados
+            3. Puntos de integración entre componentes
+            4. Posibles cuellos de botella o áreas de mejora
+            5. Recomendaciones para optimizar la integración
+            
+            Estructura tu análisis de forma clara y accionable.
+            """
+            
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Generar análisis utilizando Gemini
+            analysis_text = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados del análisis
+            extraction_prompt = f"""
+            Basándote en el siguiente análisis de un sistema visualizado en una imagen:
+            
+            {analysis_text}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. analysis_summary: resumen conciso del análisis del sistema
+            2. system_components: lista de componentes del sistema identificados (array de objetos con "name", "type" y "description")
+            3. integration_points: lista de puntos de integración identificados (array de objetos con "source", "target" y "integration_type")
+            4. recommendations: lista de recomendaciones para mejorar la integración (array de strings)
+            5. confidence_score: puntuación de confianza del análisis (0-1)
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para el análisis
+            analysis_id = str(uuid.uuid4())
+            
+            # Crear respuesta estructurada
+            return VisualSystemAnalysisOutput(
+                analysis_id=analysis_id,
+                response=analysis_text,
+                analysis_summary=structured_data.get("analysis_summary", "Análisis visual de sistema"),
+                system_components=structured_data.get("system_components", [{"name": "Componente genérico", "type": "desconocido", "description": "No se identificaron componentes específicos"}]),
+                integration_points=structured_data.get("integration_points", [{"source": "Componente A", "target": "Componente B", "integration_type": "desconocido"}]),
+                recommendations=structured_data.get("recommendations", ["Realizar un análisis más detallado"]),
+                confidence_score=structured_data.get("confidence_score", 0.7)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en análisis visual de sistema: {e}", exc_info=True)
+            return self._generate_mock_system_analysis(input_data)
+    
+    def _generate_mock_system_analysis(self, input_data: VisualSystemAnalysisInput) -> VisualSystemAnalysisOutput:
+        """Genera un análisis simulado cuando las capacidades de visión no están disponibles"""
+        analysis_id = str(uuid.uuid4())
+        
+        return VisualSystemAnalysisOutput(
+            analysis_id=analysis_id,
+            response="No se pudo realizar un análisis detallado del sistema en la imagen. Por favor, proporciona una descripción textual de lo que muestra la imagen para poder ayudarte mejor.",
+            analysis_summary="Análisis simulado de sistema en imagen",
+            system_components=[
+                {"name": "Componente desconocido", "type": "no identificado", "description": "No se pudo analizar el contenido específico"}
+            ],
+            integration_points=[
+                {"source": "Componente A", "target": "Componente B", "integration_type": "no identificado"}
+            ],
+            recommendations=[
+                "Proporcionar una descripción textual del sistema",
+                "Intentar nuevamente cuando las capacidades de visión estén disponibles",
+                "Realizar un análisis manual del sistema"
+            ],
+            confidence_score=0.1
+        )
+
+class VisualIntegrationVerificationSkill(GoogleADKSkill):
+    name = "visual_integration_verification"
+    description = "Verifica visualmente la integración entre sistemas mediante el análisis de capturas de pantalla o diagramas"
+    input_schema = VisualIntegrationVerificationInput
+    output_schema = VisualIntegrationVerificationOutput
+    
+    async def handler(self, input_data: VisualIntegrationVerificationInput) -> VisualIntegrationVerificationOutput:
+        """Implementación de la skill de verificación visual de integración"""
+        query = input_data.query
+        image_data = input_data.image_data
+        integration_type = input_data.integration_type or "No especificado"
+        context = input_data.context or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Capacidades de visión no disponibles. Usando verificación simulada.")
+            return self._generate_mock_integration_verification(input_data)
+        
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            vision_result = await self.agent.vision_processor.analyze_image(image_data)
+            
+            # Construir el prompt para el análisis detallado
+            prompt = f"""
+            Eres un experto en integración de sistemas y verificación de conexiones entre aplicaciones.
+            
+            Analiza esta imagen con la siguiente consulta:
+            "{query}"
+            
+            Tipo de integración a verificar: {integration_type}
+            
+            Descripción de la imagen según el análisis inicial:
+            {vision_result.get('text', 'No disponible')}
+            
+            Proporciona una verificación detallada de la integración mostrada en la imagen que incluya:
+            1. Resumen del estado de la integración
+            2. Estado de la conexión (exitosa, fallida, parcial)
+            3. Problemas detectados (si los hay)
+            4. Recomendaciones para mejorar o solucionar problemas
+            5. Nivel de confianza en la verificación
+            
+            Estructura tu verificación de forma clara y accionable.
+            """
+            
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Generar análisis utilizando Gemini
+            verification_text = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados del análisis
+            extraction_prompt = f"""
+            Basándote en la siguiente verificación de integración:
+            
+            {verification_text}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. verification_summary: resumen conciso de la verificación
+            2. integration_status: objeto con "status" (exitosa/fallida/parcial), "connection_type", "timestamp"
+            3. issues_detected: lista de problemas detectados (array de objetos con "issue_type", "description", "severity")
+            4. recommendations: lista de recomendaciones para mejorar la integración (array de strings)
+            5. confidence_score: puntuación de confianza de la verificación (0-1)
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para la verificación
+            verification_id = str(uuid.uuid4())
+            
+            # Crear respuesta estructurada
+            return VisualIntegrationVerificationOutput(
+                verification_id=verification_id,
+                response=verification_text,
+                verification_summary=structured_data.get("verification_summary", "Verificación visual de integración"),
+                integration_status=structured_data.get("integration_status", {"status": "desconocido", "connection_type": integration_type, "timestamp": datetime.datetime.now().isoformat()}),
+                issues_detected=structured_data.get("issues_detected", [{"issue_type": "desconocido", "description": "No se identificaron problemas específicos", "severity": "baja"}]),
+                recommendations=structured_data.get("recommendations", ["Realizar una verificación más detallada"]),
+                confidence_score=structured_data.get("confidence_score", 0.7)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en verificación visual de integración: {e}", exc_info=True)
+            return self._generate_mock_integration_verification(input_data)
+    
+    def _generate_mock_integration_verification(self, input_data: VisualIntegrationVerificationInput) -> VisualIntegrationVerificationOutput:
+        """Genera una verificación simulada cuando las capacidades de visión no están disponibles"""
+        verification_id = str(uuid.uuid4())
+        integration_type = input_data.integration_type or "No especificado"
+        
+        return VisualIntegrationVerificationOutput(
+            verification_id=verification_id,
+            response="No se pudo realizar una verificación detallada de la integración en la imagen. Por favor, proporciona una descripción textual de lo que muestra la imagen para poder ayudarte mejor.",
+            verification_summary="Verificación simulada de integración en imagen",
+            integration_status={
+                "status": "desconocido",
+                "connection_type": integration_type,
+                "timestamp": datetime.datetime.now().isoformat()
+            },
+            issues_detected=[
+                {"issue_type": "verificación_limitada", "description": "No se pudo analizar el contenido específico", "severity": "media"}
+            ],
+            recommendations=[
+                "Proporcionar una descripción textual de la integración",
+                "Intentar nuevamente cuando las capacidades de visión estén disponibles",
+                "Realizar una verificación manual de la integración"
+            ],
+            confidence_score=0.1
+        )
+
+class VisualDataFlowAnalysisSkill(GoogleADKSkill):
+    name = "visual_data_flow_analysis"
+    description = "Analiza visualmente diagramas de flujo de datos para identificar componentes, relaciones y posibles optimizaciones"
+    input_schema = VisualDataFlowAnalysisInput
+    output_schema = VisualDataFlowAnalysisOutput
+    
+    async def handler(self, input_data: VisualDataFlowAnalysisInput) -> VisualDataFlowAnalysisOutput:
+        """Implementación de la skill de análisis visual de flujo de datos"""
+        query = input_data.query
+        image_data = input_data.image_data
+        flow_type = input_data.flow_type or "No especificado"
+        context = input_data.context or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+            return self._generate_mock_data_flow_analysis(input_data)
+        
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            vision_result = await self.agent.vision_processor.analyze_image(image_data)
+            
+            # Construir el prompt para el análisis detallado
+            prompt = f"""
+            Eres un experto en arquitectura de datos y análisis de flujos de datos.
+            
+            Analiza esta imagen con la siguiente consulta:
+            "{query}"
+            
+            Tipo de flujo de datos a analizar: {flow_type}
+            
+            Descripción de la imagen según el análisis inicial:
+            {vision_result.get('text', 'No disponible')}
+            
+            Proporciona un análisis detallado del flujo de datos mostrado en la imagen que incluya:
+            1. Resumen del flujo de datos
+            2. Componentes principales identificados
+            3. Relaciones y dependencias entre componentes
+            4. Cuellos de botella o áreas de ineficiencia
+            5. Sugerencias de optimización
+            
+            Estructura tu análisis de forma clara y accionable.
+            """
+            
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Generar análisis utilizando Gemini
+            analysis_text = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados del análisis
+            extraction_prompt = f"""
+            Basándote en el siguiente análisis de flujo de datos:
+            
+            {analysis_text}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. analysis_summary: resumen conciso del análisis del flujo de datos
+            2. data_flow_components: lista de componentes del flujo de datos (array de objetos con "name", "type", "description", "role")
+            3. bottlenecks: lista de cuellos de botella identificados (array de objetos con "component", "issue", "impact")
+            4. optimization_suggestions: lista de sugerencias de optimización (array de strings)
+            5. confidence_score: puntuación de confianza del análisis (0-1)
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para el análisis
+            analysis_id = str(uuid.uuid4())
+            
+            # Crear respuesta estructurada
+            return VisualDataFlowAnalysisOutput(
+                analysis_id=analysis_id,
+                response=analysis_text,
+                analysis_summary=structured_data.get("analysis_summary", "Análisis visual de flujo de datos"),
+                data_flow_components=structured_data.get("data_flow_components", [{"name": "Componente genérico", "type": "desconocido", "description": "No se identificaron componentes específicos", "role": "desconocido"}]),
+                bottlenecks=structured_data.get("bottlenecks", [{"component": "No identificado", "issue": "No se identificaron cuellos de botella específicos", "impact": "desconocido"}]),
+                optimization_suggestions=structured_data.get("optimization_suggestions", ["Realizar un análisis más detallado"]),
+                confidence_score=structured_data.get("confidence_score", 0.7)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en análisis visual de flujo de datos: {e}", exc_info=True)
+            return self._generate_mock_data_flow_analysis(input_data)
+    
+    def _generate_mock_data_flow_analysis(self, input_data: VisualDataFlowAnalysisInput) -> VisualDataFlowAnalysisOutput:
+        """Genera un análisis simulado cuando las capacidades de visión no están disponibles"""
+        analysis_id = str(uuid.uuid4())
+        flow_type = input_data.flow_type or "No especificado"
+        
+        return VisualDataFlowAnalysisOutput(
+            analysis_id=analysis_id,
+            response="No se pudo realizar un análisis detallado del flujo de datos en la imagen. Por favor, proporciona una descripción textual de lo que muestra la imagen para poder ayudarte mejor.",
+            analysis_summary="Análisis simulado de flujo de datos en imagen",
+            data_flow_components=[
+                {"name": "Componente desconocido", "type": "no identificado", "description": "No se pudo analizar el contenido específico", "role": "desconocido"}
+            ],
+            bottlenecks=[
+                {"component": "No identificado", "issue": "No se pudieron identificar cuellos de botella", "impact": "desconocido"}
+            ],
+            optimization_suggestions=[
+                "Proporcionar una descripción textual del flujo de datos",
+                "Intentar nuevamente cuando las capacidades de visión estén disponibles",
+                "Realizar un análisis manual del flujo de datos"
+            ],
+            confidence_score=0.1
+        )
+
 class SystemsIntegrationOps(ADKAgent):
     """
     Agente especializado en integración de sistemas y automatización.
@@ -440,7 +814,11 @@ class SystemsIntegrationOps(ADKAgent):
             ApiRequestSkill(),
             InfrastructureRequestSkill(),
             DataPipelineRequestSkill(),
-            GeneralRequestSkill()
+            GeneralRequestSkill(),
+            # Añadir skills de visión
+            VisualSystemAnalysisSkill(),
+            VisualIntegrationVerificationSkill(),
+            VisualDataFlowAnalysisSkill()
         ]
         
         # Definir capacidades según el protocolo ADK
@@ -585,6 +963,26 @@ class SystemsIntegrationOps(ADKAgent):
         self.update_state("api_requests", {})  # Almacenar solicitudes de API
         self.update_state("infrastructure_requests", {})  # Almacenar solicitudes de infraestructura
         self.update_state("data_pipeline_requests", {})  # Almacenar solicitudes de pipeline de datos
+        
+        # Inicializar componentes de visión y multimodales
+        try:
+            # Inicializar adaptador de visión
+            vision_adapter = VisionAdapter()
+            
+            # Inicializar procesador de visión
+            self.vision_processor = VisionProcessor(vision_adapter)
+            
+            # Inicializar adaptador multimodal
+            self.multimodal_adapter = MultimodalAdapter()
+            
+            # Establecer bandera de capacidades de visión disponibles
+            self._vision_capabilities_available = True
+            
+            logger.info(f"Capacidades de visión inicializadas correctamente para el agente {self.agent_id}")
+        except Exception as e:
+            logger.error(f"Error al inicializar capacidades de visión: {e}", exc_info=True)
+            self._vision_capabilities_available = False
+            logger.warning(f"El agente {self.agent_id} funcionará sin capacidades de visión")
         
         logger.info(f"SystemsIntegrationOps inicializado con {len(capabilities)} capacidades y {len(skills)} skills")
     

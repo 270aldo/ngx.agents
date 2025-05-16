@@ -6,10 +6,12 @@ set -e  # Salir inmediatamente si algún comando falla
 echo "Ejecutando pruebas del adaptador de Vertex AI..."
 
 # Configurar entorno de pruebas
-source setup_test_env.sh
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+PROJECT_ROOT_DIR=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
+source "$PROJECT_ROOT_DIR/setup_test_env.sh"
 
 # Ejecutar pruebas específicas del adaptador
-python -m pytest tests/test_vertex_ai_client_adapter.py -v
+python -m pytest scripts/test_vertex_ai_adapter.py -v
 
 # Si se desea, también se pueden ejecutar pruebas de integración
 # para verificar que el adaptador funciona con componentes reales
@@ -27,7 +29,8 @@ con componentes reales del sistema.
 
 import pytest
 import asyncio
-from clients.vertex_ai import vertex_ai_client
+from clients.vertex_ai.client import VertexAIClient
+vertex_ai_client = VertexAIClient()
 
 @pytest.mark.asyncio
 async def test_adapter_with_intent_analyzer():
@@ -35,7 +38,7 @@ async def test_adapter_with_intent_analyzer():
     from core.intent_analyzer import IntentAnalyzer
     
     # Inicializar cliente
-    await vertex_ai_client.initialize()
+
     
     try:
         # Crear analizador de intenciones con el adaptador
@@ -57,7 +60,7 @@ async def test_adapter_with_intent_analyzer():
 async def test_adapter_direct_usage():
     """Prueba el uso directo del adaptador."""
     # Inicializar cliente
-    await vertex_ai_client.initialize()
+
     
     try:
         # Generar contenido simple

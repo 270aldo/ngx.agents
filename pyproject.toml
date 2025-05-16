@@ -17,14 +17,10 @@ python = ">= 3.9, < 3.12"
 
 # API y servidor
 fastapi = "^0.115.0"
-uvicorn = {extras = ["standard"], version = "^0.27.0"}
+uvicorn = {extras = ["standard"], version = "^0.34.2"}
 python-dotenv = "^1.0.0"
-pydantic = "^2.0.0"
+pydantic = ">=2.6.0,<3.0.0"  # Actualizado para consistencia en todo el proyecto
 pydantic-settings = "^2.0.0"
-
-# Autenticación
-# python-jose = {extras = ["cryptography"], version = ">=3.3.0,<4.0.0"} 
-# passlib = {extras = ["bcrypt"], version = ">=1.7.4,<2.0.0"} 
 
 # Comunicación
 websockets = "^13.0.0"
@@ -33,27 +29,21 @@ google-adk = "^0.1.0"
 sse-starlette = "^1.6.0"
 
 # Logging
-python-json-logger = "^2.0.0"
+python-json-logger = ">=2.0.7,<3.0.0"  # Actualizado para consistencia
 
 # HTTP
-httpx = "^0.28.1" # Pin to ADK-required range
+httpx = "^0.28.1"  # Versión requerida por ADK
 
 # Base de datos
-supabase = "^2.0.0"
+supabase = ">2.3.0,<3.0.0"  # Actualizado para consistencia
 google-generativeai = "^0.8.5"
+redis = {extras = ["hiredis"], version = "^5.0.1"}  # Para caché y state manager
 
-# Telemetría OpenTelemetry
-opentelemetry-api = "^1.33.0"
-opentelemetry-sdk = "^1.33.0"
-opentelemetry-instrumentation-fastapi = "^0.54b0"
-opentelemetry-instrumentation-httpx = "^0.54b0"
-opentelemetry-instrumentation-logging = "^0.54b0"
-opentelemetry-instrumentation-aiohttp-client = "^0.54b0"
-opentelemetry-exporter-cloud-trace = "^0.10b1"
-
-# Google Cloud
-google-cloud-trace = "^1.16.1"
-protobuf = "^5.26.1"
+# Caché avanzado
+xxhash = "^3.4.1"  # Para hashing más rápido
+zstandard = "^0.22.0"  # Algoritmo de compresión alternativo
+matplotlib = "^3.8.3"  # Para visualización en scripts de optimización
+tabulate = "^0.9.0"  # Para formateo tabular en scripts de optimización
 
 # Dependencias consolidadas de todos los componentes
 [tool.poetry.group.agents]
@@ -71,6 +61,10 @@ optional = true
 [tool.poetry.group.clients.dependencies]
 httpx = "^0.28.1"
 websockets = "^13.0.0"
+redis = {extras = ["hiredis"], version = "^5.0.1"}
+xxhash = "^3.4.1"
+zstandard = "^0.22.0"
+google-generativeai = "^0.8.5"
 
 [tool.poetry.group.core]
 optional = true
@@ -109,9 +103,19 @@ opentelemetry-instrumentation-fastapi = "^0.54b0"
 opentelemetry-instrumentation-httpx = "^0.54b0"
 opentelemetry-instrumentation-logging = "^0.54b0"
 opentelemetry-instrumentation-aiohttp-client = "^0.54b0"
-opentelemetry-exporter-cloud-trace = "^0.10b1"
+opentelemetry-exporter-gcp-trace = "^1.9.0"
 google-cloud-trace = "^1.16.1"
-protobuf = "^6.30.0"
+protobuf = "^5.26.1"
+
+[tool.poetry.group.app]
+optional = true
+
+[tool.poetry.group.app.dependencies]
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.34.2"}
+python-dotenv = "^1.0.0"
+pydantic = ">=2.6.0,<3.0.0"
+pydantic-settings = "^2.0.0"
 
 [build-system]
 requires = ["poetry-core"]
@@ -148,8 +152,3 @@ disallow_incomplete_defs = true
 [tool.ruff]
 line-length = 88
 target-version = "py39"
-
-[tool.poetry.group.app]
-optional = true
-
-[tool.poetry.group.app.dependencies]

@@ -21,6 +21,7 @@ from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adap
 from core.telemetry import telemetry
 from app.schemas.a2a import A2ATaskContext
 from infrastructure.a2a_optimized import MessagePriority
+from clients.vertex_ai.client import VertexAIClient
 
 logger = get_logger(__name__)
 
@@ -58,6 +59,9 @@ class OrchestratorAdapter(NGXNexusOrchestrator, BaseAgentAdapter):
         """
         super().__init__(**kwargs)
         
+        # Inicializar el cliente de Vertex AI
+        self.vertex_ai_client = VertexAIClient()
+        
         # Inicializar métricas de telemetría
         self.metrics = {
             "messages_routed": 0,
@@ -81,6 +85,27 @@ class OrchestratorAdapter(NGXNexusOrchestrator, BaseAgentAdapter):
         ]
         
         logger.info(f"Adaptador del Orchestrator inicializado: {self.agent_id}")
+    
+    async def initialize(self) -> bool:
+        """
+        Inicializa el adaptador y registra el agente con el servidor A2A.
+        
+        Returns:
+            bool: True si la inicialización fue exitosa
+        """
+        try:
+            # Registrar el agente con el servidor A2A
+            await self._register_with_a2a_server()
+            
+            # Inicializar componentes
+            await intent_analyzer_adapter.initialize()
+            await state_manager_adapter.initialize()
+            
+            logger.info(f"Adaptador del Orchestrator inicializado correctamente: {self.agent_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error al inicializar el adaptador del Orchestrator: {e}", exc_info=True)
+            return False
     
     def _create_default_context(self) -> Dict[str, Any]:
         """
@@ -725,17 +750,20 @@ class OrchestratorAdapter(NGXNexusOrchestrator, BaseAgentAdapter):
                 self.metrics["agent_calls"][agent_id] = self.metrics["agent_calls"].get(agent_id, 0) + 1
                 
                 # Crear el contexto de la tarea
-                task_context_data = A2ATaskContext(
-                    session_id=session_id, 
-                    user_id=user_id, 
-                    additional_context=context if context else {}
-                )
+                task_context = {}
+                if context:
+                    task_context = context.copy()
+                
+                if user_id:
+                    task_context["user_id"] = user_id
+                if session_id:
+                    task_context["session_id"] = session_id
                 
                 # Llamar al agente utilizando el adaptador A2A
                 response = await a2a_adapter.call_agent(
                     agent_id=agent_id,
                     user_input=query,
-                    context=task_context_data
+                    context=task_context
                 )
                 
                 # Registrar telemetría
@@ -756,53 +784,19 @@ class OrchestratorAdapter(NGXNexusOrchestrator, BaseAgentAdapter):
             return {
                 "status": "error",
                 "error": str(e),
-                "output": f"Error al consultar al agente {agent_id}.",
+                "output": f"Error al consultar al agente {agent_id}: {str(e)}",
                 "agent_id": agent_id
             }
     
-    async def _register_with_a2a_server(self):
+    async def get_metrics(self) -> Dict[str, Any]:
         """
-        Registra el adaptador del Orchestrator con el servidor A2A optimizado.
+        Obtiene las métricas de rendimiento del adaptador.
         
-        Este método permite que otros agentes puedan consultar al Orchestrator
-        a través del sistema A2A optimizado.
+        Returns:
+            Dict[str, Any]: Métricas de rendimiento
         """
-        try:
-            with telemetry.start_span("orchestrator.register_with_a2a"):
-                # Registrar el adaptador con el servidor A2A optimizado
-                await a2a_adapter.register_agent(
-                    agent_id=self.agent_id,
-                    agent_name=self.name,
-                    agent_description=self.description,
-                    agent_version=self.version,
-                    agent_capabilities=self.capabilities,
-                    handler=self.run_async_impl
-                )
-                
-                # Registrar telemetría
-                telemetry.record_event("orchestrator", "registered_with_a2a", {
-                    "agent_id": self.agent_id,
-                    "agent_name": self.name,
-                    "agent_version": self.version
-                })
-                
-                logger.info(f"Adaptador del Orchestrator registrado con el servidor A2A optimizado: {self.agent_id}")
-        except Exception as e:
-            logger.error(f"Error al registrar el adaptador del Orchestrator con el servidor A2A optimizado: {e}", exc_info=True)
-            telemetry.record_error("orchestrator", "registration_failed", {
-                "error": str(e)
-            })
-
-# Crear una instancia del adaptador
-orchestrator_adapter = OrchestratorAdapter()
-
-# Función para inicializar el adaptador
-async def initialize_orchestrator_adapter():
-    """
-    Inicializa el adaptador del Orchestrator y lo registra con el servidor A2A optimizado.
-    """
-    try:
-        await orchestrator_adapter._register_with_a2a_server()
-        logger.info("Adaptador del Orchestrator inicializado y registrado correctamente.")
-    except Exception as e:
-        logger.error(f"Error al inicializar el adaptador del Orchestrator: {e}", exc_info=True)
+        return {
+            "agent_id": self.agent_id,
+            "agent_name": self.name,
+            "metrics": self.metrics
+        }

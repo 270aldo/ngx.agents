@@ -7,12 +7,18 @@ necesarios para utilizar el sistema A2A optimizado y el cliente Vertex AI optimi
 
 import logging
 import time
-from typing import Dict, Any, Optional, List, Union
+import asyncio
+from typing import Dict, Any, Optional, List, Union, Tuple
 from datetime import datetime
 
 from agents.recovery_corrective.agent import RecoveryCorrective
 from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
+from infrastructure.adapters.a2a_adapter import a2a_adapter
+from infrastructure.adapters.state_manager_adapter import state_manager_adapter
+from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
+from core.telemetry_adapter import telemetry_adapter
 from core.logging_config import get_logger
+from clients.vertex_ai_client_adapter import vertex_ai_client
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -24,6 +30,107 @@ class RecoveryCorrectiveAdapter(RecoveryCorrective, BaseAgentAdapter):
     Este adaptador extiende el agente RecoveryCorrective original y utiliza la clase
     BaseAgentAdapter para implementar métodos comunes.
     """
+    
+    def __init__(self, *args, **kwargs):
+        """
+        Inicializa el adaptador del RecoveryCorrective.
+        
+        Args:
+            *args: Argumentos posicionales para la clase base
+            **kwargs: Argumentos de palabras clave para la clase base
+        """
+        super().__init__(*args, **kwargs)
+        
+        # Configuración de clasificación específica para este agente
+        self.fallback_keywords = [
+            "lesión", "injury", "dolor", "pain", "recuperación", "recovery",
+            "rehabilitación", "rehabilitation", "movilidad", "mobility",
+            "ejercicio", "exercise", "terapia", "therapy", "corrección", "correction"
+        ]
+        
+        self.excluded_keywords = [
+            "nutrición", "nutrition", "dieta", "diet", "entrenamiento", "training",
+            "programa", "program", "plan", "schedule"
+        ]
+        
+        # Métricas de telemetría
+        self.metrics = {
+            "queries_processed": 0,
+            "successful_queries": 0,
+            "failed_queries": 0,
+            "average_processing_time": 0,
+            "total_processing_time": 0,
+            "query_types": {}
+        }
+        
+        logger.info(f"Adaptador del RecoveryCorrective inicializado: {self.agent_id}")
+    
+    async def initialize(self) -> bool:
+        """
+        Inicializa el adaptador y registra el agente con el servidor A2A.
+        
+        Returns:
+            bool: True si la inicialización fue exitosa
+        """
+        try:
+            # Registrar el agente con el servidor A2A
+            await self._register_with_a2a_server()
+            
+            # Inicializar componentes
+            await intent_analyzer_adapter.initialize()
+            await state_manager_adapter.initialize()
+            
+            logger.info(f"Adaptador del RecoveryCorrective inicializado correctamente: {self.agent_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error al inicializar el adaptador del RecoveryCorrective: {e}", exc_info=True)
+            return False
+    
+    async def _register_with_a2a_server(self) -> None:
+        """
+        Registra el agente con el servidor A2A optimizado.
+        """
+        try:
+            # Crear función de callback para recibir mensajes
+            async def message_handler(message: Dict[str, Any]) -> Dict[str, Any]:
+                try:
+                    # Extraer información del mensaje
+                    user_input = message.get("user_input", "")
+                    context = message.get("context", {})
+                    user_id = context.get("user_id", "anonymous")
+                    session_id = context.get("session_id", "")
+                    
+                    # Procesar la consulta
+                    response = await self.run_async_impl(
+                        query=user_input,
+                        user_id=user_id,
+                        session_id=session_id,
+                        context=context
+                    )
+                    
+                    return response
+                except Exception as e:
+                    logger.error(f"Error en message_handler: {e}", exc_info=True)
+                    return {
+                        "status": "error",
+                        "error": str(e),
+                        "output": "Lo siento, ha ocurrido un error al procesar tu solicitud."
+                    }
+            
+            # Registrar el agente con el adaptador A2A
+            a2a_adapter.register_agent(
+                agent_id=self.agent_id,
+                agent_info={
+                    "name": self.name,
+                    "description": self.description,
+                    "message_callback": message_handler
+                }
+            )
+            
+            logger.info(f"Agente RecoveryCorrective registrado con el servidor A2A: {self.agent_id}")
+        except Exception as e:
+            logger.error(f"Error al registrar el agente RecoveryCorrective con el servidor A2A: {e}", exc_info=True)
+            raise
     
     def _create_default_context(self) -> Dict[str, Any]:
         """
@@ -57,62 +164,264 @@ class RecoveryCorrectiveAdapter(RecoveryCorrective, BaseAgentAdapter):
             "rehabilitation": "rehabilitation_protocol"
         }
     
-    def _process_query(self, query: str, query_type: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _adjust_score_based_on_context(self, score: float, context: Dict[str, Any]) -> float:
         """
-        Procesa una consulta específica para el agente RecoveryCorrective.
+        Ajusta la puntuación de clasificación basada en el contexto.
         
         Args:
-            query: Consulta del usuario
-            query_type: Tipo de consulta identificado
-            context: Contexto actual del agente
+            score: Puntuación de clasificación original
+            context: Contexto adicional para la clasificación
             
         Returns:
-            Dict[str, Any]: Resultado del procesamiento
+            float: Puntuación ajustada
         """
-        logger.info(f"RecoveryCorrectiveAdapter procesando consulta de tipo: {query_type}")
+        # Puntuación base
+        adjusted_score = score
         
-        # Registrar telemetría para el inicio del procesamiento
-        self._register_telemetry_event("process_query_start", {
-            "query_type": query_type,
-            "agent": "recovery_corrective"
-        })
+        # Si hay evaluaciones de lesiones o planes de recuperación previos, aumentar la puntuación
+        if context.get("injury_assessments") or context.get("recovery_plans"):
+            adjusted_score += 0.15
         
+        # Si hay ejercicios de movilidad previos, aumentar la puntuación
+        if context.get("mobility_exercises"):
+            adjusted_score += 0.1
+        
+        # Si el contexto menciona lesiones o dolor, aumentar la puntuación
+        if context.get("mentions_injury", False) or context.get("mentions_pain", False):
+            adjusted_score += 0.2
+        
+        # Limitar la puntuación máxima a 1.0
+        return min(1.0, adjusted_score)
+    
+    async def _process_query(self, query: str, user_id: str, session_id: str,
+                           program_type: str, state: Dict[str, Any], profile: Dict[str, Any],
+                           **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la consulta del usuario.
+        
+        Este método implementa la lógica específica del RecoveryCorrective utilizando la funcionalidad
+        de la clase base BaseAgentAdapter.
+        
+        Args:
+            query: La consulta del usuario
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            program_type: Tipo de programa (general, elite, etc.)
+            state: Estado actual del usuario
+            profile: Perfil del usuario
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta del agente
+        """
         try:
+            # Iniciar span de telemetría
+            span = telemetry_adapter.start_span("recovery_corrective.process_query")
+            
+            # Incrementar contador de consultas procesadas
+            self.metrics["queries_processed"] += 1
+            
+            # Registrar inicio de procesamiento
+            start_time = time.time()
+            
+            # Analizar la intención para determinar el tipo de consulta
+            intent_result = await intent_analyzer_adapter.analyze_intent(query)
+            
+            # Determinar el tipo de consulta basado en la intención
+            query_type = self._determine_query_type(intent_result, query)
+            
+            # Registrar distribución de tipos de consulta
+            self.metrics["query_types"][query_type] = self.metrics["query_types"].get(query_type, 0) + 1
+            
+            # Registrar información de telemetría
+            telemetry_adapter.set_span_attribute(span, "query_type", query_type)
+            telemetry_adapter.set_span_attribute(span, "user_id", user_id)
+            telemetry_adapter.set_span_attribute(span, "session_id", session_id)
+            
             # Procesar según el tipo de consulta
             if query_type == "assess_injury":
-                result = self._assess_injury(query, context)
+                result = self._assess_injury(query, state)
             elif query_type == "assess_pain":
-                result = self._assess_pain(query, context)
+                result = self._assess_pain(query, state)
             elif query_type == "improve_mobility":
-                result = self._improve_mobility(query, context)
+                result = self._improve_mobility(query, state)
             elif query_type == "create_recovery_plan":
-                result = self._create_recovery_plan(query, context)
+                result = self._create_recovery_plan(query, state)
             elif query_type == "recommend_exercises":
-                result = self._recommend_exercises(query, context)
+                result = self._recommend_exercises(query, state)
             elif query_type == "rehabilitation_protocol":
-                result = self._create_rehabilitation_protocol(query, context)
+                result = self._create_rehabilitation_protocol(query, state)
             else:
                 # Tipo de consulta no reconocido, usar procesamiento genérico
-                result = self._process_generic_query(query, context)
+                result = self._process_generic_query(query, state)
             
-            # Registrar telemetría para el final del procesamiento exitoso
-            self._register_telemetry_event("process_query_success", {
+            # Calcular tiempo de procesamiento
+            end_time = time.time()
+            processing_time = end_time - start_time
+            
+            # Actualizar métricas
+            self.metrics["successful_queries"] += 1
+            self.metrics["total_processing_time"] += processing_time
+            self.metrics["average_processing_time"] = (
+                self.metrics["total_processing_time"] / self.metrics["successful_queries"]
+            )
+            
+            # Registrar información de telemetría
+            telemetry_adapter.set_span_attribute(span, "processing_time", processing_time)
+            telemetry_adapter.set_span_attribute(span, "success", True)
+            
+            # Finalizar span de telemetría
+            telemetry_adapter.end_span(span)
+            
+            # Preparar respuesta final
+            response = {
+                "status": "success",
+                "output": result.get("response", ""),
+                "agent_id": self.agent_id,
+                "agent_name": self.name,
                 "query_type": query_type,
-                "agent": "recovery_corrective"
-            })
+                "processing_time": processing_time
+            }
             
-            return result
+            return response
             
         except Exception as e:
-            # Registrar telemetría para el error
-            self._register_telemetry_event("process_query_error", {
-                "query_type": query_type,
-                "agent": "recovery_corrective",
-                "error": str(e)
-            })
+            # Incrementar contador de consultas fallidas
+            self.metrics["failed_queries"] += 1
             
-            # Relanzar la excepción para que sea manejada por el método base
-            raise
+            # Registrar error en telemetría
+            if 'span' in locals():
+                telemetry_adapter.set_span_attribute(span, "error", str(e))
+                telemetry_adapter.set_span_attribute(span, "success", False)
+                telemetry_adapter.end_span(span)
+            
+            logger.error(f"Error en _process_query: {e}", exc_info=True)
+            
+            # Devolver respuesta de error
+            return {
+                "status": "error",
+                "error": str(e),
+                "output": "Lo siento, ha ocurrido un error al procesar tu solicitud.",
+                "agent_id": self.agent_id,
+                "agent_name": self.name
+            }
+    
+    def _determine_query_type(self, intent_result: Dict[str, Any], query: str) -> str:
+        """
+        Determina el tipo de consulta basado en la intención y el texto.
+        
+        Args:
+            intent_result: Resultado del análisis de intención
+            query: Consulta del usuario
+            
+        Returns:
+            str: Tipo de consulta determinado
+        """
+        # Obtener el mapeo de intenciones a tipos de consulta
+        intent_mapping = self._get_intent_to_query_type_mapping()
+        
+        # Verificar si hay una intención reconocida
+        if intent_result and len(intent_result) > 0:
+            intent = intent_result[0]
+            intent_type = intent.intent_type.lower()
+            
+            # Buscar en el mapeo
+            for key, query_type in intent_mapping.items():
+                if key in intent_type:
+                    return query_type
+        
+        # Si no se encuentra una intención específica, determinar por palabras clave
+        query_lower = query.lower()
+        
+        if "lesión" in query_lower or "injury" in query_lower:
+            return "assess_injury"
+        elif "dolor" in query_lower or "pain" in query_lower:
+            return "assess_pain"
+        elif "movilidad" in query_lower or "mobility" in query_lower:
+            return "improve_mobility"
+        elif "recuperación" in query_lower or "recovery" in query_lower:
+            return "create_recovery_plan"
+        elif "ejercicio" in query_lower or "exercise" in query_lower:
+            return "recommend_exercises"
+        elif "rehabilitación" in query_lower or "rehabilitation" in query_lower:
+            return "rehabilitation_protocol"
+        
+        # Valor por defecto
+        return "generic_query"
+    
+    def _generate_response(self, prompt: str, context: Dict[str, Any]) -> str:
+        """
+        Genera una respuesta utilizando el cliente Vertex AI optimizado.
+        
+        Args:
+            prompt: Prompt para generar la respuesta
+            context: Contexto adicional
+            
+        Returns:
+            str: Respuesta generada
+        """
+        try:
+            # Construir el prompt completo con contexto
+            full_prompt = self._build_prompt_with_context(prompt, context)
+            
+            # Generar respuesta utilizando el cliente Vertex AI optimizado
+            response = vertex_ai_client.generate_text(
+                prompt=full_prompt,
+                max_tokens=1024,
+                temperature=0.7,
+                model="gemini-pro"
+            )
+            
+            return response
+        except Exception as e:
+            logger.error(f"Error al generar respuesta: {e}", exc_info=True)
+            return f"Lo siento, ha ocurrido un error al generar la respuesta: {str(e)}"
+    
+    def _build_prompt_with_context(self, prompt: str, context: Dict[str, Any]) -> str:
+        """
+        Construye un prompt completo incluyendo el contexto relevante.
+        
+        Args:
+            prompt: Prompt base
+            context: Contexto para incluir
+            
+        Returns:
+            str: Prompt completo con contexto
+        """
+        # Iniciar con el prompt base
+        full_prompt = f"Como especialista en recuperación y corrección de lesiones, {prompt}\n\n"
+        
+        # Añadir información del perfil del usuario si está disponible
+        if "user_profile" in context and context["user_profile"]:
+            profile = context["user_profile"]
+            full_prompt += "Información del usuario:\n"
+            
+            if "age" in profile:
+                full_prompt += f"- Edad: {profile['age']}\n"
+            if "gender" in profile:
+                full_prompt += f"- Género: {profile['gender']}\n"
+            if "fitness_level" in profile:
+                full_prompt += f"- Nivel de condición física: {profile['fitness_level']}\n"
+            if "medical_conditions" in profile:
+                full_prompt += f"- Condiciones médicas: {', '.join(profile['medical_conditions'])}\n"
+            
+            full_prompt += "\n"
+        
+        # Añadir evaluaciones de lesiones previas si están disponibles
+        if "injury_assessments" in context and context["injury_assessments"]:
+            # Tomar solo la evaluación más reciente para no sobrecargar el prompt
+            latest_assessment = context["injury_assessments"][-1]
+            full_prompt += f"Evaluación de lesión previa ({latest_assessment['date']}):\n"
+            full_prompt += f"{latest_assessment['assessment']}\n\n"
+        
+        # Añadir planes de recuperación previos si están disponibles
+        if "recovery_plans" in context and context["recovery_plans"]:
+            # Tomar solo el plan más reciente
+            latest_plan = context["recovery_plans"][-1]
+            full_prompt += f"Plan de recuperación previo ({latest_plan['date']}):\n"
+            full_prompt += f"{latest_plan['plan']}\n\n"
+        
+        return full_prompt
     
     def _assess_injury(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -327,3 +636,31 @@ class RecoveryCorrectiveAdapter(RecoveryCorrective, BaseAgentAdapter):
             "response": response,
             "context": context
         }
+    
+    async def get_metrics(self) -> Dict[str, Any]:
+        """
+        Obtiene las métricas de rendimiento del adaptador.
+        
+        Returns:
+            Dict[str, Any]: Métricas de rendimiento
+        """
+        return {
+            "agent_id": self.agent_id,
+            "agent_name": self.name,
+            "metrics": self.metrics
+        }
+
+
+# Crear instancia del adaptador
+recovery_corrective_adapter = RecoveryCorrectiveAdapter()
+
+# Función para inicializar el adaptador
+async def initialize_recovery_corrective_adapter():
+    """
+    Inicializa el adaptador del RecoveryCorrective y lo registra con el servidor A2A optimizado.
+    """
+    try:
+        await recovery_corrective_adapter.initialize()
+        logger.info("Adaptador del RecoveryCorrective inicializado y registrado correctamente.")
+    except Exception as e:
+        logger.error(f"Error al inicializar el adaptador del RecoveryCorrective: {e}", exc_info=True)

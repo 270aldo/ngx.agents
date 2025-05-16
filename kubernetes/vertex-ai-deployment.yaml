@@ -1,0 +1,772 @@
+---
+# ConfigMap para configuración de Vertex AI
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vertex-ai-config
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: vertex-ai
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "info"
+  VERTEX_AI_REGION: "us-central1"
+  VERTEX_AI_MODEL_ID: "text-bison"
+  VERTEX_CACHE_TTL: "3600"
+  VERTEX_MAX_CACHE_SIZE: "5000"
+  VERTEX_MAX_CONNECTIONS: "10"
+  USE_REDIS_CACHE: "true"
+  ENABLE_COMPRESSION: "true"
+  COMPRESSION_THRESHOLD: "1024"
+  ENABLE_MONITORING: "true"
+  ENABLE_TRACING: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+  OTEL_SERVICE_NAME: "vertex-ai-client"
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=ngx,service.version=1.0.0,service.component=vertex-ai"
+
+---
+# Secret para credenciales de Vertex AI
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vertex-ai-credentials
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: vertex-ai
+type: Opaque
+stringData:
+  # Estos valores deben ser reemplazados con secretos reales en un entorno de producción
+  # Preferiblemente usando un sistema de gestión de secretos como Secret Manager
+  GEMINI_API_KEY: "${GEMINI_API_KEY}"
+  REDIS_PASSWORD: "${REDIS_PASSWORD}"
+
+---
+# Deployment para Redis (caché distribuido)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-cache
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: redis-cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ngx-agents
+      component: redis-cache
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: ngx-agents
+        component: redis-cache
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.0-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 6379
+          name: redis
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+        args:
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        - --maxmemory
+        - 768mb
+        - --maxmemory-policy
+        - allkeys-lru
+        - --appendonly
+        - yes
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: vertex-ai-credentials
+              key: REDIS_PASSWORD
+        livenessProbe:
+          exec:
+            command:
+            - redis-cli
+            - -a
+            - $(REDIS_PASSWORD)
+            - ping
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - -a
+            - $(REDIS_PASSWORD)
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: redis-data
+
+---
+# PersistentVolumeClaim para Redis
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: redis-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+# Service para Redis
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cache
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: redis-cache
+spec:
+  ports:
+  - port: 6379
+    targetPort: 6379
+    protocol: TCP
+    name: redis
+  selector:
+    app: ngx-agents
+    component: redis-cache
+
+---
+# NetworkPolicy para Redis
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-network-policy
+  namespace: ngx-agents
+spec:
+  podSelector:
+    matchLabels:
+      app: ngx-agents
+      component: redis-cache
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: ngx-agents
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# Deployment para el servicio de optimización de Vertex AI
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vertex-ai-optimizer
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: vertex-ai-optimizer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ngx-agents
+      component: vertex-ai-optimizer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ngx-agents
+        component: vertex-ai-optimizer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: ngx-agents
+      containers:
+      - name: optimizer
+        image: gcr.io/PROJECT_ID/ngx-agents-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
+        env:
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: ENVIRONMENT
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: LOG_LEVEL
+        - name: VERTEX_AI_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: VERTEX_AI_REGION
+        - name: VERTEX_AI_MODEL_ID
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: VERTEX_AI_MODEL_ID
+        - name: VERTEX_CACHE_TTL
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: VERTEX_CACHE_TTL
+        - name: VERTEX_MAX_CACHE_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: VERTEX_MAX_CACHE_SIZE
+        - name: VERTEX_MAX_CONNECTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: VERTEX_MAX_CONNECTIONS
+        - name: USE_REDIS_CACHE
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: USE_REDIS_CACHE
+        - name: ENABLE_COMPRESSION
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: ENABLE_COMPRESSION
+        - name: COMPRESSION_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: COMPRESSION_THRESHOLD
+        - name: ENABLE_MONITORING
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: ENABLE_MONITORING
+        - name: ENABLE_TRACING
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: ENABLE_TRACING
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_SERVICE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: OTEL_SERVICE_NAME
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          valueFrom:
+            configMapKeyRef:
+              name: vertex-ai-config
+              key: OTEL_RESOURCE_ATTRIBUTES
+        - name: REDIS_URL
+          value: "redis://:$(REDIS_PASSWORD)@redis-cache:6379/0"
+        - name: GCP_PROJECT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vertex-ai-credentials
+              key: GEMINI_API_KEY
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: vertex-ai-credentials
+              key: REDIS_PASSWORD
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+      volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                  - vertex-ai-optimizer
+              topologyKey: "kubernetes.io/hostname"
+      terminationGracePeriodSeconds: 60
+
+---
+# Service para el servicio de optimización de Vertex AI
+apiVersion: v1
+kind: Service
+metadata:
+  name: vertex-ai-optimizer
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: vertex-ai-optimizer
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: ngx-agents
+    component: vertex-ai-optimizer
+
+---
+# HorizontalPodAutoscaler para el servicio de optimización de Vertex AI
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vertex-ai-optimizer-hpa
+  namespace: ngx-agents
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vertex-ai-optimizer
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+
+---
+# PodDisruptionBudget para el servicio de optimización de Vertex AI
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vertex-ai-optimizer-pdb
+  namespace: ngx-agents
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ngx-agents
+      component: vertex-ai-optimizer
+
+---
+# CronJob para optimización periódica de caché
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vertex-ai-cache-optimizer
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: vertex-ai-maintenance
+spec:
+  schedule: "0 2 * * *"  # Diariamente a las 2 AM
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: ngx-agents
+            component: vertex-ai-maintenance
+        spec:
+          serviceAccountName: ngx-agents
+          containers:
+          - name: optimizer
+            image: gcr.io/PROJECT_ID/ngx-agents-api:latest
+            imagePullPolicy: IfNotPresent
+            command:
+            - python
+            - scripts/optimize_vertex_ai_cache.py
+            - --apply
+            env:
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: vertex-ai-config
+                  key: ENVIRONMENT
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: vertex-ai-config
+                  key: LOG_LEVEL
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis-cache:6379/0"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: vertex-ai-credentials
+                  key: REDIS_PASSWORD
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "256Mi"
+              limits:
+                cpu: "500m"
+                memory: "512Mi"
+          restartPolicy: OnFailure
+          terminationGracePeriodSeconds: 30
+
+---
+# CronJob para pruebas de carga periódicas
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vertex-ai-load-test
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: vertex-ai-maintenance
+spec:
+  schedule: "0 3 * * 0"  # Semanalmente los domingos a las 3 AM
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: ngx-agents
+            component: vertex-ai-maintenance
+        spec:
+          serviceAccountName: ngx-agents
+          containers:
+          - name: load-tester
+            image: gcr.io/PROJECT_ID/ngx-agents-api:latest
+            imagePullPolicy: IfNotPresent
+            command:
+            - python
+            - scripts/vertex_ai_load_test.py
+            - --scenario
+            - normal
+            - --output
+            - /data/load-test-results
+            env:
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: vertex-ai-config
+                  key: ENVIRONMENT
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: vertex-ai-config
+                  key: LOG_LEVEL
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis-cache:6379/0"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: vertex-ai-credentials
+                  key: REDIS_PASSWORD
+            resources:
+              requests:
+                cpu: "200m"
+                memory: "512Mi"
+              limits:
+                cpu: "1000m"
+                memory: "1Gi"
+            volumeMounts:
+            - name: load-test-results
+              mountPath: /data/load-test-results
+          volumes:
+          - name: load-test-results
+            persistentVolumeClaim:
+              claimName: load-test-results
+          restartPolicy: OnFailure
+          terminationGracePeriodSeconds: 30
+
+---
+# PersistentVolumeClaim para resultados de pruebas de carga
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: load-test-results
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: vertex-ai-maintenance
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+---
+# ConfigMap para configuración de Prometheus
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vertex-ai-prometheus-config
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    scrape_configs:
+      - job_name: 'vertex-ai-optimizer'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - ngx-agents
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            regex: ngx-agents
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            regex: true
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            regex: (.+)
+            target_label: __metrics_path__
+            action: replace
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            target_label: __address__
+            replacement: $1:$2
+            action: replace
+          - source_labels: [__meta_kubernetes_pod_label_component]
+            regex: (.+)
+            target_label: component
+            action: replace
+
+---
+# ConfigMap para configuración de Grafana
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vertex-ai-grafana-dashboards
+  namespace: ngx-agents
+  labels:
+    app: ngx-agents
+    component: monitoring
+data:
+  vertex-ai-dashboard.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "id": 1,
+          "options": {
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(rate(vertex_ai_client_cache_hits[5m]))",
+              "refId": "A",
+              "legendFormat": "Cache Hits"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(rate(vertex_ai_client_cache_misses[5m]))",
+              "refId": "B",
+              "legendFormat": "Cache Misses"
+            }
+          ],
+          "title": "Vertex AI Cache Performance",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["vertex-ai", "ngx-agents"],
+      "templating": {
+        "list": []
+      },
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "timepicker": {},
+      "timezone": "",
+      "title": "Vertex AI Performance",
+      "uid": "vertex-ai-performance",
+      "version": 1,
+      "weekStart": ""
+    }

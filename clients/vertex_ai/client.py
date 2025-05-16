@@ -1049,13 +1049,22 @@ class VertexAIClient:
             logger.error(f"Error al cerrar cliente VertexAI: {e}")
 
 
-# Instancia global del cliente
+# Instancia global del cliente con configuración optimizada
 vertex_ai_client = VertexAIClient(
+    # Configuración básica
     use_redis_cache=os.environ.get("USE_REDIS_CACHE", "false").lower() == "true",
     redis_url=os.environ.get("REDIS_URL"),
     cache_ttl=get_env_int("VERTEX_CACHE_TTL", 3600),
     max_cache_size=get_env_int("VERTEX_MAX_CACHE_SIZE", 1000),
-    max_connections=get_env_int("VERTEX_MAX_CONNECTIONS", 10)
+    max_connections=get_env_int("VERTEX_MAX_CONNECTIONS", 10),
+    
+    # Configuración avanzada de caché (optimizada según pruebas)
+    cache_policy="lru",  # LRU mostró el mejor rendimiento en pruebas
+    cache_partitions=get_env_int("VERTEX_CACHE_PARTITIONS", 4),
+    l1_size_ratio=float(os.environ.get("VERTEX_L1_SIZE_RATIO", "0.3")),
+    prefetch_threshold=float(os.environ.get("VERTEX_PREFETCH_THRESHOLD", "0.7")),
+    compression_threshold=get_env_int("VERTEX_COMPRESSION_THRESHOLD", 1024),
+    compression_level=get_env_int("VERTEX_COMPRESSION_LEVEL", 6)
 )
 
 

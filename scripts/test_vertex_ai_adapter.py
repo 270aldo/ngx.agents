@@ -8,21 +8,23 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+import pytest
 
 # Añadir el directorio raíz al path para poder importar los módulos
 sys.path.append(str(Path(__file__).parent.parent))
 
-from clients.vertex_ai_client_adapter import VertexAIClientAdapter  # Mantener para pruebas del adaptador
+from clients.vertex_ai.client import VertexAIClient
 
 
-async def test_vertex_ai_adapter():
-    """Prueba el adaptador del cliente Vertex AI."""
-    print("Inicializando adaptador del cliente Vertex AI...")
-    adapter = VertexAIClientAdapter()
-    await adapter.initialize()
+@pytest.mark.asyncio
+async def test_vertex_ai_client(monkeypatch):
+    """Prueba el cliente Vertex AI."""
+    monkeypatch.setenv("MOCK_VERTEX_AI", "true")
+    print("Inicializando cliente Vertex AI...")
+    client = VertexAIClient()
     
     print("\n=== Generación de Contenido ===")
-    response = await adapter.generate_content(
+    response = await client.generate_content(
         prompt="Explica brevemente qué es la inteligencia artificial",
         temperature=0.7
     )
@@ -30,41 +32,38 @@ async def test_vertex_ai_adapter():
     print(f"Tokens utilizados: {response['usage']['total_tokens']}")
     
     print("\n=== Generación de Embedding ===")
-    embedding = await adapter.generate_embedding(
+    response_data = await client.generate_embedding(
         text="Ejemplo de texto para embedding"
     )
-    print(f"Dimensiones del embedding: {len(embedding)}")
-    if embedding and len(embedding) > 0:
-        print(f"Primeros 5 valores: {embedding[:5]}")
+    actual_embedding_vector = response_data['embedding']
+    print(f"Dimensiones del embedding: {len(actual_embedding_vector)}")
+    if actual_embedding_vector and len(actual_embedding_vector) > 0:
+        print(f"Primeros 5 valores: {actual_embedding_vector[:5]}")
     else:
         print("No se obtuvieron valores de embedding")
     
     print("\n=== Estadísticas del Cliente ===")
-    stats = await adapter.get_stats()
+    stats = await client.get_stats()
     print(f"Solicitudes de contenido: {stats.get('content_requests', 0)}")
     print(f"Solicitudes de embedding: {stats.get('embedding_requests', 0)}")
     
-    if "refactorized" in stats:
-        refactorized_stats = stats["refactorized"]
-        cache_stats = refactorized_stats.get('cache', {})
-        print(f"Caché - hits: {cache_stats.get('hits', 0)}, misses: {cache_stats.get('misses', 0)}")
+    cache_stats = stats.get('cache', {})
+    print(f"Caché - hits: {cache_stats.get('hits', 0)}, misses: {cache_stats.get('misses', 0)}")
     
     # Probar caché
     print("\n=== Prueba de Caché ===")
     print("Generando contenido con el mismo prompt (debería usar caché)...")
-    response2 = await adapter.generate_content(
+    response2 = await client.generate_content(
         prompt="Explica brevemente qué es la inteligencia artificial",
         temperature=0.7
     )
-    stats2 = await adapter.get_stats()
+    stats2 = await client.get_stats()
     
-    if "refactorized" in stats2:
-        refactorized_stats2 = stats2["refactorized"]
-        cache_stats2 = refactorized_stats2.get('cache', {})
-        print(f"Caché - hits: {cache_stats2.get('hits', 0)}, misses: {cache_stats2.get('misses', 0)}")
+    cache_stats2 = stats2.get('cache', {})
+    print(f"Caché - hits: {cache_stats2.get('hits', 0)}, misses: {cache_stats2.get('misses', 0)}")
     
     print("\n=== Cerrando Cliente ===")
-    await adapter.close()
+    await client.close()
     print("Cliente cerrado correctamente")
 
 
@@ -76,4 +75,4 @@ if __name__ == "__main__":
         print("Ejemplo: export GOOGLE_APPLICATION_CREDENTIALS=/ruta/a/tu/archivo-credenciales.json")
     
     # Ejecutar la prueba
-    asyncio.run(test_vertex_ai_adapter())
+    asyncio.run(test_vertex_ai_client())

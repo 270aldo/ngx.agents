@@ -11,13 +11,11 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 paths_to_remove = [
     os.path.join(PROJECT_ROOT, ".obsolete"),
-    os.path.join(PROJECT_ROOT, "clients", "vertex_ai_client_adapter.py"),
     os.path.join(PROJECT_ROOT, "clients", "vertex_ai_client.py"),  # Archivo original refactorizado
     os.path.join(PROJECT_ROOT, "core", "state_manager.py"),
     os.path.join(PROJECT_ROOT, "core", "intent_analyzer.py"),
     # Archivos de prueba obsoletos relacionados con Vertex AI
     os.path.join(PROJECT_ROOT, "tests", "test_vertex_ai_client_optimized_simple.py"),
-    os.path.join(PROJECT_ROOT, "tests", "adapters", "test_vertex_ai_client_adapter.py"),
     os.path.join(PROJECT_ROOT, "tests", "conftest_vertex.py"),
 ]
 

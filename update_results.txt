@@ -1,0 +1,19 @@
+Encontrados 5 archivos de agentes con _get_program_type_from_profile
+
+Procesando ./tests/test_agents/test_elite_training_strategist.py...
+  No se encontraron llamadas sin await
+
+Procesando ./agents/elite_training_strategist/agent.py...
+  No se encontraron llamadas sin await
+
+Procesando ./agents/base/adk_agent.py...
+  No se encontraron llamadas sin await
+
+Procesando ./scripts/update_get_program_type_calls.py...
+  No se encontraron llamadas sin await
+
+Procesando ./infrastructure/adapters/base_agent_adapter.py...
+  No se encontraron llamadas sin await
+
+Total de cambios realizados: 0
+NOTA: Esto fue un dry run, no se realizaron cambios reales.

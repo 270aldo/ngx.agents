@@ -1,0 +1,249 @@
+# Runbook para Respuesta a Incidentes
+name: "Respuesta a Incidentes de Latencia Alta"
+description: "Procedimiento automatizado para diagnosticar y resolver problemas de latencia alta en el sistema"
+version: "1.0.0"
+author: "Equipo de Operaciones"
+tags:
+  - "latencia"
+  - "rendimiento"
+  - "incidente"
+severity: "warning"
+notify_start: true
+notify_end: true
+notify_error: true
+error_severity: "error"
+
+# Pasos del runbook
+steps:
+  - id: "check_system_health"
+    name: "Verificar estado general del sistema"
+    description: "Verifica el estado de salud general del sistema"
+    command:
+      name: "check_health"
+      args:
+        service: "ngx-agents"
+    output_var: "system_health"
+
+  - id: "check_latency_metrics"
+    name: "Verificar métricas de latencia"
+    description: "Obtiene las métricas de latencia actuales"
+    command:
+      name: "check_metric"
+      args:
+        metric: "ngx_agents_request_duration_seconds"
+        period: "5m"
+        aggregation: "p95"
+    output_var: "latency_p95"
+
+  - id: "check_cpu_usage"
+    name: "Verificar uso de CPU"
+    description: "Obtiene el uso de CPU actual"
+    command:
+      name: "check_metric"
+      args:
+        metric: "ngx_agents_cpu_usage"
+        period: "5m"
+        aggregation: "avg"
+    output_var: "cpu_usage"
+
+  - id: "check_memory_usage"
+    name: "Verificar uso de memoria"
+    description: "Obtiene el uso de memoria actual"
+    command:
+      name: "check_metric"
+      args:
+        metric: "ngx_agents_memory_usage"
+        period: "5m"
+        aggregation: "avg"
+    output_var: "memory_usage"
+
+  - id: "check_error_rate"
+    name: "Verificar tasa de errores"
+    description: "Obtiene la tasa de errores actual"
+    command:
+      name: "check_metric"
+      args:
+        metric: "ngx_agents_errors_total"
+        period: "5m"
+        aggregation: "rate"
+    output_var: "error_rate"
+
+  - id: "check_logs"
+    name: "Buscar errores en logs"
+    description: "Busca errores relevantes en los logs"
+    command:
+      name: "check_logs"
+      args:
+        query: "error OR exception OR timeout"
+        service: "ngx-agents"
+        period: "15m"
+        limit: 100
+    output_var: "log_errors"
+
+  - id: "notify_initial_findings"
+    name: "Notificar hallazgos iniciales"
+    description: "Envía una notificación con los hallazgos iniciales"
+    command:
+      name: "notify"
+      args:
+        message: "Hallazgos iniciales del incidente de latencia"
+        severity: "warning"
+        component: "ngx-agents"
+        details:
+          latency_p95: "{{ latency_p95.value }}"
+          cpu_usage: "{{ cpu_usage.value }}"
+          memory_usage: "{{ memory_usage.value }}"
+          error_rate: "{{ error_rate.value }}"
+          log_errors_count: "{{ log_errors.matches }}"
+
+  - id: "check_high_cpu"
+    name: "Verificar si el problema es de CPU"
+    description: "Determina si el problema es causado por alto uso de CPU"
+    condition:
+      var: "cpu_usage.value"
+      operator: "gt"
+      value: 80
+    command:
+      name: "notify"
+      args:
+        message: "Detectado alto uso de CPU ({{ cpu_usage.value }}%)"
+        severity: "warning"
+        component: "ngx-agents"
+    output_var: "high_cpu_notification"
+
+  - id: "scale_up_service"
+    name: "Escalar servicio"
+    description: "Aumenta el número de réplicas del servicio"
+    condition:
+      var: "cpu_usage.value"
+      operator: "gt"
+      value: 80
+    command:
+      name: "scale_service"
+      args:
+        service: "ngx-agents"
+        replicas: 3
+    output_var: "scale_result"
+
+  - id: "check_high_memory"
+    name: "Verificar si el problema es de memoria"
+    description: "Determina si el problema es causado por alto uso de memoria"
+    condition:
+      var: "memory_usage.value"
+      operator: "gt"
+      value: 80
+    command:
+      name: "notify"
+      args:
+        message: "Detectado alto uso de memoria ({{ memory_usage.value }}%)"
+        severity: "warning"
+        component: "ngx-agents"
+    output_var: "high_memory_notification"
+
+  - id: "restart_service_if_needed"
+    name: "Reiniciar servicio si es necesario"
+    description: "Reinicia el servicio si hay problemas de memoria"
+    condition:
+      var: "memory_usage.value"
+      operator: "gt"
+      value: 90
+    command:
+      name: "restart_service"
+      args:
+        service: "ngx-agents"
+    output_var: "restart_result"
+
+  - id: "enable_degraded_mode"
+    name: "Activar modo degradado"
+    description: "Activa el modo degradado si la latencia sigue siendo alta"
+    condition:
+      and:
+        - var: "latency_p95.value"
+          operator: "gt"
+          value: 2000
+        - var: "scale_result.status"
+          operator: "eq"
+          value: "scaled"
+    command:
+      name: "toggle_feature_flag"
+      args:
+        flag_name: "degraded_mode"
+        enabled: true
+    output_var: "degraded_mode_result"
+
+  - id: "wait_for_stabilization"
+    name: "Esperar estabilización"
+    description: "Espera a que el sistema se estabilice después de las acciones tomadas"
+    command:
+      name: "wait"
+      args:
+        seconds: 120
+    output_var: "wait_result"
+
+  - id: "check_latency_after_actions"
+    name: "Verificar latencia después de acciones"
+    description: "Verifica si la latencia ha mejorado después de las acciones tomadas"
+    command:
+      name: "check_metric"
+      args:
+        metric: "ngx_agents_request_duration_seconds"
+        period: "2m"
+        aggregation: "p95"
+    output_var: "latency_after"
+
+  - id: "notify_resolution"
+    name: "Notificar resolución"
+    description: "Envía una notificación con el resultado de las acciones tomadas"
+    command:
+      name: "notify"
+      args:
+        message: "Resultado de acciones para resolver latencia alta"
+        severity: "info"
+        component: "ngx-agents"
+        details:
+          initial_latency_p95: "{{ latency_p95.value }}"
+          current_latency_p95: "{{ latency_after.value }}"
+          actions_taken:
+            scaled: "{{ scale_result.status == 'scaled' }}"
+            restarted: "{{ restart_result.status == 'restarted' if restart_result is defined else false }}"
+            degraded_mode: "{{ degraded_mode_result.status == 'toggled' if degraded_mode_result is defined else false }}"
+          improvement_percentage: "{{ ((latency_p95.value - latency_after.value) / latency_p95.value * 100) | round(2) }}"
+
+  - id: "disable_degraded_mode_if_resolved"
+    name: "Desactivar modo degradado si se resolvió"
+    description: "Desactiva el modo degradado si la latencia ha vuelto a niveles normales"
+    condition:
+      and:
+        - var: "latency_after.value"
+          operator: "lt"
+          value: 1000
+        - var: "degraded_mode_result"
+          operator: "exists"
+    command:
+      name: "toggle_feature_flag"
+      args:
+        flag_name: "degraded_mode"
+        enabled: false
+    output_var: "degraded_mode_disabled"
+
+  - id: "escalate_if_not_resolved"
+    name: "Escalar si no se resolvió"
+    description: "Escala el incidente si no se pudo resolver automáticamente"
+    condition:
+      var: "latency_after.value"
+      operator: "gt"
+      value: 1500
+    command:
+      name: "notify"
+      args:
+        message: "Incidente de latencia no resuelto automáticamente, requiere intervención manual"
+        severity: "error"
+        component: "ngx-agents"
+        details:
+          initial_latency_p95: "{{ latency_p95.value }}"
+          current_latency_p95: "{{ latency_after.value }}"
+          actions_taken:
+            scaled: "{{ scale_result.status == 'scaled' }}"
+            restarted: "{{ restart_result.status == 'restarted' if restart_result is defined else false }}"
+            degraded_mode: "{{ degraded_mode_result.status == 'toggled' if degraded_mode_result is defined else false }}"
+    output_var: "escalation_notification"

@@ -20,6 +20,22 @@ from agents.base.adk_agent import ADKAgent
 from core.agent_card import AgentCard, Example
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from core.logging_config import get_logger
+from core.vision_processor import VisionProcessor
+from infrastructure.adapters.vision_adapter import VisionAdapter
+from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
+
+# Importar esquemas para las skills
+from agents.security_compliance_guardian.schemas import (
+    SecurityAssessmentInput, SecurityAssessmentOutput,
+    ComplianceCheckInput, ComplianceCheckOutput,
+    VulnerabilityScanInput, VulnerabilityScanOutput,
+    DataProtectionInput, DataProtectionOutput,
+    GeneralSecurityInput, GeneralSecurityOutput,
+    # Nuevos esquemas para capacidades de visión
+    ImageComplianceVerificationInput, ImageComplianceVerificationOutput,
+    SecurityImageAnalysisInput, SecurityImageAnalysisOutput,
+    VisualDataLeakageDetectionInput, VisualDataLeakageDetectionOutput
+)
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -358,6 +374,330 @@ class GeneralSecuritySkill(GoogleADKSkill):
             recommendations=recommendations
         )
 
+# Nuevas skills para capacidades de visión
+class ImageComplianceVerificationSkill(GoogleADKSkill):
+    name = "image_compliance_verification"
+    description = "Verifica el cumplimiento normativo en imágenes para identificar posibles problemas de seguridad"
+    input_schema = ImageComplianceVerificationInput
+    output_schema = ImageComplianceVerificationOutput
+    
+    async def handler(self, input_data: ImageComplianceVerificationInput) -> ImageComplianceVerificationOutput:
+        """Implementación de la skill de verificación de cumplimiento en imágenes"""
+        query = input_data.query
+        image_data = input_data.image_data
+        regulations = input_data.regulations or ["GDPR", "HIPAA", "CCPA"]
+        region = input_data.region or "global"
+        context = input_data.context or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+            return self._generate_mock_compliance_verification(input_data)
+        
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            vision_result = await self.agent.vision_processor.analyze_image(image_data)
+            
+            # Construir el prompt para el análisis detallado
+            prompt = f"""
+            Eres un experto en cumplimiento normativo y seguridad de la información.
+            
+            Analiza esta imagen con la siguiente consulta:
+            "{query}"
+            
+            Normativas a verificar: {', '.join(regulations)}
+            Región: {region}
+            
+            Descripción de la imagen según el análisis inicial:
+            {vision_result.get('text', 'No disponible')}
+            
+            Proporciona un análisis detallado de cumplimiento normativo que incluya:
+            1. Resumen del análisis de cumplimiento
+            2. Estado de cumplimiento por normativa
+            3. Elementos sensibles identificados en la imagen
+            4. Problemas de cumplimiento identificados
+            5. Recomendaciones para resolver problemas de cumplimiento
+            
+            Estructura tu análisis de forma clara y accionable.
+            """
+            
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Generar análisis utilizando Gemini
+            analysis_text = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados del análisis
+            extraction_prompt = f"""
+            Basándote en el siguiente análisis de cumplimiento normativo de una imagen:
+            
+            {analysis_text}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. compliance_summary: resumen conciso del análisis de cumplimiento
+            2. compliance_status: estado de cumplimiento por normativa (objeto con normativas como claves)
+            3. sensitive_elements: lista de elementos sensibles identificados (array de objetos con "element" y "description")
+            4. compliance_issues: lista de problemas de cumplimiento (array de objetos con "issue", "regulation" y "severity")
+            5. recommendations: lista de recomendaciones para resolver problemas (array de strings)
+            6. confidence_score: puntuación de confianza del análisis (0-1)
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para la verificación
+            verification_id = str(uuid.uuid4())
+            
+            # Crear respuesta estructurada
+            return ImageComplianceVerificationOutput(
+                verification_id=verification_id,
+                compliance_summary=structured_data.get("compliance_summary", "Análisis de cumplimiento normativo en imagen"),
+                compliance_status=structured_data.get("compliance_status", {"GDPR": "indeterminado", "HIPAA": "indeterminado", "CCPA": "indeterminado"}),
+                sensitive_elements=structured_data.get("sensitive_elements", [{"element": "general", "description": "No se identificaron elementos específicos"}]),
+                compliance_issues=structured_data.get("compliance_issues", [{"issue": "No determinado", "regulation": "general", "severity": "baja"}]),
+                recommendations=structured_data.get("recommendations", ["Realizar un análisis manual detallado"]),
+                response=analysis_text,
+                confidence_score=structured_data.get("confidence_score", 0.7)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en verificación de cumplimiento en imagen: {e}", exc_info=True)
+            return self._generate_mock_compliance_verification(input_data)
+    
+    def _generate_mock_compliance_verification(self, input_data: ImageComplianceVerificationInput) -> ImageComplianceVerificationOutput:
+        """Genera una verificación simulada cuando las capacidades de visión no están disponibles"""
+        verification_id = str(uuid.uuid4())
+        
+        return ImageComplianceVerificationOutput(
+            verification_id=verification_id,
+            compliance_summary="Análisis simulado de cumplimiento normativo en imagen",
+            compliance_status={"GDPR": "indeterminado", "HIPAA": "indeterminado", "CCPA": "indeterminado"},
+            sensitive_elements=[
+                {"element": "contenido", "description": "No se pudo analizar el contenido específico"}
+            ],
+            compliance_issues=[
+                {"issue": "Análisis visual no disponible", "regulation": "general", "severity": "media"}
+            ],
+            recommendations=[
+                "Proporcionar una descripción textual de la imagen",
+                "Intentar nuevamente cuando las capacidades de visión estén disponibles",
+                "Realizar un análisis manual de cumplimiento"
+            ],
+            response="No se pudo realizar un análisis detallado de cumplimiento normativo en la imagen. Por favor, proporciona una descripción textual de lo que muestra la imagen para poder ayudarte mejor.",
+            confidence_score=0.1
+        )
+
+class SecurityImageAnalysisSkill(GoogleADKSkill):
+    name = "security_image_analysis"
+    description = "Analiza imágenes para identificar riesgos y problemas de seguridad"
+    input_schema = SecurityImageAnalysisInput
+    output_schema = SecurityImageAnalysisOutput
+    
+    async def handler(self, input_data: SecurityImageAnalysisInput) -> SecurityImageAnalysisOutput:
+        """Implementación de la skill de análisis de seguridad en imágenes"""
+        query = input_data.query
+        image_data = input_data.image_data
+        analysis_type = input_data.analysis_type or "general"
+        context = input_data.context or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+            return self._generate_mock_security_analysis(input_data)
+        
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            vision_result = await self.agent.vision_processor.analyze_image(image_data)
+            
+            # Construir el prompt para el análisis detallado
+            prompt = f"""
+            Eres un experto en seguridad informática y análisis de riesgos.
+            
+            Analiza esta imagen con la siguiente consulta:
+            "{query}"
+            
+            Tipo de análisis: {analysis_type}
+            
+            Descripción de la imagen según el análisis inicial:
+            {vision_result.get('text', 'No disponible')}
+            
+            Proporciona un análisis detallado de seguridad que incluya:
+            1. Resumen del análisis de seguridad
+            2. Riesgos de seguridad identificados
+            3. Niveles de severidad de los riesgos
+            4. Recomendaciones para mitigar riesgos
+            
+            Estructura tu análisis de forma clara y accionable.
+            """
+            
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Generar análisis utilizando Gemini
+            analysis_text = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados del análisis
+            extraction_prompt = f"""
+            Basándote en el siguiente análisis de seguridad de una imagen:
+            
+            {analysis_text}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. analysis_summary: resumen conciso del análisis de seguridad
+            2. security_risks: lista de riesgos de seguridad identificados (array de objetos con "risk", "description" y "severity")
+            3. severity_levels: niveles de severidad de los riesgos (objeto con niveles como claves y conteo como valores)
+            4. recommendations: lista de recomendaciones para mitigar riesgos (array de strings)
+            5. confidence_score: puntuación de confianza del análisis (0-1)
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para el análisis
+            analysis_id = str(uuid.uuid4())
+            
+            # Crear respuesta estructurada
+            return SecurityImageAnalysisOutput(
+                analysis_id=analysis_id,
+                analysis_summary=structured_data.get("analysis_summary", "Análisis de seguridad en imagen"),
+                security_risks=structured_data.get("security_risks", [{"risk": "No determinado", "description": "No se identificaron riesgos específicos", "severity": "baja"}]),
+                severity_levels=structured_data.get("severity_levels", {"alta": 0, "media": 0, "baja": 1}),
+                recommendations=structured_data.get("recommendations", ["Realizar un análisis manual detallado"]),
+                response=analysis_text,
+                confidence_score=structured_data.get("confidence_score", 0.7)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en análisis de seguridad en imagen: {e}", exc_info=True)
+            return self._generate_mock_security_analysis(input_data)
+    
+    def _generate_mock_security_analysis(self, input_data: SecurityImageAnalysisInput) -> SecurityImageAnalysisOutput:
+        """Genera un análisis simulado cuando las capacidades de visión no están disponibles"""
+        analysis_id = str(uuid.uuid4())
+        
+        return SecurityImageAnalysisOutput(
+            analysis_id=analysis_id,
+            analysis_summary="Análisis simulado de seguridad en imagen",
+            security_risks=[
+                {"risk": "Análisis visual no disponible", "description": "No se pudo analizar el contenido específico", "severity": "media"}
+            ],
+            severity_levels={"alta": 0, "media": 1, "baja": 0},
+            recommendations=[
+                "Proporcionar una descripción textual de la imagen",
+                "Intentar nuevamente cuando las capacidades de visión estén disponibles",
+                "Realizar un análisis manual de seguridad"
+            ],
+            response="No se pudo realizar un análisis detallado de seguridad en la imagen. Por favor, proporciona una descripción textual de lo que muestra la imagen para poder ayudarte mejor.",
+            confidence_score=0.1
+        )
+
+class VisualDataLeakageDetectionSkill(GoogleADKSkill):
+    name = "visual_data_leakage_detection"
+    description = "Detecta posibles fugas de datos sensibles en imágenes"
+    input_schema = VisualDataLeakageDetectionInput
+    output_schema = VisualDataLeakageDetectionOutput
+    
+    async def handler(self, input_data: VisualDataLeakageDetectionInput) -> VisualDataLeakageDetectionOutput:
+        """Implementación de la skill de detección de fugas de datos en imágenes"""
+        query = input_data.query
+        image_data = input_data.image_data
+        data_types = input_data.data_types or ["personal", "financiero", "credenciales", "corporativo"]
+        context = input_data.context or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
+            return self._generate_mock_data_leakage_detection(input_data)
+        
+        try:
+            # Utilizar el procesador de visión para analizar la imagen
+            vision_result = await self.agent.vision_processor.analyze_image(image_data)
+            
+            # Construir el prompt para el análisis detallado
+            prompt = f"""
+            Eres un experto en protección de datos y detección de fugas de información.
+            
+            Analiza esta imagen con la siguiente consulta:
+            "{query}"
+            
+            Tipos de datos a detectar: {', '.join(data_types)}
+            
+            Descripción de la imagen según el análisis inicial:
+            {vision_result.get('text', 'No disponible')}
+            
+            Proporciona un análisis detallado de posibles fugas de datos que incluya:
+            1. Resumen de la detección de fugas de datos
+            2. Datos sensibles encontrados
+            3. Evaluación de riesgos
+            4. Recomendaciones para proteger datos
+            
+            Estructura tu análisis de forma clara y accionable.
+            """
+            
+            # Obtener cliente Gemini del agente
+            gemini_client = self.agent.gemini_client
+            
+            # Generar análisis utilizando Gemini
+            analysis_text = await gemini_client.generate_response(prompt, temperature=0.4)
+            
+            # Extraer elementos estructurados del análisis
+            extraction_prompt = f"""
+            Basándote en el siguiente análisis de detección de fugas de datos en una imagen:
+            
+            {analysis_text}
+            
+            Extrae y estructura la siguiente información en formato JSON:
+            1. detection_summary: resumen conciso de la detección de fugas de datos
+            2. sensitive_data_found: lista de datos sensibles encontrados (array de objetos con "data_type", "description" y "risk_level")
+            3. risk_assessment: evaluación de riesgos (objeto con "overall_risk", "impact" y "likelihood")
+            4. protection_recommendations: lista de recomendaciones para proteger datos (array de strings)
+            5. confidence_score: puntuación de confianza de la detección (0-1)
+            
+            Devuelve SOLO el JSON, sin explicaciones adicionales.
+            """
+            
+            structured_data = await gemini_client.generate_structured_output(extraction_prompt)
+            
+            # Generar ID único para la detección
+            detection_id = str(uuid.uuid4())
+            
+            # Crear respuesta estructurada
+            return VisualDataLeakageDetectionOutput(
+                detection_id=detection_id,
+                detection_summary=structured_data.get("detection_summary", "Detección de fugas de datos en imagen"),
+                sensitive_data_found=structured_data.get("sensitive_data_found", [{"data_type": "No determinado", "description": "No se identificaron datos sensibles específicos", "risk_level": "bajo"}]),
+                risk_assessment=structured_data.get("risk_assessment", {"overall_risk": "bajo", "impact": "bajo", "likelihood": "bajo"}),
+                protection_recommendations=structured_data.get("protection_recommendations", ["Realizar un análisis manual detallado"]),
+                response=analysis_text,
+                confidence_score=structured_data.get("confidence_score", 0.7)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error en detección de fugas de datos en imagen: {e}", exc_info=True)
+            return self._generate_mock_data_leakage_detection(input_data)
+    
+    def _generate_mock_data_leakage_detection(self, input_data: VisualDataLeakageDetectionInput) -> VisualDataLeakageDetectionOutput:
+        """Genera una detección simulada cuando las capacidades de visión no están disponibles"""
+        detection_id = str(uuid.uuid4())
+        
+        return VisualDataLeakageDetectionOutput(
+            detection_id=detection_id,
+            detection_summary="Detección simulada de fugas de datos en imagen",
+            sensitive_data_found=[
+                {"data_type": "general", "description": "No se pudo analizar el contenido específico", "risk_level": "indeterminado"}
+            ],
+            risk_assessment={"overall_risk": "indeterminado", "impact": "indeterminado", "likelihood": "indeterminado"},
+            protection_recommendations=[
+                "Proporcionar una descripción textual de la imagen",
+                "Intentar nuevamente cuando las capacidades de visión estén disponibles",
+                "Realizar un análisis manual de datos sensibles"
+            ],
+            response="No se pudo realizar una detección detallada de fugas de datos en la imagen. Por favor, proporciona una descripción textual de lo que muestra la imagen para poder ayudarte mejor.",
+            confidence_score=0.1
+        )
+
 class SecurityComplianceGuardian(ADKAgent):
     """
     Agente especializado en seguridad y cumplimiento normativo.
@@ -420,20 +760,37 @@ class SecurityComplianceGuardian(ADKAgent):
                 Example(
                     input="¿Cuáles son las mejores prácticas de seguridad para mi aplicación?",
                     output="Las mejores prácticas de seguridad para tu aplicación incluyen..."
+                ),
+                # Ejemplos para capacidades de visión
+                Example(
+                    input="¿Puedes verificar si esta captura de pantalla cumple con las normativas de protección de datos?",
+                    output="He analizado la imagen y he identificado posibles problemas de cumplimiento normativo..."
+                ),
+                Example(
+                    input="¿Hay algún riesgo de seguridad en esta imagen de mi configuración?",
+                    output="En el análisis de seguridad de la imagen he detectado varios riesgos potenciales..."
+                ),
+                Example(
+                    input="¿Esta imagen contiene alguna información sensible que no debería compartirse?",
+                    output="He detectado posibles fugas de datos en la imagen, incluyendo información personal y credenciales..."
                 )
             ]
         )
         
         # Crear toolkit con las skills del agente
-        toolkit = Toolkit(
-            skills=[
-                SecurityAssessmentSkill(),
-                ComplianceCheckSkill(),
-                VulnerabilityScanSkill(),
-                DataProtectionSkill(),
-                GeneralSecuritySkill()
-            ]
-        )
+        skills = [
+            SecurityAssessmentSkill(),
+            ComplianceCheckSkill(),
+            VulnerabilityScanSkill(),
+            DataProtectionSkill(),
+            GeneralSecuritySkill(),
+            # Nuevas skills para capacidades de visión
+            ImageComplianceVerificationSkill(),
+            SecurityImageAnalysisSkill(),
+            VisualDataLeakageDetectionSkill()
+        ]
+        
+        toolkit = Toolkit(skills=skills)
         
         # Inicializar la clase base
         super().__init__(
@@ -446,6 +803,26 @@ class SecurityComplianceGuardian(ADKAgent):
             state_manager=state_manager,
             **kwargs
         )
+        
+        # Inicializar componentes de visión y multimodales
+        try:
+            # Inicializar adaptador de visión
+            vision_adapter = VisionAdapter()
+            
+            # Inicializar procesador de visión
+            self.vision_processor = VisionProcessor(vision_adapter)
+            
+            # Inicializar adaptador multimodal
+            self.multimodal_adapter = MultimodalAdapter()
+            
+            # Establecer bandera de capacidades de visión disponibles
+            self._vision_capabilities_available = True
+            
+            logger.info(f"Capacidades de visión inicializadas correctamente para el agente {agent_id}")
+        except Exception as e:
+            logger.error(f"Error al inicializar capacidades de visión: {e}", exc_info=True)
+            self._vision_capabilities_available = False
+            logger.warning(f"El agente {agent_id} funcionará sin capacidades de visión")
         
         logger.info(f"Agente SecurityComplianceGuardian inicializado con ID: {agent_id}")
     
@@ -561,18 +938,56 @@ class SecurityComplianceGuardian(ADKAgent):
                 "agent_name": agent_id
             }
     
-    def _classify_query(self, query: str) -> str:
+    def _classify_query(self, query: str, has_image: bool = False) -> str:
         """
         Clasifica el tipo de consulta del usuario.
         
         Args:
             query: Consulta del usuario
+            has_image: Indica si la consulta incluye una imagen
             
         Returns:
             str: Tipo de consulta clasificada
         """
         query_lower = query.lower()
         
+        # Si hay una imagen, verificar si es una consulta relacionada con visión
+        if has_image:
+            # Palabras clave para verificación de cumplimiento en imágenes
+            image_compliance_keywords = [
+                "cumplimiento", "normativa", "regulación", "gdpr", "hipaa", "pci",
+                "iso 27001", "cumplir con", "estándar", "conformidad", "legal"
+            ]
+            
+            # Palabras clave para análisis de seguridad en imágenes
+            security_image_keywords = [
+                "seguridad", "riesgo", "vulnerabilidad", "amenaza", "peligro",
+                "configuración", "setup", "sistema", "evaluar", "analizar"
+            ]
+            
+            # Palabras clave para detección de fugas de datos en imágenes
+            data_leakage_keywords = [
+                "fuga de datos", "información sensible", "datos personales", "credenciales",
+                "contraseña", "privacidad", "confidencial", "secreto", "compartir"
+            ]
+            
+            # Verificar coincidencias con palabras clave para imágenes
+            for keyword in image_compliance_keywords:
+                if keyword in query_lower:
+                    return "image_compliance_verification"
+                    
+            for keyword in security_image_keywords:
+                if keyword in query_lower:
+                    return "security_image_analysis"
+                    
+            for keyword in data_leakage_keywords:
+                if keyword in query_lower:
+                    return "visual_data_leakage_detection"
+            
+            # Si hay imagen pero no hay coincidencias específicas, usar análisis de seguridad por defecto
+            return "security_image_analysis"
+        
+        # Si no hay imagen, continuar con la clasificación normal
         # Palabras clave para evaluación de seguridad
         security_assessment_keywords = [
             "evaluación de seguridad", "auditoría de seguridad", "revisar seguridad",
@@ -654,8 +1069,12 @@ class SecurityComplianceGuardian(ADKAgent):
             "query": input_text
         })
         
-        # Clasificar el tipo de consulta
-        query_type = self._classify_query(input_text)
+        # Verificar si hay una imagen en los parámetros
+        image_data = kwargs.get("image_data")
+        has_image = image_data is not None
+        
+        # Clasificar el tipo de consulta (considerando si hay imagen)
+        query_type = self._classify_query(input_text, has_image)
         capabilities_used = []
         
         # Actualizar el contexto con el tipo de consulta
@@ -665,7 +1084,94 @@ class SecurityComplianceGuardian(ADKAgent):
             context["query_types"][query_type] = 1
         
         # Procesar la consulta según su tipo utilizando las skills ADK
-        if query_type == "security_assessment":
+        # Primero manejar los tipos de consulta relacionados con imágenes
+        if query_type == "image_compliance_verification" and has_image:
+            # Usar la skill de verificación de cumplimiento en imágenes
+            image_compliance_skill = next((skill for skill in self.skills if skill.name == "image_compliance_verification"), None)
+            if image_compliance_skill:
+                input_data = ImageComplianceVerificationInput(
+                    query=input_text,
+                    image_data=image_data,
+                    regulations=context.get("regulations", None),
+                    region=context.get("region", None),
+                    context=context
+                )
+                result = await image_compliance_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("image_compliance_verification")
+                
+                # Actualizar contexto con verificaciones de cumplimiento en imágenes
+                if "image_compliance_verifications" not in context:
+                    context["image_compliance_verifications"] = []
+                
+                context["image_compliance_verifications"].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "query": input_text,
+                    "verification_id": result.verification_id,
+                    "response": response,
+                    "compliance_summary": result.compliance_summary,
+                    "compliance_status": result.compliance_status,
+                    "recommendations": result.recommendations
+                })
+                
+        elif query_type == "security_image_analysis" and has_image:
+            # Usar la skill de análisis de seguridad en imágenes
+            security_image_skill = next((skill for skill in self.skills if skill.name == "security_image_analysis"), None)
+            if security_image_skill:
+                input_data = SecurityImageAnalysisInput(
+                    query=input_text,
+                    image_data=image_data,
+                    analysis_type=context.get("analysis_type", "general"),
+                    context=context
+                )
+                result = await security_image_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("security_image_analysis")
+                
+                # Actualizar contexto con análisis de seguridad en imágenes
+                if "security_image_analyses" not in context:
+                    context["security_image_analyses"] = []
+                
+                context["security_image_analyses"].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "query": input_text,
+                    "analysis_id": result.analysis_id,
+                    "response": response,
+                    "analysis_summary": result.analysis_summary,
+                    "security_risks": result.security_risks,
+                    "recommendations": result.recommendations
+                })
+                
+        elif query_type == "visual_data_leakage_detection" and has_image:
+            # Usar la skill de detección de fugas de datos en imágenes
+            data_leakage_skill = next((skill for skill in self.skills if skill.name == "visual_data_leakage_detection"), None)
+            if data_leakage_skill:
+                input_data = VisualDataLeakageDetectionInput(
+                    query=input_text,
+                    image_data=image_data,
+                    data_types=context.get("data_types", None),
+                    context=context
+                )
+                result = await data_leakage_skill.handler(input_data)
+                response = result.response
+                capabilities_used.append("visual_data_leakage_detection")
+                
+                # Actualizar contexto con detecciones de fugas de datos en imágenes
+                if "visual_data_leakage_detections" not in context:
+                    context["visual_data_leakage_detections"] = []
+                
+                context["visual_data_leakage_detections"].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "query": input_text,
+                    "detection_id": result.detection_id,
+                    "response": response,
+                    "detection_summary": result.detection_summary,
+                    "sensitive_data_found": result.sensitive_data_found,
+                    "protection_recommendations": result.protection_recommendations
+                })
+                
+        # Manejar los tipos de consulta normales (sin imágenes)
+        elif query_type == "security_assessment":
             # Usar la skill de evaluación de seguridad
             security_assessment_skill = next((skill for skill in self.skills if skill.name == "security_assessment"), None)
             if security_assessment_skill:

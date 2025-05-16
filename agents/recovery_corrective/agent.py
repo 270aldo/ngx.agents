@@ -7,6 +7,7 @@ import os
 from google.cloud import aiplatform
 import datetime
 import asyncio
+import base64
 from pydantic import BaseModel, Field
 
 # Importar componentes de Google ADK
@@ -103,6 +104,36 @@ class GeneralRecoveryInput(BaseModel):
 class GeneralRecoveryOutput(BaseModel):
     response: str = Field(..., description="Respuesta detallada a la consulta general")
     recovery_protocol: Optional[Dict[str, Any]] = Field(None, description="Protocolo de recuperación si es aplicable")
+
+class PostureAnalysisInput(BaseModel):
+    image_data: str = Field(..., description="Imagen codificada en base64 para análisis de postura")
+    user_id: Optional[str] = Field(None, description="ID del usuario")
+    analysis_type: Optional[str] = Field("general", description="Tipo de análisis de postura (general, específico)")
+    focus_areas: Optional[List[str]] = Field(None, description="Áreas específicas para analizar")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
+
+class PostureAnalysisOutput(BaseModel):
+    analysis_id: str = Field(..., description="ID único del análisis")
+    posture_summary: str = Field(..., description="Resumen del análisis de postura")
+    posture_assessment: Dict[str, Any] = Field(..., description="Evaluación detallada de la postura")
+    imbalances: List[Dict[str, Any]] = Field(..., description="Desequilibrios posturales identificados")
+    recommendations: List[str] = Field(..., description="Recomendaciones para mejorar la postura")
+    corrective_exercises: Optional[List[Dict[str, Any]]] = Field(None, description="Ejercicios correctivos recomendados")
+
+class MovementAnalysisInput(BaseModel):
+    video_data: Optional[str] = Field(None, description="Video codificado en base64 para análisis de movimiento")
+    image_sequence: Optional[List[str]] = Field(None, description="Secuencia de imágenes codificadas en base64")
+    movement_type: str = Field(..., description="Tipo de movimiento a analizar (sentadilla, peso muerto, etc.)")
+    user_id: Optional[str] = Field(None, description="ID del usuario")
+    user_profile: Optional[Dict[str, Any]] = Field(None, description="Perfil del usuario")
+
+class MovementAnalysisOutput(BaseModel):
+    analysis_id: str = Field(..., description="ID único del análisis")
+    movement_summary: str = Field(..., description="Resumen del análisis de movimiento")
+    movement_assessment: Dict[str, Any] = Field(..., description="Evaluación detallada del movimiento")
+    technique_issues: List[Dict[str, Any]] = Field(..., description="Problemas de técnica identificados")
+    recommendations: List[str] = Field(..., description="Recomendaciones para mejorar la técnica")
+    corrective_exercises: Optional[List[Dict[str, Any]]] = Field(None, description="Ejercicios correctivos recomendados")
 
 # Definir las skills como clases que heredan de GoogleADKSkill
 class InjuryPreventionSkill(GoogleADKSkill):
@@ -1251,6 +1282,758 @@ class GeneralRecoverySkill(GoogleADKSkill):
             recovery_protocol=protocol_json
         )
 
+class PostureAnalysisSkill(GoogleADKSkill):
+    name = "posture_analysis"
+    description = "Analiza la postura a partir de imágenes y proporciona recomendaciones para mejorarla"
+    input_schema = PostureAnalysisInput
+    output_schema = PostureAnalysisOutput
+    
+    async def handler(self, input_data: PostureAnalysisInput) -> PostureAnalysisOutput:
+        """Implementación de la skill de análisis de postura"""
+        image_data = input_data.image_data
+        user_id = input_data.user_id or "usuario_anónimo"
+        analysis_type = input_data.analysis_type or "general"
+        focus_areas = input_data.focus_areas or ["columna", "hombros", "pelvis", "rodillas"]
+        user_profile = input_data.user_profile or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Las capacidades de visión no están disponibles. Usando análisis simulado.")
+            return await self._generate_mock_posture_analysis(input_data)
+        
+        try:
+            # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+            context = {
+                "user_profile": user_profile,
+                "goals": user_profile.get("goals", []) if user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.agent.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para análisis de postura: {program_type}")
+                
+                # Obtener definición del programa para personalizar las recomendaciones
+                program_def = get_program_definition(program_type)
+                
+                # Preparar contexto específico del programa
+                program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+                
+                if program_def:
+                    program_context += f"- {program_def.get('description', '')}\n"
+                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                    
+                    # Añadir consideraciones especiales para el análisis de postura según el programa
+                    if program_type == "PRIME":
+                        program_context += "\nConsideraciones especiales para PRIME:\n"
+                        program_context += "- Enfoque en postura óptima para rendimiento\n"
+                        program_context += "- Análisis de alineación para prevenir lesiones durante entrenamiento intenso\n"
+                        program_context += "- Consideraciones para patrones de movimiento específicos del deporte\n"
+                    elif program_type == "LONGEVITY":
+                        program_context += "\nConsideraciones especiales para LONGEVITY:\n"
+                        program_context += "- Enfoque en postura para salud articular a largo plazo\n"
+                        program_context += "- Análisis de patrones compensatorios relacionados con la edad\n"
+                        program_context += "- Consideraciones para condiciones crónicas y limitaciones existentes\n"
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+                program_type = "GENERAL"
+                program_context = ""
+            
+            # Utilizar las capacidades de visión del agente
+            with self.agent.tracer.start_as_current_span("posture_analysis"):
+                # Analizar la imagen utilizando el procesador de visión
+                vision_analysis = await self.agent.vision_processor.analyze_image(image_data)
+                
+                # Extraer análisis de postura usando el modelo multimodal
+                prompt = f"""
+                Eres un experto en análisis postural y biomecánica. Analiza esta imagen
+                de un usuario con programa tipo {program_type} y proporciona un análisis detallado
+                de su postura.
+                
+                Tipo de análisis: {analysis_type}
+                
+                Enfócate específicamente en las siguientes áreas:
+                {', '.join(focus_areas)}
+                
+                {program_context}
+                
+                Proporciona:
+                1. Un resumen general de la postura observada
+                2. Análisis detallado de alineación
+                3. Desequilibrios posturales identificados
+                4. Posibles implicaciones para el movimiento y la función
+                5. Recomendaciones específicas para mejorar la postura
+                
+                Sé objetivo, detallado y proporciona feedback constructivo basado en lo que observas.
+                """
+                
+                multimodal_result = await self.agent.multimodal_adapter.analyze_image(
+                    image_data=image_data,
+                    analysis_prompt=prompt,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Extraer evaluación postural estructurada
+                assessment_prompt = f"""
+                Basándote en el siguiente análisis postural, extrae una evaluación estructurada
+                en formato JSON con los siguientes campos:
+                1. head_position: posición de la cabeza
+                2. shoulder_alignment: alineación de hombros
+                3. spine_alignment: alineación de columna
+                4. pelvic_position: posición pélvica
+                5. knee_alignment: alineación de rodillas
+                6. foot_position: posición de pies
+                7. overall_assessment: evaluación general
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                assessment_response = await self.agent.gemini_client.generate_structured_output(assessment_prompt)
+                
+                # Procesar evaluación postural
+                if not isinstance(assessment_response, dict):
+                    try:
+                        assessment_response = json.loads(assessment_response)
+                    except:
+                        assessment_response = {
+                            "head_position": "No determinado",
+                            "shoulder_alignment": "No determinado",
+                            "spine_alignment": "No determinado",
+                            "pelvic_position": "No determinado",
+                            "knee_alignment": "No determinado",
+                            "foot_position": "No determinado",
+                            "overall_assessment": "No se pudo determinar con precisión"
+                        }
+                
+                # Extraer desequilibrios posturales
+                imbalances_prompt = f"""
+                Basándote en el siguiente análisis postural, extrae los desequilibrios posturales
+                en formato JSON array, donde cada elemento es un objeto con:
+                1. area: área afectada
+                2. description: descripción del desequilibrio
+                3. severity: severidad (leve, moderada, significativa)
+                4. implications: implicaciones para el movimiento y la función
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                imbalances_response = await self.agent.gemini_client.generate_structured_output(imbalances_prompt)
+                
+                # Procesar desequilibrios posturales
+                if not isinstance(imbalances_response, list):
+                    try:
+                        imbalances_response = json.loads(imbalances_response)
+                        if not isinstance(imbalances_response, list):
+                            imbalances_response = []
+                    except:
+                        imbalances_response = []
+                
+                # Si no hay desequilibrios, crear algunos genéricos
+                if not imbalances_response:
+                    imbalances_response = [
+                        {
+                            "area": "General",
+                            "description": "No se pudieron determinar desequilibrios específicos",
+                            "severity": "indeterminada",
+                            "implications": "Indeterminadas"
+                        }
+                    ]
+                
+                # Extraer recomendaciones
+                recommendations_prompt = f"""
+                Basándote en el siguiente análisis postural, genera 3-5 recomendaciones específicas
+                para mejorar la postura. Considera el contexto del programa {program_type}.
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve las recomendaciones como una lista de strings.
+                """
+                
+                recommendations_response = await self.agent.gemini_client.generate_structured_output(recommendations_prompt)
+                
+                # Procesar recomendaciones
+                if not isinstance(recommendations_response, list):
+                    try:
+                        recommendations_response = json.loads(recommendations_response)
+                        if not isinstance(recommendations_response, list):
+                            recommendations_response = []
+                    except:
+                        recommendations_response = []
+                
+                # Si no hay recomendaciones, crear algunas genéricas
+                if not recommendations_response:
+                    recommendations_response = [
+                        "Mantener conciencia postural durante actividades diarias",
+                        "Realizar ejercicios de fortalecimiento para músculos posturales clave",
+                        "Incorporar estiramientos para áreas con tensión",
+                        "Considerar una evaluación postural profesional para recomendaciones más específicas"
+                    ]
+                
+                # Generar ejercicios correctivos
+                exercises_prompt = f"""
+                Basándote en el siguiente análisis postural, genera 3-5 ejercicios correctivos
+                en formato JSON array, donde cada ejercicio es un objeto con:
+                - name: nombre del ejercicio
+                - target_area: área objetivo
+                - description: descripción breve
+                - sets: número de series
+                - reps: número de repeticiones
+                - frequency: frecuencia recomendada
+                - notes: notas adicionales (opcional)
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve SOLO el JSON array, sin explicaciones adicionales.
+                """
+                
+                exercises_response = await self.agent.gemini_client.generate_structured_output(exercises_prompt)
+                
+                # Procesar ejercicios correctivos
+                if not isinstance(exercises_response, list):
+                    try:
+                        exercises_response = json.loads(exercises_response)
+                        if not isinstance(exercises_response, list):
+                            exercises_response = []
+                    except:
+                        exercises_response = []
+                
+                # Extraer resumen de la postura
+                posture_summary = multimodal_result.get("text", "").split("\n\n")[0] if multimodal_result.get("text") else "No se pudo generar un resumen de la postura."
+                
+                # Crear la salida de la skill
+                analysis_id = f"posture_{user_id}_{uuid.uuid4().hex[:8]}"
+                return PostureAnalysisOutput(
+                    analysis_id=analysis_id,
+                    posture_summary=posture_summary,
+                    posture_assessment=assessment_response,
+                    imbalances=imbalances_response,
+                    recommendations=recommendations_response,
+                    corrective_exercises=exercises_response
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al analizar postura: {e}", exc_info=True)
+            
+            # En caso de error, devolver un análisis básico
+            return PostureAnalysisOutput(
+                analysis_id=f"posture_{user_id}_{uuid.uuid4().hex[:8]}",
+                posture_summary="No se pudo realizar el análisis debido a un error en el procesamiento.",
+                posture_assessment={
+                    "head_position": "No determinado",
+                    "shoulder_alignment": "No determinado",
+                    "spine_alignment": "No determinado",
+                    "pelvic_position": "No determinado",
+                    "knee_alignment": "No determinado",
+                    "foot_position": "No determinado",
+                    "overall_assessment": "Error en el procesamiento"
+                },
+                imbalances=[
+                    {
+                        "area": "General",
+                        "description": "No se pudieron determinar desequilibrios debido a un error",
+                        "severity": "indeterminada",
+                        "implications": "Indeterminadas"
+                    }
+                ],
+                recommendations=[
+                    "Intente nuevamente con una imagen de mejor calidad o en mejor iluminación.",
+                    "Considere consultar a un profesional para una evaluación postural en persona."
+                ],
+                corrective_exercises=None
+            )
+    
+    async def _generate_mock_posture_analysis(self, input_data: PostureAnalysisInput) -> PostureAnalysisOutput:
+        """Genera un análisis postural simulado cuando las capacidades de visión no están disponibles."""
+        logger.info("Generando análisis postural simulado")
+        
+        user_id = input_data.user_id or "usuario_anónimo"
+        focus_areas = input_data.focus_areas or ["columna", "hombros", "pelvis", "rodillas"]
+        
+        # Generar un ID de análisis
+        analysis_id = f"posture_{user_id}_{uuid.uuid4().hex[:8]}"
+        
+        # Generar evaluación postural simulada
+        posture_assessment = {
+            "head_position": "Ligeramente adelantada",
+            "shoulder_alignment": "Hombro derecho elevado",
+            "spine_alignment": "Curvatura lumbar aumentada",
+            "pelvic_position": "Anteversión pélvica leve",
+            "knee_alignment": "Rotación interna leve",
+            "foot_position": "Pronación moderada",
+            "overall_assessment": "Postura con desviaciones leves a moderadas"
+        }
+        
+        # Generar desequilibrios posturales simulados
+        imbalances = [
+            {
+                "area": "Hombros",
+                "description": "Elevación del hombro derecho con protracción bilateral",
+                "severity": "moderada",
+                "implications": "Puede contribuir a tensión en trapecio y limitación en rotación glenohumeral"
+            },
+            {
+                "area": "Columna lumbar",
+                "description": "Hiperlordosis lumbar",
+                "severity": "leve",
+                "implications": "Puede aumentar compresión en facetas articulares y contribuir a tensión en erectores espinales"
+            },
+            {
+                "area": "Pelvis",
+                "description": "Anteversión pélvica",
+                "severity": "leve",
+                "implications": "Puede contribuir a hiperlordosis lumbar y tensión en flexores de cadera"
+            }
+        ]
+        
+        # Generar recomendaciones simuladas
+        recommendations = [
+            "Fortalecer musculatura estabilizadora de escápula para mejorar alineación de hombros",
+            "Incorporar ejercicios de estabilidad central para mejorar control lumbopélvico",
+            "Estirar flexores de cadera para reducir anteversión pélvica",
+            "Practicar ejercicios de conciencia postural durante actividades diarias",
+            "Considerar una evaluación biomecánica completa con un profesional"
+        ]
+        
+        # Generar ejercicios correctivos simulados
+        corrective_exercises = [
+            {
+                "name": "Retracción escapular con banda",
+                "target_area": "Hombros",
+                "description": "De pie, con banda elástica sujeta frente a ti, lleva los hombros hacia atrás y abajo",
+                "sets": 3,
+                "reps": "12-15",
+                "frequency": "Diario",
+                "notes": "Mantener posición 2-3 segundos en cada repetición"
+            },
+            {
+                "name": "Puente de glúteos",
+                "target_area": "Pelvis/Core",
+                "description": "Tumbado boca arriba, rodillas flexionadas, elevar cadera manteniendo core estable",
+                "sets": 3,
+                "reps": "10-12",
+                "frequency": "3-4 veces por semana",
+                "notes": "Enfocarse en activación de glúteos, no lumbar"
+            },
+            {
+                "name": "Estiramiento de psoas",
+                "target_area": "Flexores de cadera",
+                "description": "En posición de caballero, avanzar la cadera hacia adelante manteniendo core estable",
+                "sets": 2,
+                "reps": "30-60 segundos por lado",
+                "frequency": "Diario",
+                "notes": "Mantener posición neutra de columna"
+            }
+        ]
+        
+        # Generar resumen simulado
+        posture_summary = (
+            f"Análisis simulado de postura para el usuario {user_id}. "
+            f"Se observan desviaciones leves a moderadas en las áreas de enfoque: {', '.join(focus_areas)}. "
+            "Las principales observaciones incluyen protracción y elevación asimétrica de hombros, "
+            "hiperlordosis lumbar leve y anteversión pélvica. "
+            "Estos patrones pueden contribuir a tensión muscular y restricciones de movimiento. "
+            "Este es un análisis simulado debido a que las capacidades de visión no están disponibles."
+        )
+        
+        return PostureAnalysisOutput(
+            analysis_id=analysis_id,
+            posture_summary=posture_summary,
+            posture_assessment=posture_assessment,
+            imbalances=imbalances,
+            recommendations=recommendations,
+            corrective_exercises=corrective_exercises
+        )
+
+class MovementAnalysisSkill(GoogleADKSkill):
+    name = "movement_analysis"
+    description = "Analiza patrones de movimiento a partir de videos o secuencias de imágenes"
+    input_schema = MovementAnalysisInput
+    output_schema = MovementAnalysisOutput
+    
+    async def handler(self, input_data: MovementAnalysisInput) -> MovementAnalysisOutput:
+        """Implementación de la skill de análisis de movimiento"""
+        video_data = input_data.video_data
+        image_sequence = input_data.image_sequence or []
+        movement_type = input_data.movement_type
+        user_id = input_data.user_id or "usuario_anónimo"
+        user_profile = input_data.user_profile or {}
+        
+        # Verificar si las capacidades de visión están disponibles
+        if not hasattr(self.agent, '_vision_capabilities_available') or not self.agent._vision_capabilities_available:
+            logger.warning("Las capacidades de visión no están disponibles. Usando análisis simulado.")
+            return await self._generate_mock_movement_analysis(input_data)
+        
+        try:
+            # Determinar el tipo de programa del usuario para personalizar las recomendaciones
+            context = {
+                "user_profile": user_profile,
+                "goals": user_profile.get("goals", []) if user_profile else []
+            }
+            
+            try:
+                # Clasificar el tipo de programa del usuario
+                program_type = await self.agent.program_classification_service.classify_program_type(context)
+                logger.info(f"Tipo de programa determinado para análisis de movimiento: {program_type}")
+                
+                # Obtener definición del programa para personalizar las recomendaciones
+                program_def = get_program_definition(program_type)
+                
+                # Preparar contexto específico del programa
+                program_context = f"\n\nCONTEXTO DEL PROGRAMA {program_type}:\n"
+                
+                if program_def:
+                    program_context += f"- {program_def.get('description', '')}\n"
+                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
+                    
+                    # Añadir consideraciones especiales para el análisis de movimiento según el programa
+                    if program_type == "PRIME":
+                        program_context += "\nConsideraciones especiales para PRIME:\n"
+                        program_context += "- Enfoque en optimización de técnica para rendimiento\n"
+                        program_context += "- Análisis de eficiencia mecánica y transferencia de fuerza\n"
+                        program_context += "- Consideraciones para patrones de movimiento específicos del deporte\n"
+                    elif program_type == "LONGEVITY":
+                        program_context += "\nConsideraciones especiales para LONGEVITY:\n"
+                        program_context += "- Enfoque en técnica segura para salud articular a largo plazo\n"
+                        program_context += "- Análisis de patrones compensatorios relacionados con la edad\n"
+                        program_context += "- Consideraciones para condiciones crónicas y limitaciones existentes\n"
+            except Exception as e:
+                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+                program_type = "GENERAL"
+                program_context = ""
+            
+            # Utilizar las capacidades de visión del agente
+            with self.agent.tracer.start_as_current_span("movement_analysis"):
+                # Determinar si usar video o secuencia de imágenes
+                if video_data:
+                    # Analizar video (simulado por ahora, en un caso real se extraerían frames clave)
+                    # En una implementación completa, se procesaría el video para extraer frames clave
+                    logger.info("Analizando video para movimiento")
+                    frames = ["frame_simulado"]  # Simulación
+                else:
+                    # Usar secuencia de imágenes
+                    frames = image_sequence
+                
+                if not frames:
+                    raise ValueError("No se proporcionaron datos de video ni secuencia de imágenes para el análisis")
+                
+                # Analizar el primer frame/imagen como ejemplo
+                # En una implementación completa, se analizarían todos los frames clave
+                sample_image = frames[0]
+                vision_analysis = await self.agent.vision_processor.analyze_image(sample_image)
+                
+                # Extraer análisis de movimiento usando el modelo multimodal
+                prompt = f"""
+                Eres un experto en biomecánica y análisis de movimiento. Analiza esta imagen/video
+                de un usuario con programa tipo {program_type} realizando un {movement_type} y proporciona
+                un análisis detallado de su técnica y patrón de movimiento.
+                
+                {program_context}
+                
+                Proporciona:
+                1. Un resumen general del patrón de movimiento observado
+                2. Análisis detallado de la técnica en cada fase del movimiento
+                3. Problemas técnicos identificados
+                4. Posibles implicaciones para el rendimiento y riesgo de lesión
+                5. Recomendaciones específicas para mejorar la técnica
+                
+                Sé objetivo, detallado y proporciona feedback constructivo basado en lo que observas.
+                """
+                
+                multimodal_result = await self.agent.multimodal_adapter.analyze_image(
+                    image_data=sample_image,
+                    analysis_prompt=prompt,
+                    temperature=0.2,
+                    max_output_tokens=1024
+                )
+                
+                # Extraer evaluación del movimiento estructurada
+                assessment_prompt = f"""
+                Basándote en el siguiente análisis de movimiento para un {movement_type}, extrae una evaluación estructurada
+                en formato JSON con los siguientes campos:
+                1. movement_phases: fases del movimiento y evaluación de cada una
+                2. joint_positions: posiciones articulares clave
+                3. weight_distribution: distribución del peso
+                4. movement_efficiency: eficiencia del movimiento
+                5. stability_control: estabilidad y control
+                6. overall_technique: evaluación general de la técnica
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                assessment_response = await self.agent.gemini_client.generate_structured_output(assessment_prompt)
+                
+                # Procesar evaluación del movimiento
+                if not isinstance(assessment_response, dict):
+                    try:
+                        assessment_response = json.loads(assessment_response)
+                    except:
+                        assessment_response = {
+                            "movement_phases": {"preparación": "No determinado", "ejecución": "No determinado", "finalización": "No determinado"},
+                            "joint_positions": "No determinado",
+                            "weight_distribution": "No determinado",
+                            "movement_efficiency": "No determinado",
+                            "stability_control": "No determinado",
+                            "overall_technique": "No se pudo determinar con precisión"
+                        }
+                
+                # Extraer problemas técnicos
+                issues_prompt = f"""
+                Basándote en el siguiente análisis de movimiento para un {movement_type}, extrae los problemas técnicos
+                en formato JSON array, donde cada elemento es un objeto con:
+                1. issue: descripción del problema
+                2. phase: fase del movimiento donde ocurre
+                3. severity: severidad (leve, moderada, significativa)
+                4. implications: implicaciones para el rendimiento y riesgo de lesión
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve la información en formato JSON estructurado.
+                """
+                
+                issues_response = await self.agent.gemini_client.generate_structured_output(issues_prompt)
+                
+                # Procesar problemas técnicos
+                if not isinstance(issues_response, list):
+                    try:
+                        issues_response = json.loads(issues_response)
+                        if not isinstance(issues_response, list):
+                            issues_response = []
+                    except:
+                        issues_response = []
+                
+                # Si no hay problemas técnicos, crear algunos genéricos
+                if not issues_response:
+                    issues_response = [
+                        {
+                            "issue": "No se pudieron determinar problemas específicos",
+                            "phase": "General",
+                            "severity": "indeterminada",
+                            "implications": "Indeterminadas"
+                        }
+                    ]
+                
+                # Extraer recomendaciones
+                recommendations_prompt = f"""
+                Basándote en el siguiente análisis de movimiento para un {movement_type}, genera 3-5 recomendaciones específicas
+                para mejorar la técnica. Considera el contexto del programa {program_type}.
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve las recomendaciones como una lista de strings.
+                """
+                
+                recommendations_response = await self.agent.gemini_client.generate_structured_output(recommendations_prompt)
+                
+                # Procesar recomendaciones
+                if not isinstance(recommendations_response, list):
+                    try:
+                        recommendations_response = json.loads(recommendations_response)
+                        if not isinstance(recommendations_response, list):
+                            recommendations_response = []
+                    except:
+                        recommendations_response = []
+                
+                # Si no hay recomendaciones, crear algunas genéricas
+                if not recommendations_response:
+                    recommendations_response = [
+                        f"Practicar el {movement_type} con peso reducido para perfeccionar la técnica",
+                        "Incorporar ejercicios de movilidad para las articulaciones limitantes",
+                        "Trabajar en la estabilidad central para mejorar el control durante el movimiento",
+                        "Considerar una evaluación técnica con un profesional para recomendaciones más específicas"
+                    ]
+                
+                # Generar ejercicios correctivos
+                exercises_prompt = f"""
+                Basándote en el siguiente análisis de movimiento para un {movement_type}, genera 3-5 ejercicios correctivos
+                en formato JSON array, donde cada ejercicio es un objeto con:
+                - name: nombre del ejercicio
+                - target_issue: problema que aborda
+                - description: descripción breve
+                - sets: número de series
+                - reps: número de repeticiones
+                - frequency: frecuencia recomendada
+                - notes: notas adicionales (opcional)
+                
+                Análisis:
+                {multimodal_result.get("text", "")}
+                
+                Devuelve SOLO el JSON array, sin explicaciones adicionales.
+                """
+                
+                exercises_response = await self.agent.gemini_client.generate_structured_output(exercises_prompt)
+                
+                # Procesar ejercicios correctivos
+                if not isinstance(exercises_response, list):
+                    try:
+                        exercises_response = json.loads(exercises_response)
+                        if not isinstance(exercises_response, list):
+                            exercises_response = []
+                    except:
+                        exercises_response = []
+                
+                # Extraer resumen del movimiento
+                movement_summary = multimodal_result.get("text", "").split("\n\n")[0] if multimodal_result.get("text") else f"No se pudo generar un resumen del {movement_type}."
+                
+                # Crear la salida de la skill
+                analysis_id = f"movement_{user_id}_{uuid.uuid4().hex[:8]}"
+                return MovementAnalysisOutput(
+                    analysis_id=analysis_id,
+                    movement_summary=movement_summary,
+                    movement_assessment=assessment_response,
+                    technique_issues=issues_response,
+                    recommendations=recommendations_response,
+                    corrective_exercises=exercises_response
+                )
+                
+        except Exception as e:
+            logger.error(f"Error al analizar movimiento: {e}", exc_info=True)
+            
+            # En caso de error, devolver un análisis básico
+            return MovementAnalysisOutput(
+                analysis_id=f"movement_{user_id}_{uuid.uuid4().hex[:8]}",
+                movement_summary=f"No se pudo realizar el análisis del {movement_type} debido a un error en el procesamiento.",
+                movement_assessment={
+                    "movement_phases": {"preparación": "No determinado", "ejecución": "No determinado", "finalización": "No determinado"},
+                    "joint_positions": "No determinado",
+                    "weight_distribution": "No determinado",
+                    "movement_efficiency": "No determinado",
+                    "stability_control": "No determinado",
+                    "overall_technique": "Error en el procesamiento"
+                },
+                technique_issues=[
+                    {
+                        "issue": "No se pudieron determinar problemas específicos debido a un error",
+                        "phase": "General",
+                        "severity": "indeterminada",
+                        "implications": "Indeterminadas"
+                    }
+                ],
+                recommendations=[
+                    "Intente nuevamente con un video o imágenes de mejor calidad.",
+                    f"Considere consultar a un profesional para una evaluación del {movement_type} en persona."
+                ],
+                corrective_exercises=None
+            )
+    
+    async def _generate_mock_movement_analysis(self, input_data: MovementAnalysisInput) -> MovementAnalysisOutput:
+        """Genera un análisis de movimiento simulado cuando las capacidades de visión no están disponibles."""
+        logger.info("Generando análisis de movimiento simulado")
+        
+        user_id = input_data.user_id or "usuario_anónimo"
+        movement_type = input_data.movement_type
+        
+        # Generar un ID de análisis
+        analysis_id = f"movement_{user_id}_{uuid.uuid4().hex[:8]}"
+        
+        # Generar evaluación de movimiento simulada
+        movement_assessment = {
+            "movement_phases": {
+                "preparación": "Posición inicial con algunas desviaciones",
+                "ejecución": "Patrón de movimiento con compensaciones leves",
+                "finalización": "Retorno a posición con control moderado"
+            },
+            "joint_positions": "Desviaciones leves en alineación de rodillas y caderas",
+            "weight_distribution": "Ligeramente desplazado hacia adelante",
+            "movement_efficiency": "Moderada, con pérdidas de energía en transiciones",
+            "stability_control": "Control central moderado con oscilaciones leves",
+            "overall_technique": "Técnica con aspectos positivos y áreas de mejora identificables"
+        }
+        
+        # Generar problemas técnicos simulados
+        technique_issues = [
+            {
+                "issue": "Desplazamiento anterior del peso",
+                "phase": "Ejecución",
+                "severity": "moderada",
+                "implications": "Reduce eficiencia y aumenta estrés en rodillas"
+            },
+            {
+                "issue": "Rotación interna de rodillas",
+                "phase": "Ejecución",
+                "severity": "leve",
+                "implications": "Puede aumentar estrés en ligamentos y tendones de rodilla"
+            },
+            {
+                "issue": "Pérdida de tensión en cadena posterior",
+                "phase": "Finalización",
+                "severity": "leve",
+                "implications": "Reduce estabilidad y control en fase final"
+            }
+        ]
+        
+        # Generar recomendaciones simuladas
+        recommendations = [
+            f"Practicar el {movement_type} con peso reducido enfocándose en mantener el peso centrado",
+            "Incorporar ejercicios de conciencia propioceptiva para mejorar alineación de rodillas",
+            "Trabajar en la activación y control de cadena posterior",
+            "Utilizar feedback visual (espejo o video) para monitorizar técnica",
+            "Considerar una evaluación técnica con un profesional para recomendaciones más específicas"
+        ]
+        
+        # Generar ejercicios correctivos simulados
+        corrective_exercises = [
+            {
+                "name": "Sentadilla con banda",
+                "target_issue": "Rotación interna de rodillas",
+                "description": "Sentadilla con banda elástica alrededor de rodillas para resistir rotación interna",
+                "sets": 3,
+                "reps": "10-12",
+                "frequency": "3 veces por semana",
+                "notes": "Enfocarse en empujar rodillas hacia afuera contra la banda"
+            },
+            {
+                "name": "Puente de glúteos con elevación de pierna",
+                "target_issue": "Activación de cadena posterior",
+                "description": "Puente de glúteos con elevación alternada de piernas manteniendo pelvis estable",
+                "sets": 3,
+                "reps": "8-10 por lado",
+                "frequency": "3-4 veces por semana",
+                "notes": "Mantener core activado durante todo el movimiento"
+            },
+            {
+                "name": "Bisagra de cadera con palo",
+                "target_issue": "Control de cadena posterior",
+                "description": "Bisagra de cadera con palo en contacto con cabeza, espalda y sacro",
+                "sets": 3,
+                "reps": "10-12",
+                "frequency": "Diario",
+                "notes": "Mantener los tres puntos de contacto durante todo el movimiento"
+            }
+        ]
+        
+        # Generar resumen simulado
+        movement_summary = (
+            f"Análisis simulado de {movement_type} para el usuario {user_id}. "
+            "Se observa un patrón de movimiento con eficiencia moderada y algunas compensaciones. "
+            "Las principales observaciones incluyen desplazamiento anterior del peso, "
+            "rotación interna leve de rodillas y pérdida parcial de tensión en cadena posterior. "
+            "Estos patrones pueden reducir la eficiencia del movimiento y potencialmente aumentar el riesgo de lesión. "
+            "Este es un análisis simulado debido a que las capacidades de visión no están disponibles."
+        )
+        
+        return MovementAnalysisOutput(
+            analysis_id=analysis_id,
+            movement_summary=movement_summary,
+            movement_assessment=movement_assessment,
+            technique_issues=technique_issues,
+            recommendations=recommendations,
+            corrective_exercises=corrective_exercises
+        )
+
 # Definir la clase principal del agente RecoveryCorrective
 class RecoveryCorrective(ADKAgent):
     """
@@ -1327,7 +2110,9 @@ class RecoveryCorrective(ADKAgent):
                 SleepOptimizationSkill(),
                 HRVProtocolSkill(),
                 ChronicPainSkill(),
-                GeneralRecoverySkill()
+                GeneralRecoverySkill(),
+                PostureAnalysisSkill(),
+                MovementAnalysisSkill()
             ]
         )
         
@@ -1352,6 +2137,28 @@ class RecoveryCorrective(ADKAgent):
             gemini_client=self.gemini_client,
             use_cache=True  # Habilitar caché para mejorar rendimiento
         )
+        
+        # Inicializar componentes de visión y multimodales
+        try:
+            from infrastructure.adapters.vision_adapter import VisionProcessor
+            from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
+            
+            # Inicializar procesador de visión
+            self.vision_processor = VisionProcessor(
+                gemini_client=self.gemini_client
+            )
+            
+            # Inicializar adaptador multimodal
+            self.multimodal_adapter = MultimodalAdapter(
+                gemini_client=self.gemini_client
+            )
+            
+            # Establecer bandera de disponibilidad de capacidades de visión
+            self._vision_capabilities_available = True
+            logger.info("Capacidades de visión y multimodales inicializadas correctamente")
+        except Exception as e:
+            logger.warning(f"No se pudieron inicializar las capacidades de visión y multimodales: {e}")
+            self._vision_capabilities_available = False
         
         logger.info(f"Agente RecoveryCorrective inicializado con ID: {agent_id}")
     

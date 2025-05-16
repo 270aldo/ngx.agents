@@ -14,6 +14,7 @@ from agents.security_compliance_guardian.agent import SecurityComplianceGuardian
 from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 from infrastructure.adapters.a2a_adapter import a2a_adapter
 from core.logging_config import get_logger
+from clients.vertex_ai.client import VertexAIClient
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -35,6 +36,7 @@ class SecurityComplianceGuardianAdapter(SecurityComplianceGuardian, BaseAgentAda
             **kwargs: Argumentos de palabras clave para la clase base
         """
         super().__init__(*args, **kwargs)
+        self.vertex_ai_client = VertexAIClient()
         
         # Configuración de clasificación específica para este agente
         self.fallback_keywords = [
@@ -467,6 +469,16 @@ class SecurityComplianceGuardianAdapter(SecurityComplianceGuardian, BaseAgentAda
         Returns:
             str: Respuesta generada
         """
-        # Este método utiliza el método de la clase base de BaseAgentAdapter
-        # que internamente usa el cliente Vertex AI optimizado
-        return await super()._generate_response(prompt=prompt, context=context)
+        try:
+            # Llamar al cliente de Vertex AI optimizado
+            response = await self.vertex_ai_client.generate_content(
+                prompt=prompt,
+                temperature=0.7,
+                max_output_tokens=1024
+            )
+            
+            # Extraer el texto de la respuesta
+            return response["text"]
+        except Exception as e:
+            logger.error(f"Error al generar respuesta: {str(e)}", exc_info=True)
+            return f"Error al generar respuesta: {str(e)}"

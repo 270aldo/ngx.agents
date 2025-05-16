@@ -120,9 +120,214 @@ class NGXNexusOrchestrator(ADKAgent):
             logger.warning("Google Cloud AI Platform no está disponible. Algunas funcionalidades podrían estar limitadas.")
         except Exception as e:
             logger.error(f"Error al inicializar AI Platform para el Orquestador: {e}", exc_info=True)
+        
+        # Inicializar procesadores de visión y multimodales
+        try:
+            from core.vision_processor import VisionProcessor
+            from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
+            from infrastructure.adapters.vision_adapter import vision_adapter
+            
+            # Inicializar procesador de visión
+            self.vision_processor = VisionProcessor()
+            logger.info("Procesador de visión inicializado correctamente para el Orquestador")
+            
+            # Inicializar adaptador multimodal
+            self.multimodal_adapter = MultimodalAdapter()
+            logger.info("Adaptador multimodal inicializado correctamente para el Orquestador")
+            
+            # Marcar capacidades como disponibles
+            self._vision_capabilities_available = True
+            
+            # Añadir capacidades de visión a la lista de capacidades
+            _capabilities.extend([
+                "process_visual_content",
+                "analyze_multimodal_inputs",
+                "coordinate_visual_analysis"
+            ])
+            
+            # Añadir skills relacionadas con visión
+            self.skills.extend([
+                Skill(
+                    name="analyze_visual_content",
+                    description="Analiza contenido visual y coordina con agentes especializados para su procesamiento.",
+                    handler=self._skill_analyze_visual_content
+                ),
+                Skill(
+                    name="process_multimodal_input",
+                    description="Procesa entradas multimodales (texto e imágenes) y coordina respuestas.",
+                    handler=self._skill_process_multimodal_input
+                )
+            ])
+            
+            logger.info("Capacidades de visión añadidas al Orquestador")
+        except ImportError as e:
+            logger.warning(f"No se pudieron inicializar componentes para capacidades de visión: {e}")
+            self._vision_capabilities_available = False
+            logger.warning("El Orquestador funcionará sin capacidades de visión")
+        except Exception as e:
+            logger.error(f"Error al inicializar capacidades de visión para el Orquestador: {e}", exc_info=True)
+            self._vision_capabilities_available = False
+            logger.warning("El Orquestador funcionará sin capacidades de visión")
             
         logger.info(f"{self.name} ({self.agent_id}) inicializado con integración oficial de Google ADK.")
 
+    async def _skill_analyze_visual_content(self, prompt: str, image_data: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Skill para analizar contenido visual y coordinar con agentes especializados.
+        
+        Args:
+            prompt: El texto del usuario relacionado con el contenido visual.
+            image_data: Los datos de la imagen en formato base64 o URL.
+            
+        Returns:
+            Un diccionario con el análisis del contenido visual y los agentes recomendados.
+        """
+        try:
+            # Verificar si las capacidades de visión están disponibles
+            if not hasattr(self, '_vision_capabilities_available') or not self._vision_capabilities_available:
+                logger.warning("Capacidades de visión no disponibles para el Orquestador")
+                return {
+                    "status": "error",
+                    "message": "Capacidades de visión no disponibles",
+                    "recommended_agents": ["elite_training_strategist", "biometrics_insight_engine"]
+                }
+            
+            # Analizar la imagen utilizando el procesador de visión
+            vision_result = await self.vision_processor.analyze_image(image_data)
+            
+            # Determinar qué agentes pueden manejar mejor este contenido visual
+            image_description = vision_result.get("text", "")
+            
+            # Identificar posibles intenciones basadas en el contenido visual
+            visual_intent_prompt = f"""
+            Basándote en esta descripción de una imagen, identifica la intención principal y las posibles intenciones secundarias:
+            
+            {image_description}
+            
+            Devuelve un JSON con:
+            - primary_intent: la intención principal
+            - secondary_intents: lista de intenciones secundarias
+            - confidence: nivel de confianza (0.0-1.0)
+            """
+            
+            # Utilizar el adaptador del Intent Analyzer
+            intent_analysis = await intent_analyzer_adapter.analyze_intent(visual_intent_prompt)
+            
+            # Determinar los agentes más adecuados según el contenido visual
+            primary_intent = intent_analysis.get("primary_intent", "general").lower()
+            secondary_intents = [intent.lower() for intent in intent_analysis.get("secondary_intents", [])]
+            confidence = intent_analysis.get("confidence", 0.5)
+            
+            # Mapear intenciones a agentes
+            agent_ids_set = set()
+            if primary_intent in self.intent_to_agent_map:
+                agent_ids_set.update(self.intent_to_agent_map[primary_intent])
+            for intent_val in secondary_intents:
+                if intent_val in self.intent_to_agent_map:
+                    agent_ids_set.update(self.intent_to_agent_map[intent_val])
+            
+            # Si no se identificaron agentes específicos, usar agentes con capacidades visuales
+            if not agent_ids_set:
+                agent_ids_set.update(["elite_training_strategist", "biometrics_insight_engine", "progress_tracker"])
+            
+            return {
+                "status": "success",
+                "visual_analysis": image_description,
+                "primary_intent": primary_intent,
+                "secondary_intents": secondary_intents,
+                "confidence": confidence,
+                "recommended_agents": list(agent_ids_set)
+            }
+        except Exception as e:
+            logger.error(f"Error en skill_analyze_visual_content: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Error al analizar contenido visual: {str(e)}",
+                "recommended_agents": ["elite_training_strategist", "biometrics_insight_engine"]
+            }
+    
+    async def _skill_process_multimodal_input(self, prompt: str, image_data: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Skill para procesar entradas multimodales (texto e imágenes) y coordinar respuestas.
+        
+        Args:
+            prompt: El texto del usuario.
+            image_data: Los datos de la imagen en formato base64 o URL.
+            
+        Returns:
+            Un diccionario con el procesamiento multimodal y los agentes recomendados.
+        """
+        try:
+            # Verificar si las capacidades multimodales están disponibles
+            if not hasattr(self, '_vision_capabilities_available') or not self._vision_capabilities_available:
+                logger.warning("Capacidades multimodales no disponibles para el Orquestador")
+                return {
+                    "status": "error",
+                    "message": "Capacidades multimodales no disponibles",
+                    "recommended_agents": ["elite_training_strategist", "biometrics_insight_engine"]
+                }
+            
+            # Procesar la entrada multimodal
+            multimodal_result = await self.multimodal_adapter.process_multimodal(
+                prompt=f"Analiza esta imagen en el contexto de la siguiente consulta: {prompt}",
+                image_data=image_data,
+                temperature=0.2,
+                max_output_tokens=1024
+            )
+            
+            # Determinar qué agentes pueden manejar mejor esta entrada multimodal
+            multimodal_analysis = multimodal_result.get("text", "")
+            
+            # Identificar posibles intenciones basadas en el análisis multimodal
+            multimodal_intent_prompt = f"""
+            Basándote en este análisis multimodal, identifica la intención principal y las posibles intenciones secundarias:
+            
+            Consulta del usuario: {prompt}
+            
+            Análisis multimodal: {multimodal_analysis}
+            
+            Devuelve un JSON con:
+            - primary_intent: la intención principal
+            - secondary_intents: lista de intenciones secundarias
+            - confidence: nivel de confianza (0.0-1.0)
+            """
+            
+            # Utilizar el adaptador del Intent Analyzer
+            intent_analysis = await intent_analyzer_adapter.analyze_intent(multimodal_intent_prompt)
+            
+            # Determinar los agentes más adecuados según el análisis multimodal
+            primary_intent = intent_analysis.get("primary_intent", "general").lower()
+            secondary_intents = [intent.lower() for intent in intent_analysis.get("secondary_intents", [])]
+            confidence = intent_analysis.get("confidence", 0.5)
+            
+            # Mapear intenciones a agentes
+            agent_ids_set = set()
+            if primary_intent in self.intent_to_agent_map:
+                agent_ids_set.update(self.intent_to_agent_map[primary_intent])
+            for intent_val in secondary_intents:
+                if intent_val in self.intent_to_agent_map:
+                    agent_ids_set.update(self.intent_to_agent_map[intent_val])
+            
+            # Si no se identificaron agentes específicos, usar agentes con capacidades multimodales
+            if not agent_ids_set:
+                agent_ids_set.update(["elite_training_strategist", "biometrics_insight_engine", "progress_tracker"])
+            
+            return {
+                "status": "success",
+                "multimodal_analysis": multimodal_analysis,
+                "primary_intent": primary_intent,
+                "secondary_intents": secondary_intents,
+                "confidence": confidence,
+                "recommended_agents": list(agent_ids_set)
+            }
+        except Exception as e:
+            logger.error(f"Error en skill_process_multimodal_input: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Error al procesar entrada multimodal: {str(e)}",
+                "recommended_agents": ["elite_training_strategist", "biometrics_insight_engine"]
+            }
+    
     async def _skill_analyze_intent(self, prompt: str) -> Dict[str, Any]:
         """
         Skill para analizar la intención del usuario a partir de su entrada de texto.

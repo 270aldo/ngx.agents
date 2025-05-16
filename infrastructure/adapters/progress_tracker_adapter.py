@@ -13,6 +13,7 @@ from datetime import datetime
 from agents.progress_tracker.agent import ProgressTracker
 from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 from core.telemetry import get_telemetry
+from clients.vertex_ai.client import VertexAIClient
 
 # Configurar logger
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class ProgressTrackerAdapter(ProgressTracker, BaseAgentAdapter):
         super().__init__()
         self.telemetry = get_telemetry()
         self.agent_name = "progress_tracker"
+        self.vertex_ai_client = VertexAIClient()
         
         # Configuración de clasificación
         self.fallback_keywords = [
@@ -608,9 +610,15 @@ class ProgressTrackerAdapter(ProgressTracker, BaseAgentAdapter):
             str: Respuesta generada
         """
         try:
-            # En una implementación real, aquí se llamaría al cliente de Vertex AI optimizado
-            # Por ahora, simulamos una respuesta
-            return f"Respuesta simulada para: {prompt[:50]}..."
+            # Llamar al cliente de Vertex AI optimizado
+            response = await self.vertex_ai_client.generate_content(
+                prompt=prompt,
+                temperature=0.7,
+                max_output_tokens=1024
+            )
+            
+            # Extraer el texto de la respuesta
+            return response["text"]
         except Exception as e:
             logger.error(f"Error al generar respuesta: {str(e)}", exc_info=True)
             return f"Error al generar respuesta: {str(e)}"

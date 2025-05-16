@@ -18,7 +18,7 @@ from infrastructure.adapters.intent_analyzer_adapter import IntentAnalyzerAdapte
 @pytest.fixture
 def mock_original_analyzer():
     """Fixture para simular el analizador original."""
-    with patch('core.intent_analyzer_adapter.intent_analyzer') as mock:
+    with patch('infrastructure.adapters.intent_analyzer_adapter.intent_analyzer') as mock:
         # Configurar el mock para devolver intenciones simuladas
         mock.analyze_intent = AsyncMock(return_value=[
             Intent(
@@ -57,7 +57,7 @@ def mock_original_analyzer():
 @pytest.fixture
 def mock_optimized_analyzer():
     """Fixture para simular el analizador optimizado."""
-    with patch('core.intent_analyzer_adapter.IntentAnalyzerOptimized') as mock_class:
+    with patch('infrastructure.adapters.intent_analyzer_adapter.IntentAnalyzerOptimized') as mock_class:
         mock = MagicMock()
         mock_class.return_value = mock
         
@@ -257,7 +257,8 @@ class TestIntentAnalyzerAdapter:
     @pytest.mark.asyncio
     async def test_set_use_optimized(self, adapter):
         """Prueba el cambio entre analizadores."""
-        # Verificar estado inicial
+        # Establecer un estado inicial conocido
+        adapter.use_optimized = False
         assert adapter.use_optimized is False
         
         # Cambiar a optimizado
