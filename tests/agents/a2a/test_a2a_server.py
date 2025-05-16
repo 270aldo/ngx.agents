@@ -16,7 +16,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 sys.path.insert(0, project_root)
 
 from app.main import app
-# from infrastructure.a2a_server import registered_agents, tasks, manager
+# from infrastructure.adapters.a2a_adapter import a2a_adapter, get_a2a_server_status
 from infrastructure.a2a.models import (
     TaskStatus, AgentStatus, MessageRole, PartType,
     AgentInfo, TaskRequest, AgentMessage, AgentStatusUpdate, Task, Message, Part
