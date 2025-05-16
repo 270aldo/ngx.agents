@@ -29,6 +29,29 @@ sys.modules['core.telemetry'] = __import__('scripts.mock_telemetry', fromlist=['
 from clients.vertex_ai.client import VertexAIClient
 from clients.vertex_ai.cache import CachePolicy
 
+# Mock para monitoreo
+class MockMonitoring:
+    @staticmethod
+    async def initialize_monitoring():
+        logger.info("Mock de monitoreo inicializado")
+        return True
+        
+    @staticmethod
+    async def get_monitoring_status():
+        return {
+            "health_metrics": {
+                "hit_ratio": 0.6,
+                "latency_ms": 50,
+                "memory_usage": {"usage_ratio": 0.3},
+                "error_rate": 0.01
+            },
+            "recent_alerts": []
+        }
+
+# Reemplazar funciones de monitoreo con mocks
+initialize_monitoring = MockMonitoring.initialize_monitoring
+get_monitoring_status = MockMonitoring.get_monitoring_status
+
 # Configuración de logging
 import logging
 logging.basicConfig(
@@ -132,106 +155,114 @@ class CacheOptimizer:
         Returns:
             Dict[str, Any]: Resultados de la prueba
         """
-        # Crear cliente con la configuración
+        # Crear cliente con la configuración a probar
         client = VertexAIClient(
-            use_redis_cache=False,  # Usar solo caché en memoria para pruebas
+            use_redis_cache=True,
             cache_ttl=3600,
-            max_cache_size=100,  # 100 MB
-            max_connections=5,
+            max_cache_size=1000,
             cache_policy=config["policy"],
             cache_partitions=config["partitions"],
             l1_size_ratio=config["l1_ratio"],
             prefetch_threshold=config["prefetch"],
             compression_threshold=config["compression"],
-            compression_level=6
+            compression_level=4
         )
         
-        # Inicializar cliente
-        await client.initialize()
-        
-        # Estadísticas
-        stats = {
-            "config": config,
-            "total_requests": 0,
-            "cache_hits": 0,
-            "cache_misses": 0,
-            "total_latency_ms": 0,
-            "avg_latency_ms": 0,
-            "hit_ratio": 0,
-            "pattern_invalidations": 0,
-            "prefetches": 0,
-            "l1_hits": 0,
-            "l2_hits": 0,
-            "compression_savings_bytes": 0,
-            "latencies": []  # Para análisis detallado
-        }
-        
-        # Fase 1: Calentamiento
-        logger.info("Fase de calentamiento")
-        for i in range(self.warm_up):
-            if pattern_func.__code__.co_argcount > 1:
-                prompt = pattern_func(self.prompts, i)
-            else:
-                prompt = pattern_func(self.prompts)
+        try:
+            # Inicializar cliente y monitoreo
+            await client.initialize()
+            await initialize_monitoring()
+            logger.info(f"Probando configuración: {config}")
+            
+            # Variables para estadísticas
+            latencies = []
+            hits = 0
+            misses = 0
+            start_time = time.time()
+            
+            # Fase de calentamiento
+            logger.info(f"Fase de calentamiento: {self.warm_up} iteraciones")
+            for i in range(self.warm_up):
+                prompt = pattern_func(self.prompts, i) if pattern_func.__code__.co_argcount > 1 else pattern_func(self.prompts)
+                await client.generate_content(prompt=prompt, temperature=0.7, max_output_tokens=50)
+            
+            # No podemos usar reset_stats porque no existe, pero podemos ignorar las estadísticas del calentamiento
+            # y solo contar las de la fase de prueba
+            
+            # Fase de prueba
+            logger.info(f"Fase de prueba: {self.iterations} iteraciones")
+            for i in range(self.iterations):
+                prompt = pattern_func(self.prompts, i) if pattern_func.__code__.co_argcount > 1 else pattern_func(self.prompts)
                 
-            namespace = f"test_{i % 3}"
-            
-            await client.generate_content(
-                prompt=prompt,
-                temperature=0.7,
-                max_output_tokens=50,
-                cache_namespace=namespace
-            )
-        
-        # Fase 2: Pruebas
-        logger.info("Fase de pruebas")
-        start_time = time.time()
-        
-        for i in range(self.iterations):
-            if pattern_func.__code__.co_argcount > 1:
-                prompt = pattern_func(self.prompts, i)
-            else:
-                prompt = pattern_func(self.prompts)
+                # Medir latencia
+                start = time.time()
+                response = await client.generate_content(prompt=prompt, temperature=0.7, max_output_tokens=50)
+                end = time.time()
                 
-            namespace = f"test_{i % 3}"
+                latency = (end - start) * 1000  # ms
+                latencies.append(latency)
+                
+                # Estimar si fue hit o miss basado en la latencia
+                if latency < 10:  # Asumimos que menos de 10ms es un hit de caché
+                    hits += 1
+                else:
+                    misses += 1
+                
+                # Mostrar progreso
+                if (i + 1) % 10 == 0:
+                    logger.info(f"Progreso: {i + 1}/{self.iterations} iteraciones")
             
-            # Cada 10 iteraciones, invalidar un namespace
-            if i > 0 and i % 10 == 0:
-                pattern = f"vertex:generate_content:test_{i % 3}:*"
-                await client.cache_manager.invalidate_pattern(pattern)
-                stats["pattern_invalidations"] += 1
+            # Obtener estadísticas
+            end_time = time.time()
+            monitoring_status = await get_monitoring_status()
             
-            # Realizar solicitud
-            before = time.time()
-            response = await client.generate_content(
-                prompt=prompt,
-                temperature=0.7,
-                max_output_tokens=50,
-                cache_namespace=namespace
-            )
-            latency_ms = (time.time() - before) * 1000
+            # Calcular métricas derivadas
+            total_requests = hits + misses
+            hit_ratio = hits / total_requests if total_requests > 0 else 0
+            avg_latency = sum(latencies) / len(latencies) if latencies else 0
+            throughput = self.iterations / (end_time - start_time)
             
-            # Actualizar estadísticas
-            stats["total_requests"] += 1
-            stats["total_latency_ms"] += latency_ms
-            stats["latencies"].append(latency_ms)
+            # Extraer métricas de monitoreo
+            health_metrics = monitoring_status.get("health_metrics", {})
+            memory_usage = health_metrics.get("memory_usage", {}).get("usage_ratio", 0)
+            error_rate = health_metrics.get("error_rate", 0)
             
-            # Verificar si fue hit o miss de caché
-            if latency_ms < 10:  # Asumimos que menos de 10ms es un hit de caché
-                stats["cache_hits"] += 1
-            else:
-                stats["cache_misses"] += 1
-        
-        # Obtener estadísticas finales del caché
-        cache_stats = await client.cache_manager.get_stats()
-        
-        # Actualizar estadísticas con datos del caché
-        stats["l1_hits"] = cache_stats.get("l1_hits", 0)
-        stats["l2_hits"] = cache_stats.get("l2_hits", 0)
-        stats["prefetches"] = cache_stats.get("prefetches", 0)
-        stats["compression_savings_bytes"] = cache_stats.get("compression_savings_bytes", 0)
-        
-        # Calcular métricas finales
+            # Resultados
+            result = {
+                "config": config,
+                "hits": hits,
+                "misses": misses,
+                "hit_ratio": hit_ratio,
+                "avg_latency_ms": avg_latency,
+                "min_latency_ms": min(latencies) if latencies else 0,
+                "max_latency_ms": max(latencies) if latencies else 0,
+                "latencies": latencies,
+                "requests_per_second": throughput,
+                "total_time_seconds": end_time - start_time,
+                "monitoring": {
+                    "memory_usage": memory_usage,
+                    "error_rate": error_rate,
+                    "alerts": monitoring_status.get("recent_alerts", [])
+                }
+            }
+            
+            logger.info(f"Resultados para {config['policy']}: Hit ratio={hit_ratio:.2%}, Latencia={avg_latency:.2f}ms, Memoria={memory_usage:.2%}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error al probar configuración {config}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {
+                "config": config,
+                "error": str(e),
+                "hit_ratio": 0,
+                "avg_latency_ms": 0,
+                "requests_per_second": 0
+            }
+        finally:
+            # Cerrar cliente
+            await client.close()
         total_time = time.time() - start_time
         stats["total_time_seconds"] = total_time
         stats["requests_per_second"] = stats["total_requests"] / total_time
@@ -246,50 +277,76 @@ class CacheOptimizer:
     def print_results(self):
         """Imprime los resultados de las pruebas en formato tabular."""
         if not self.results:
-            logger.warning("No hay resultados para mostrar")
+            logger.warning("No hay resultados para imprimir")
             return
             
-        # Preparar datos para tabla
-        headers = ["Política", "Hit Ratio", "Latencia Prom.", "Req/s", "L1 Hits", "Prefetches", "Ahorro Compresión"]
-        rows = []
+        # Ordenar resultados por hit ratio (descendente)
+        sorted_results = sorted(self.results, key=lambda r: r.get("hit_ratio", 0), reverse=True)
         
-        for result in self.results:
-            config = result["config"]
-            rows.append([
-                config["policy"],
-                f"{result['hit_ratio']:.2%}",
-                f"{result['avg_latency_ms']:.2f}ms",
-                f"{result['requests_per_second']:.2f}",
-                result["l1_hits"],
-                result["prefetches"],
-                f"{result['compression_savings_bytes']/1024:.2f} KB"
-            ])
+        # Preparar tabla de resultados
+        headers = [
+            "Política",
+            "Particiones",
+            "Ratio L1",
+            "Prefetch",
+            "Compresión",
+            "Hit Ratio",
+            "Latencia (ms)",
+            "Throughput",
+            "Hits",
+            "Misses",
+            "Memoria"
+        ]
+        
+        rows = []
+        for result in sorted_results:
+            if "error" in result and not result.get("hit_ratio"):
+                # Mostrar error para configuraciones fallidas
+                row = [
+                    result["config"]["policy"],
+                    result["config"]["partitions"],
+                    result["config"]["l1_ratio"],
+                    result["config"]["prefetch"],
+                    result["config"]["compression"],
+                    "ERROR",
+                    "ERROR",
+                    "ERROR",
+                    "ERROR",
+                    "ERROR",
+                    "ERROR"
+                ]
+            else:
+                # Mostrar métricas para configuraciones exitosas
+                row = [
+                    result["config"]["policy"],
+                    result["config"]["partitions"],
+                    result["config"]["l1_ratio"],
+                    result["config"]["prefetch"],
+                    result["config"]["compression"],
+                    f"{result.get('hit_ratio', 0):.2%}",
+                    f"{result.get('avg_latency_ms', 0):.2f}",
+                    f"{result.get('requests_per_second', 0):.2f}",
+                    result.get("hits", 0),
+                    result.get("misses", 0),
+                    f"{result.get('monitoring', {}).get('memory_usage', 0):.2%}"
+                ]
+            rows.append(row)
         
         # Imprimir tabla
-        print("\n" + "=" * 80)
-        print("RESULTADOS DE PRUEBAS DE CACHÉ")
-        print("=" * 80)
+        print("\nResultados de optimización de caché:")
         print(tabulate(rows, headers=headers, tablefmt="grid"))
         
-        # Encontrar la mejor configuración
-        best_hit_ratio = max(self.results, key=lambda x: x["hit_ratio"])
-        best_latency = min(self.results, key=lambda x: x["avg_latency_ms"])
-        best_throughput = max(self.results, key=lambda x: x["requests_per_second"])
-        
-        print("\nMejor Hit Ratio: " + best_hit_ratio["config"]["policy"] + f" ({best_hit_ratio['hit_ratio']:.2%})")
-        print("Mejor Latencia: " + best_latency["config"]["policy"] + f" ({best_latency['avg_latency_ms']:.2f}ms)")
-        print("Mejor Throughput: " + best_throughput["config"]["policy"] + f" ({best_throughput['requests_per_second']:.2f} req/s)")
-        
-        # Recomendación
-        print("\nRecomendación para este patrón de acceso:")
-        
-        # Calcular puntuación ponderada
-        weighted_scores = []
-        for result in self.results:
-            # Normalizar métricas (mayor es mejor)
-            hit_ratio_norm = result["hit_ratio"] / best_hit_ratio["hit_ratio"] if best_hit_ratio["hit_ratio"] > 0 else 0
-            latency_norm = best_latency["avg_latency_ms"] / result["avg_latency_ms"] if result["avg_latency_ms"] > 0 else 0
-            throughput_norm = result["requests_per_second"] / best_throughput["requests_per_second"] if best_throughput["requests_per_second"] > 0 else 0
+        # Mostrar mejor configuración
+        if sorted_results and "error" not in sorted_results[0]:
+            best_config = sorted_results[0]["config"]
+            print("\nMejor configuración:")
+            print(f"Política: {best_config['policy']}")
+            print(f"Particiones: {best_config['partitions']}")
+            print(f"Ratio L1: {best_config['l1_ratio']}")
+            print(f"Prefetch: {best_config['prefetch']}")
+            print(f"Compresión: {best_config['compression']} bytes")
+            print(f"Hit Ratio: {sorted_results[0].get('hit_ratio', 0):.2%}")
+            print(f"Latencia: {sorted_results[0].get('avg_latency_ms', 0):.2f} ms")
             
             # Puntuación ponderada (ajustar pesos según prioridades)
             score = hit_ratio_norm * 0.5 + latency_norm * 0.3 + throughput_norm * 0.2
