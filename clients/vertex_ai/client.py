@@ -72,26 +72,58 @@ class VertexAIClient:
                  redis_url=None,
                  cache_ttl=3600,
                  max_cache_size=1000,
-                 max_connections=10):
+                 max_connections=10,
+                 cache_policy="hybrid",
+                 cache_partitions=4,
+                 l1_size_ratio=0.2,
+                 prefetch_threshold=0.8,
+                 compression_threshold=1024,
+                 compression_level=6):
         """
-        Inicializa el cliente.
+        Inicializa el cliente con soporte para estrategias avanzadas de caché.
         
         Args:
             use_redis_cache: Si True, usa Redis para caché si está disponible
             redis_url: URL de conexión a Redis (opcional)
             cache_ttl: Tiempo de vida para entradas de caché (segundos)
-            max_cache_size: Tamaño máximo del caché en memoria
+            max_cache_size: Tamaño máximo del caché en memoria (MB)
             max_connections: Máximo de conexiones en el pool
+            cache_policy: Política de caché ("lru", "lfu", "fifo", "hybrid")
+            cache_partitions: Número de particiones para el caché
+            l1_size_ratio: Proporción del tamaño para caché L1 (memoria)
+            prefetch_threshold: Umbral de accesos para precarga
+            compression_threshold: Tamaño mínimo para comprimir valores (bytes)
+            compression_level: Nivel de compresión (1-9, 9 es máximo)
         """
         self._initialized = False
         self.is_initialized = False
         
-        # Inicializar caché
+        # Inicializar caché con estrategias avanzadas
+        from .cache import CachePolicy
+        
+        # Convertir string de política a enum
+        policy_map = {
+            "lru": CachePolicy.LRU,
+            "lfu": CachePolicy.LFU,
+            "fifo": CachePolicy.FIFO,
+            "hybrid": CachePolicy.HYBRID,
+            "ttl": CachePolicy.TTL
+        }
+        cache_policy_enum = policy_map.get(cache_policy.lower(), CachePolicy.HYBRID)
+        
+        # Crear gestor de caché avanzado
         self.cache_manager = CacheManager(
             use_redis=use_redis_cache,
             redis_url=redis_url,
             ttl=cache_ttl,
-            max_memory_size=max_cache_size
+            max_memory_size=max_cache_size,
+            cache_policy=cache_policy_enum,
+            partitions=cache_partitions,
+            l1_size_ratio=l1_size_ratio,
+            prefetch_threshold=prefetch_threshold,
+            compression_threshold=compression_threshold,
+            compression_level=compression_level,
+            enable_telemetry=True
         )
         
         # Inicializar pool de conexiones
@@ -160,18 +192,43 @@ class VertexAIClient:
         if not self._initialized:
             await self.initialize()
     
-    def _get_cache_key(self, data: Any) -> str:
+    def _get_cache_key(self, data: Any, operation: str = None, namespace: str = None) -> str:
         """
-        Genera una clave de caché para los datos.
+        Genera una clave de caché para los datos con soporte para patrones de invalidación.
         
         Args:
             data: Datos para generar la clave
+            operation: Operación relacionada con los datos (ej: "generate_content", "embedding")
+            namespace: Espacio de nombres para agrupar claves relacionadas
             
         Returns:
-            str: Clave de caché
+            str: Clave de caché con formato que soporta patrones de invalidación
         """
-        json_str = json.dumps(data, sort_keys=True)
-        return hashlib.md5(json_str.encode()).hexdigest()
+        # Usar xxhash si está disponible (más rápido)
+        try:
+            import xxhash
+            hash_func = lambda x: xxhash.xxh64(x).hexdigest()
+        except ImportError:
+            # Alternativa con hashlib
+            hash_func = lambda x: hashlib.md5(x).hexdigest()
+        
+        # Convertir a JSON y generar hash
+        if isinstance(data, str):
+            serialized = data
+        else:
+            serialized = json.dumps(data, sort_keys=True)
+        
+        # Generar hash del contenido
+        content_hash = hash_func(serialized.encode('utf-8'))
+        
+        # Construir clave con formato para patrones de invalidación
+        prefix = "vertex"
+        if namespace:
+            prefix = f"{prefix}:{namespace}"
+        if operation:
+            prefix = f"{prefix}:{operation}"
+            
+        return f"{prefix}:{content_hash}"
 
     @measure_execution_time("vertex_ai.client.generate_content")
     @with_retries(max_retries=3, base_delay=1.0, backoff_factor=2)
@@ -182,21 +239,25 @@ class VertexAIClient:
         temperature: float = 0.7,
         max_output_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
-        top_k: Optional[int] = None
+        top_k: Optional[int] = None,
+        cache_namespace: Optional[str] = None,
+        skip_cache: bool = False
     ) -> Dict[str, Any]:
         """
-        Genera contenido de texto usando el modelo de lenguaje.
+        Genera contenido de texto usando el modelo de lenguaje con soporte para caché avanzado.
         
         Args:
             prompt: Prompt para el modelo
             system_instruction: Instrucción de sistema (opcional)
             temperature: Temperatura para la generación (0.0-1.0)
-            max_output_tokens: Máximo de tokens a generar
+            max_output_tokens: Límite de tokens de salida
             top_p: Parámetro top_p para muestreo
             top_k: Parámetro top_k para muestreo
+            cache_namespace: Espacio de nombres para agrupar claves relacionadas (opcional)
+            skip_cache: Si es True, omite la caché y siempre realiza la llamada a la API
             
         Returns:
-            Dict[str, Any]: Respuesta generada
+            Dict[str, Any]: Respuesta generada y metadatos
         """
         await self._ensure_initialized()
         
@@ -216,23 +277,37 @@ class VertexAIClient:
             self.stats["content_requests"] += 1
             
             # Verificar caché
-            cache_key = self._get_cache_key({
-                "type": "content",
+            await self._ensure_initialized()
+        
+            # Preparar datos para caché
+            cache_data = {
                 "prompt": prompt,
                 "system_instruction": system_instruction,
                 "temperature": temperature,
                 "max_output_tokens": max_output_tokens,
                 "top_p": top_p,
                 "top_k": top_k
-            })
-            
-            # Intentar obtener de caché
-            cached = await self.cache_manager.get(cache_key)
-            if cached:
-                telemetry_adapter.add_span_event(span, "generation.cache_hit")
-                telemetry_adapter.set_span_attribute(span, "client.cache", "hit")
-                telemetry_adapter.record_metric("vertex_ai.client.cache_hits", 1, {"operation": "content"})
-                return cached
+            }
+        
+            # Generar clave de caché con soporte para patrones de invalidación
+            cache_key = self._get_cache_key(
+                data=cache_data,
+                operation="generate_content",
+                namespace=cache_namespace
+            )
+        
+            # Intentar obtener de caché (a menos que se indique omitirla)
+            if not skip_cache:
+                cached_response = await self.cache_manager.get(cache_key)
+                if cached_response:
+                    self.stats["latency_ms"].setdefault("content_generation", []).append(0)  # 0ms desde caché
+                    # Usar set_span_attribute en lugar de record_event para compatibilidad
+                    telemetry_adapter.set_span_attribute(span, "cache.hit", True)
+                    telemetry_adapter.set_span_attribute(span, "cache.operation", "generate_content")
+                    telemetry_adapter.set_span_attribute(span, "cache.namespace", cache_namespace or "default")
+                    telemetry_adapter.set_span_attribute(span, "client.cache", "hit")
+                    telemetry_adapter.record_metric("vertex_ai.client.cache_hits", 1, {"operation": "content"})
+                    return cached_response
                 
             telemetry_adapter.add_span_event(span, "generation.cache_miss")
             telemetry_adapter.set_span_attribute(span, "client.cache", "miss")
