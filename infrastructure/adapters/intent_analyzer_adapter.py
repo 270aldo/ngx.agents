@@ -43,7 +43,7 @@ class IntentAnalyzerAdapter:
             cls._instance._initialized = False
         return cls._instance
     
-    def __init__(self, use_optimized: bool = False):
+    def __init__(self, use_optimized: bool = True):
         """
         Inicializa el adaptador.
         

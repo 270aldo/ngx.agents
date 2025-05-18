@@ -1,0 +1,47 @@
+{
+  "timestamp": "2025-05-15T18:34:39.806142",
+  "base_dir": "/Users/aldoolivas/Desktop/ngx-agents-refactorizado",
+  "backup_dir": "/Users/aldoolivas/Desktop/ngx-agents-refactorizado/backups/state_manager_migration_20250515_183439",
+  "test_mode": false,
+  "dependencies": {
+    "required": {
+      "asyncio": "installed",
+      "json": "installed",
+      "uuid": "installed"
+    },
+    "optional": {
+      "redis": "missing",
+      "opentelemetry-api": "missing",
+      "opentelemetry-sdk": "missing",
+      "opentelemetry-instrumentation": "missing"
+    }
+  },
+  "files": {
+    "checked": [
+      "core/state_manager_optimized.py",
+      "infrastructure/adapters/state_manager_adapter.py",
+      "tests/test_core/test_state_manager.py",
+      "tests/test_adapters/test_state_manager_adapter.py"
+    ],
+    "modified": [],
+    "errors": []
+  },
+  "tests": {
+    "passed": [
+      "_test_create_conversation",
+      "_test_save_and_load_state",
+      "_test_update_state",
+      "_test_delete_state"
+    ],
+    "failed": []
+  },
+  "status": "completed",
+  "end_timestamp": "2025-05-15T18:34:40.026050",
+  "summary": {
+    "files_checked": 4,
+    "files_modified": 0,
+    "files_with_errors": 0,
+    "tests_passed": 4,
+    "tests_failed": 0
+  }
+}

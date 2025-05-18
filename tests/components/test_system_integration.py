@@ -5,6 +5,13 @@ Este módulo contiene pruebas end-to-end que verifican la integración de todos 
 del sistema NGX Agents optimizado, incluyendo la comunicación entre agentes.
 """
 
+
+import os
+# Configurar modo mock para pruebas
+os.environ["MOCK_MODE"] = "True"
+os.environ["MOCK_VERTEX_AI"] = "True"
+os.environ["MOCK_A2A"] = "True"
+
 import pytest
 import asyncio
 import uuid

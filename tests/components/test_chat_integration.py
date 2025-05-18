@@ -5,6 +5,13 @@ Este módulo contiene pruebas para verificar que la integración entre
 el endpoint /chat/ y el Orchestrator funcione correctamente.
 """
 
+
+import os
+# Configurar modo mock para pruebas
+os.environ["MOCK_MODE"] = "True"
+os.environ["MOCK_VERTEX_AI"] = "True"
+os.environ["MOCK_A2A"] = "True"
+
 import pytest
 import asyncio
 from fastapi.testclient import TestClient

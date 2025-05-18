@@ -1,422 +1,735 @@
 """
-Adaptador para integrar capacidades de procesamiento de documentos en los agentes.
+Adaptador para procesamiento de documentos.
 
-Este módulo proporciona un adaptador que permite a los agentes utilizar
-las capacidades de procesamiento de documentos estructurados y reconocimiento
-de objetos específicos.
+Este módulo proporciona un adaptador que simplifica el acceso a las capacidades
+de procesamiento de documentos para otros componentes del sistema.
 """
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Union
+import os
+from typing import Dict, List, Any, Optional, Tuple, Union, BinaryIO
+from datetime import datetime
 
+from core.document_processor import DocumentProcessor
 from core.logging_config import get_logger
-from infrastructure.adapters.telemetry_adapter import get_telemetry_adapter, measure_execution_time
-from core.document_processor import document_processor
-from core.object_recognition import object_recognition
-from core.vision_metrics import vision_metrics
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 
 # Configurar logger
 logger = get_logger(__name__)
-telemetry_adapter = get_telemetry_adapter()
 
-class DocumentAdapter:
-    """
-    Adaptador para integrar capacidades de procesamiento de documentos en los agentes.
-    
-    Proporciona métodos para extraer tablas, formularios y reconocer objetos específicos
-    en imágenes y documentos.
-    """
-    
-    def __init__(self):
-        """Inicializa el adaptador de procesamiento de documentos."""
+# Singleton para el adaptador de documentos
+document_adapter = None
+
+class DocumentAdapter(BaseAgentAdapter):
+    """Adaptador para capacidades de procesamiento de documentos."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """Inicializa el adaptador de documentos.
+
+        Args:
+            config: Configuración opcional para el adaptador.
+                Puede incluir:
+                - project_id: ID del proyecto de Google Cloud
+                - location: Ubicación de los procesadores (ej. 'us', 'eu')
+                - timeout: Tiempo máximo de espera para operaciones (segundos)
+                - mock_mode: Modo simulado para pruebas sin API real
+                - circuit_breaker_config: Configuración del circuit breaker
+        """
+        super().__init__()
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.config = config or {}
         self._initialized = False
-        self.is_initialized = False
+        self._initializing = False
+        self.document_processor = None
         
-        # Lock para inicialización
-        self._init_lock = asyncio.Lock()
+        # Configuración básica
+        self.project_id = self.config.get("project_id") or os.environ.get(
+            "GOOGLE_CLOUD_PROJECT"
+        )
+        self.location = self.config.get("location") or os.environ.get(
+            "DOCUMENT_AI_LOCATION", "us"
+        )
+        self.timeout = self.config.get("timeout") or int(os.environ.get(
+            "DOCUMENT_AI_TIMEOUT", "60"
+        ))
         
-        # Estadísticas
-        self.stats = {
-            "extract_tables_calls": 0,
-            "extract_forms_calls": 0,
-            "recognize_objects_calls": 0,
-            "errors": {}
-        }
-    
-    @measure_execution_time("document_adapter.initialize")
-    async def initialize(self) -> bool:
+        # Modo simulado para pruebas
+        self.mock_mode = self.config.get("mock_mode", False)
+        if not self.project_id:
+            self.logger.warning(
+                "No se encontró project_id. Activando modo simulado."
+            )
+            self.mock_mode = True
+
+    async def initialize(self) -> None:
+        """Inicializa el adaptador de documentos.
+
+        Esta función debe ser llamada antes de usar cualquier otra función del adaptador.
         """
-        Inicializa el adaptador de procesamiento de documentos.
+        if self._initialized or self._initializing:
+            return
         
-        Returns:
-            bool: True si la inicialización fue exitosa
-        """
-        async with self._init_lock:
-            if self._initialized:
-                return True
-                
-            span = telemetry_adapter.start_span("DocumentAdapter.initialize")
-            try:
-                telemetry_adapter.add_span_event(span, "initialization_start")
-                
-                # No hay inicialización específica necesaria ya que los
-                # procesadores subyacentes se inicializan automáticamente
-                
-                self._initialized = True
-                self.is_initialized = True
-                
-                telemetry_adapter.set_span_attribute(span, "initialization_status", "success")
-                telemetry_adapter.record_metric("document_adapter.initializations", 1, {"status": "success"})
-                logger.info("DocumentAdapter inicializado.")
-                return True
-            except Exception as e:
-                telemetry_adapter.record_exception(span, e)
-                telemetry_adapter.set_span_attribute(span, "initialization_status", "failure")
-                telemetry_adapter.record_metric("document_adapter.initializations", 1, {"status": "failure"})
-                logger.error(f"Error durante la inicialización del adaptador de documentos: {e}")
-                return False
-            finally:
-                telemetry_adapter.end_span(span)
-    
+        self._initializing = True
+        
+        try:
+            self.logger.info("Inicializando adaptador de documentos...")
+            
+            # Inicializar procesador de documentos
+            self.document_processor = DocumentProcessor({
+                "project_id": self.project_id,
+                "location": self.location,
+                "timeout": self.timeout,
+                "mock_mode": self.mock_mode,
+                "circuit_breaker_config": self.config.get("circuit_breaker_config", {})
+            })
+            
+            self._initialized = True
+            self.logger.info("Adaptador de documentos inicializado correctamente.")
+            
+        except Exception as e:
+            self.logger.error(f"Error al inicializar adaptador de documentos: {e}")
+            self._initialized = False
+            raise
+        finally:
+            self._initializing = False
+
     async def _ensure_initialized(self) -> None:
-        """Asegura que el adaptador esté inicializado."""
+        """Asegura que el adaptador esté inicializado antes de usarlo."""
         if not self._initialized:
             await self.initialize()
-    
-    @measure_execution_time("document_adapter.extract_tables")
-    async def extract_tables(
+
+    async def process_document(
         self,
-        image_data: Union[str, bytes, Dict[str, Any]],
-        language_code: str = "es-ES",
-        agent_id: str = "unknown"
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Extrae tablas de un documento o imagen.
-        
+        """Procesa un documento.
+
         Args:
-            image_data: Datos de la imagen (base64, bytes o dict con url o path)
-            language_code: Código de idioma para el OCR
-            agent_id: ID del agente que realiza la solicitud (para métricas)
-            
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para el procesamiento.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+                - processor_id: ID del procesador a utilizar.
+                - document_type: Tipo de documento para seleccionar el procesador adecuado.
+                - auto_classify: Si es True, clasifica automáticamente el documento.
+
         Returns:
-            Dict[str, Any]: Tablas extraídas y metadatos
+            Diccionario con los resultados del procesamiento.
         """
         await self._ensure_initialized()
         
-        span = telemetry_adapter.start_span("DocumentAdapter.extract_tables", {
-            "agent_id": agent_id,
-            "language_code": language_code
-        })
-        
-        start_time = asyncio.get_event_loop().time()
-        
         try:
-            # Incrementar contador
-            self.stats["extract_tables_calls"] += 1
+            context = context or {}
             
-            # Llamar al procesador de documentos
-            result = await document_processor.extract_tables(
-                image_data=image_data,
-                language_code=language_code,
-                agent_id=agent_id
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            processor_id = context.get("processor_id")
+            document_type = context.get("document_type")
+            auto_classify = context.get("auto_classify", True)
+            
+            # Procesar documento
+            return await self.document_processor.process_document(
+                document_data, mime_type, processor_id, document_type, auto_classify
             )
-            
-            # Registrar métricas de éxito
-            telemetry_adapter.set_span_attribute(span, "table_count", len(result.get("tables", [])))
-            telemetry_adapter.set_span_attribute(span, "status", "success")
-            telemetry_adapter.record_metric("document_adapter.extract_tables.success", 1)
-            
-            return result
             
         except Exception as e:
-            error_type = type(e).__name__
-            error_count = self.stats["errors"].get(error_type, 0) + 1
-            self.stats["errors"][error_type] = error_count
-            
-            telemetry_adapter.record_exception(span, e)
-            telemetry_adapter.set_span_attribute(span, "adapter.error", str(e))
-            telemetry_adapter.record_metric("document_adapter.errors", 1, {"operation": "extract_tables", "error_type": error_type})
-            
-            logger.error(f"Error en DocumentAdapter.extract_tables: {str(e)}")
-            
-            # Calcular latencia incluso en caso de error
-            latency_ms = (asyncio.get_event_loop().time() - start_time) * 1000
-            
-            # Registrar métricas de error
-            await vision_metrics.record_api_call(
-                operation="extract_tables",
-                agent_id=agent_id,
-                success=False,
-                latency_ms=latency_ms,
-                error_type=error_type
-            )
-            
+            self.logger.error(f"Error al procesar documento: {e}")
             return {
                 "error": str(e),
-                "tables": [],
-                "status": "error"
+                "success": False,
+                "text": "",
+                "pages": [],
+                "entities": []
             }
-            
-        finally:
-            telemetry_adapter.end_span(span)
-    
-    @measure_execution_time("document_adapter.extract_forms")
-    async def extract_forms(
+
+    async def extract_text(
         self,
-        image_data: Union[str, bytes, Dict[str, Any]],
-        language_code: str = "es-ES",
-        agent_id: str = "unknown"
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Extrae datos de formularios de un documento o imagen.
-        
+        """Extrae texto de un documento.
+
         Args:
-            image_data: Datos de la imagen (base64, bytes o dict con url o path)
-            language_code: Código de idioma para el OCR
-            agent_id: ID del agente que realiza la solicitud (para métricas)
-            
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para la extracción.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+                - processor_id: ID del procesador a utilizar.
+
         Returns:
-            Dict[str, Any]: Datos de formularios extraídos y metadatos
+            Diccionario con el texto extraído y metadatos.
         """
         await self._ensure_initialized()
         
-        span = telemetry_adapter.start_span("DocumentAdapter.extract_forms", {
-            "agent_id": agent_id,
-            "language_code": language_code
-        })
-        
-        start_time = asyncio.get_event_loop().time()
-        
         try:
-            # Incrementar contador
-            self.stats["extract_forms_calls"] += 1
+            context = context or {}
             
-            # Llamar al procesador de documentos
-            result = await document_processor.extract_forms(
-                image_data=image_data,
-                language_code=language_code,
-                agent_id=agent_id
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            processor_id = context.get("processor_id")
+            
+            # Extraer texto
+            return await self.document_processor.extract_text(
+                document_data, mime_type, processor_id
             )
-            
-            # Registrar métricas de éxito
-            telemetry_adapter.set_span_attribute(span, "field_count", len(result.get("form_fields", [])))
-            telemetry_adapter.set_span_attribute(span, "status", "success")
-            telemetry_adapter.record_metric("document_adapter.extract_forms.success", 1)
-            
-            return result
             
         except Exception as e:
-            error_type = type(e).__name__
-            error_count = self.stats["errors"].get(error_type, 0) + 1
-            self.stats["errors"][error_type] = error_count
-            
-            telemetry_adapter.record_exception(span, e)
-            telemetry_adapter.set_span_attribute(span, "adapter.error", str(e))
-            telemetry_adapter.record_metric("document_adapter.errors", 1, {"operation": "extract_forms", "error_type": error_type})
-            
-            logger.error(f"Error en DocumentAdapter.extract_forms: {str(e)}")
-            
-            # Calcular latencia incluso en caso de error
-            latency_ms = (asyncio.get_event_loop().time() - start_time) * 1000
-            
-            # Registrar métricas de error
-            await vision_metrics.record_api_call(
-                operation="extract_forms",
-                agent_id=agent_id,
-                success=False,
-                latency_ms=latency_ms,
-                error_type=error_type
-            )
-            
+            self.logger.error(f"Error al extraer texto: {e}")
             return {
                 "error": str(e),
-                "form_fields": [],
-                "status": "error"
+                "success": False,
+                "text": ""
             }
-            
-        finally:
-            telemetry_adapter.end_span(span)
-    
-    @measure_execution_time("document_adapter.recognize_objects")
-    async def recognize_objects(
+
+    async def classify_document(
         self,
-        image_data: Union[str, bytes, Dict[str, Any]],
-        domain: str = "general",
-        confidence_threshold: float = 0.5,
-        agent_id: str = "unknown"
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Reconoce objetos en una imagen para un dominio específico.
-        
+        """Clasifica un documento.
+
         Args:
-            image_data: Datos de la imagen (base64, bytes o dict con url o path)
-            domain: Dominio de objetos a reconocer (general, medical, industrial, retail, custom)
-            confidence_threshold: Umbral de confianza para incluir detecciones (0.0-1.0)
-            agent_id: ID del agente que realiza la solicitud (para métricas)
-            
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para la clasificación.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+                - processor_id: ID del procesador a utilizar.
+                - confidence_threshold: Umbral de confianza para incluir clasificaciones.
+
         Returns:
-            Dict[str, Any]: Objetos reconocidos y metadatos
+            Diccionario con las clasificaciones del documento.
         """
         await self._ensure_initialized()
         
-        span = telemetry_adapter.start_span("DocumentAdapter.recognize_objects", {
-            "agent_id": agent_id,
-            "domain": domain,
-            "confidence_threshold": confidence_threshold
-        })
-        
-        start_time = asyncio.get_event_loop().time()
-        
         try:
-            # Incrementar contador
-            self.stats["recognize_objects_calls"] += 1
+            context = context or {}
             
-            # Llamar al sistema de reconocimiento de objetos
-            result = await object_recognition.recognize_objects(
-                image_data=image_data,
-                domain=domain,
-                confidence_threshold=confidence_threshold,
-                agent_id=agent_id
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            processor_id = context.get("processor_id")
+            confidence_threshold = context.get("confidence_threshold", 0.5)
+            
+            # Clasificar documento
+            return await self.document_processor.classify_document(
+                document_data, mime_type, processor_id, confidence_threshold
             )
-            
-            # Registrar métricas de éxito
-            telemetry_adapter.set_span_attribute(span, "object_count", len(result.get("detections", [])))
-            telemetry_adapter.set_span_attribute(span, "status", "success")
-            telemetry_adapter.record_metric("document_adapter.recognize_objects.success", 1)
-            
-            return result
             
         except Exception as e:
-            error_type = type(e).__name__
-            error_count = self.stats["errors"].get(error_type, 0) + 1
-            self.stats["errors"][error_type] = error_count
-            
-            telemetry_adapter.record_exception(span, e)
-            telemetry_adapter.set_span_attribute(span, "adapter.error", str(e))
-            telemetry_adapter.record_metric("document_adapter.errors", 1, {"operation": "recognize_objects", "error_type": error_type})
-            
-            logger.error(f"Error en DocumentAdapter.recognize_objects: {str(e)}")
-            
-            # Calcular latencia incluso en caso de error
-            latency_ms = (asyncio.get_event_loop().time() - start_time) * 1000
-            
-            # Registrar métricas de error
-            await vision_metrics.record_api_call(
-                operation="recognize_objects",
-                agent_id=agent_id,
-                success=False,
-                latency_ms=latency_ms,
-                error_type=error_type
-            )
-            
+            self.logger.error(f"Error al clasificar documento: {e}")
             return {
                 "error": str(e),
-                "detections": [],
-                "status": "error"
+                "success": False,
+                "document_type": "unknown",
+                "classifications": [],
+                "confidence": 0.0
             }
-            
-        finally:
-            telemetry_adapter.end_span(span)
-    
-    async def register_custom_domain(
+
+    async def extract_entities(
         self,
-        domain_name: str,
-        objects: List[str],
-        description: str = "",
-        agent_id: str = "unknown"
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Registra un dominio personalizado con objetos específicos.
-        
+        """Extrae entidades de un documento.
+
         Args:
-            domain_name: Nombre del dominio personalizado
-            objects: Lista de objetos a reconocer en este dominio
-            description: Descripción del dominio
-            agent_id: ID del agente que realiza la solicitud (para métricas)
-            
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para la extracción.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+                - processor_id: ID del procesador a utilizar.
+                - document_type: Tipo de documento para seleccionar el procesador adecuado.
+                - entity_types: Lista de tipos de entidades a extraer.
+
         Returns:
-            Dict[str, Any]: Información del dominio registrado
+            Diccionario con las entidades extraídas.
         """
         await self._ensure_initialized()
         
-        span = telemetry_adapter.start_span("DocumentAdapter.register_custom_domain", {
-            "agent_id": agent_id,
-            "domain_name": domain_name,
-            "object_count": len(objects)
-        })
-        
         try:
-            # Llamar al sistema de reconocimiento de objetos
-            result = await object_recognition.register_custom_domain(
-                domain_name=domain_name,
-                objects=objects,
-                description=description,
-                agent_id=agent_id
+            context = context or {}
+            
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            processor_id = context.get("processor_id")
+            document_type = context.get("document_type")
+            entity_types = context.get("entity_types")
+            
+            # Extraer entidades
+            return await self.document_processor.extract_entities(
+                document_data, mime_type, processor_id, document_type, entity_types
             )
             
-            # Registrar métricas de éxito
-            telemetry_adapter.set_span_attribute(span, "status", "success")
-            telemetry_adapter.record_metric("document_adapter.register_custom_domain.success", 1)
-            
-            return result
-            
         except Exception as e:
-            error_type = type(e).__name__
-            error_count = self.stats["errors"].get(error_type, 0) + 1
-            self.stats["errors"][error_type] = error_count
-            
-            telemetry_adapter.record_exception(span, e)
-            telemetry_adapter.set_span_attribute(span, "adapter.error", str(e))
-            telemetry_adapter.record_metric("document_adapter.errors", 1, {"operation": "register_custom_domain", "error_type": error_type})
-            
-            logger.error(f"Error en DocumentAdapter.register_custom_domain: {str(e)}")
-            
+            self.logger.error(f"Error al extraer entidades: {e}")
             return {
                 "error": str(e),
-                "status": "error"
+                "success": False,
+                "entities": [],
+                "entities_by_type": {}
             }
-            
-        finally:
-            telemetry_adapter.end_span(span)
-    
-    async def get_available_domains(self) -> Dict[str, Any]:
-        """
-        Obtiene la lista de dominios disponibles para reconocimiento de objetos.
-        
+
+    async def process_form(
+        self,
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Procesa un formulario para extraer campos clave-valor.
+
+        Args:
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para el procesamiento.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+                - processor_id: ID del procesador a utilizar.
+
         Returns:
-            Dict[str, Any]: Información de dominios disponibles
+            Diccionario con los campos del formulario extraídos.
         """
         await self._ensure_initialized()
         
         try:
-            return await object_recognition.get_available_domains()
+            context = context or {}
+            
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            processor_id = context.get("processor_id")
+            
+            # Procesar formulario
+            return await self.document_processor.process_form(
+                document_data, mime_type, processor_id
+            )
+            
         except Exception as e:
-            logger.error(f"Error al obtener dominios disponibles: {e}")
+            self.logger.error(f"Error al procesar formulario: {e}")
             return {
                 "error": str(e),
-                "domains": {},
+                "success": False,
+                "form_fields": {},
+                "entities": []
+            }
+
+    async def extract_personal_information(
+        self,
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Extrae información personal de un documento.
+
+        Args:
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para la extracción.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+
+        Returns:
+            Diccionario con la información personal extraída.
+        """
+        await self._ensure_initialized()
+        
+        try:
+            context = context or {}
+            
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            
+            # Extraer información personal
+            return await self.document_processor.extract_personal_information(
+                document_data, mime_type
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error al extraer información personal: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "personal_info": {},
+                "entities": []
+            }
+
+    async def extract_business_information(
+        self,
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Extrae información de negocios de un documento.
+
+        Args:
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para la extracción.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+
+        Returns:
+            Diccionario con la información de negocios extraída.
+        """
+        await self._ensure_initialized()
+        
+        try:
+            context = context or {}
+            
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            
+            # Extraer información de negocios
+            return await self.document_processor.extract_business_information(
+                document_data, mime_type
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error al extraer información de negocios: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "business_info": {},
+                "entities": []
+            }
+
+    async def extract_medical_information(
+        self,
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Extrae información médica de un documento.
+
+        Args:
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para la extracción.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+
+        Returns:
+            Diccionario con la información médica extraída.
+        """
+        await self._ensure_initialized()
+        
+        try:
+            context = context or {}
+            
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            
+            # Extraer información médica
+            return await self.document_processor.extract_medical_information(
+                document_data, mime_type
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error al extraer información médica: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "medical_info": {},
+                "entities": []
+            }
+
+    async def extract_invoice_information(
+        self,
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Extrae información de facturas.
+
+        Args:
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para la extracción.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+
+        Returns:
+            Diccionario con la información de la factura extraída.
+        """
+        await self._ensure_initialized()
+        
+        try:
+            context = context or {}
+            
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            
+            # Extraer información de factura
+            return await self.document_processor.extract_invoice_information(
+                document_data, mime_type
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error al extraer información de factura: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "invoice_info": {
+                    "supplier": {},
+                    "customer": {},
+                    "invoice_details": {},
+                    "line_items": [],
+                    "payment_info": {},
+                    "totals": {}
+                },
+                "entities": []
+            }
+
+    async def extract_id_document_information(
+        self,
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Extrae información de documentos de identidad.
+
+        Args:
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para la extracción.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+
+        Returns:
+            Diccionario con la información del documento de identidad extraída.
+        """
+        await self._ensure_initialized()
+        
+        try:
+            context = context or {}
+            
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            
+            # Extraer información de documento de identidad
+            return await self.document_processor.extract_id_document_information(
+                document_data, mime_type
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error al extraer información de documento de identidad: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "id_document_info": {
+                    "personal_details": {},
+                    "document_details": {}
+                },
+                "entities": []
+            }
+
+    async def analyze_document(
+        self,
+        document_data: Union[bytes, BinaryIO, str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Realiza un análisis completo de un documento.
+
+        Args:
+            document_data: Datos del documento (bytes, archivo o ruta).
+            context: Contexto adicional para el análisis.
+                Puede incluir:
+                - mime_type: Tipo MIME del documento.
+
+        Returns:
+            Diccionario con los resultados del análisis completo.
+        """
+        await self._ensure_initialized()
+        
+        try:
+            context = context or {}
+            
+            # Extraer parámetros del contexto
+            mime_type = context.get("mime_type")
+            
+            # Analizar documento
+            return await self.document_processor.analyze_document(
+                document_data, mime_type
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error al analizar documento: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "document_type": "unknown",
+                "confidence": 0.0,
+                "classifications": [],
+                "entities": [],
+                "entities_by_type": {},
+                "text": ""
+            }
+
+    async def batch_process_documents(
+        self,
+        documents: List[Tuple[Union[bytes, BinaryIO, str], Optional[Dict[str, Any]]]],
+        context: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """Procesa múltiples documentos en batch.
+
+        Args:
+            documents: Lista de tuplas (document_data, document_context).
+            context: Contexto global para el procesamiento.
+                Puede incluir:
+                - processor_id: ID del procesador a utilizar.
+                - auto_classify: Si es True, clasifica automáticamente cada documento.
+
+        Returns:
+            Lista de resultados de procesamiento para cada documento.
+        """
+        await self._ensure_initialized()
+        
+        try:
+            context = context or {}
+            
+            # Extraer parámetros del contexto global
+            processor_id = context.get("processor_id")
+            auto_classify = context.get("auto_classify", True)
+            
+            # Preparar documentos para procesamiento
+            prepared_documents = []
+            for doc_data, doc_context in documents:
+                doc_context = doc_context or {}
+                mime_type = doc_context.get("mime_type")
+                prepared_documents.append((doc_data, mime_type))
+            
+            # Procesar documentos en batch
+            return await self.document_processor.batch_process_documents(
+                prepared_documents, processor_id, auto_classify
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error al procesar documentos en batch: {e}")
+            return [
+                {
+                    "error": str(e),
+                    "success": False,
+                    "text": "",
+                    "pages": [],
+                    "entities": []
+                }
+                for _ in documents
+            ]
+
+    async def get_available_processors(self) -> Dict[str, Any]:
+        """Obtiene los procesadores disponibles en el proyecto.
+
+        Returns:
+            Diccionario con información sobre los procesadores disponibles.
+        """
+        await self._ensure_initialized()
+        
+        try:
+            return await self.document_processor.get_available_processors()
+        except Exception as e:
+            self.logger.error(f"Error al obtener procesadores disponibles: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "processors": [],
                 "count": 0
             }
-    
+
     async def get_stats(self) -> Dict[str, Any]:
+        """Obtiene estadísticas del adaptador de documentos.
+
+        Returns:
+            Diccionario con estadísticas de uso.
         """
-        Obtiene estadísticas del adaptador de documentos.
+        await self._ensure_initialized()
+        
+        try:
+            return await self.document_processor.get_stats()
+        except Exception as e:
+            self.logger.error(f"Error al obtener estadísticas: {e}")
+            return {
+                "error": str(e),
+                "success": False,
+                "process_operations": 0,
+                "extract_operations": 0,
+                "classify_operations": 0,
+                "errors": 0,
+                "avg_latency_ms": 0,
+                "mock_mode": self.mock_mode
+            }
+
+
+    async def _process_query(self, query: str, user_id: str = None, session_id: str = None, **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la consulta del usuario relacionada con documentos.
+        
+        Args:
+            query: La consulta del usuario
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta del adaptador
+        """
+        try:
+            # Clasificar el tipo de consulta
+            query_type = await self._classify_query(query, user_id)
+            
+            # Verificar si hay un documento en los kwargs
+            document_data = kwargs.get('document_data')
+            context = kwargs.get('context', {})
+            
+            if not document_data:
+                return {
+                    "success": False,
+                    "error": "No se proporcionaron datos de documento para procesar",
+                    "agent": self.__class__.__name__,
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+            # Determinar la operación a realizar según el tipo de consulta
+            result = None
+            if query_type == "text_extraction":
+                result = await self.extract_text(document_data, context)
+            elif query_type == "document_classification":
+                result = await self.classify_document(document_data, context)
+            elif query_type == "entity_extraction":
+                result = await self.extract_entities(document_data, context)
+            elif query_type == "form_processing":
+                result = await self.process_form(document_data, context)
+            elif query_type == "personal_info_extraction":
+                result = await self.extract_personal_information(document_data, context)
+            elif query_type == "business_info_extraction":
+                result = await self.extract_business_information(document_data, context)
+            elif query_type == "medical_info_extraction":
+                result = await self.extract_medical_information(document_data, context)
+            else:
+                # Procesamiento general por defecto
+                result = await self.process_document(document_data, context)
+            
+            return {
+                "success": True,
+                "output": "Procesamiento de documento completado",
+                "query_type": query_type,
+                "result": result,
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error al procesar consulta de documento: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
+        """
+        Obtiene el mapeo de intenciones a tipos de consulta específico para DocumentAdapter.
         
         Returns:
-            Dict[str, Any]: Estadísticas del adaptador
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
         """
-        # Obtener estadísticas de los componentes subyacentes
-        doc_processor_stats = await document_processor.get_stats()
-        object_recognition_stats = await object_recognition.get_stats()
-        
         return {
-            **self.stats,
-            "document_processor_stats": doc_processor_stats,
-            "object_recognition_stats": object_recognition_stats,
-            "initialized": self.is_initialized
+            "extraer texto": "text_extraction",
+            "clasificar": "document_classification",
+            "entidades": "entity_extraction",
+            "formulario": "form_processing",
+            "información personal": "personal_info_extraction",
+            "información de negocio": "business_info_extraction",
+            "información médica": "medical_info_extraction",
+            "procesar": "general_processing",
+            "analizar": "general_processing"
         }
 
-
-# Instancia global del adaptador
+# Inicializar el singleton
 document_adapter = DocumentAdapter()

@@ -1,0 +1,33 @@
+{
+  "timestamp": "2025-05-15T19:21:04.541744",
+  "base_dir": "/Users/aldoolivas/Desktop/ngx-agents-refactorizado",
+  "archive_dir": "/Users/aldoolivas/Desktop/ngx-agents-refactorizado/archived/a2a_server_20250515_192104",
+  "test_mode": false,
+  "files": {
+    "redundant": [
+      "infrastructure/a2a_server.py"
+    ],
+    "with_references": [],
+    "archived": [
+      "infrastructure/a2a_server.py"
+    ],
+    "deleted": [
+      "infrastructure/a2a_server.py"
+    ],
+    "errors": []
+  },
+  "references": {
+    "total": 0,
+    "files": []
+  },
+  "status": "completed",
+  "end_timestamp": "2025-05-15T19:21:04.579589",
+  "summary": {
+    "redundant_files": 1,
+    "files_with_references": 0,
+    "archived_files": 1,
+    "deleted_files": 1,
+    "files_with_errors": 0,
+    "total_references": 0
+  }
+}

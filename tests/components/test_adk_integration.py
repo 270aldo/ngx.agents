@@ -1,6 +1,13 @@
 """
 Pruebas para verificar la integración con Google ADK oficial.
 """
+
+import os
+# Configurar modo mock para pruebas
+os.environ["MOCK_MODE"] = "True"
+os.environ["MOCK_VERTEX_AI"] = "True"
+os.environ["MOCK_A2A"] = "True"
+
 import pytest
 import asyncio
 import logging

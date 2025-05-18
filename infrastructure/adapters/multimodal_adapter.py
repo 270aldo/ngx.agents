@@ -10,15 +10,17 @@ import os
 import json
 import asyncio
 from typing import Dict, Any, Optional, Union, List
+from datetime import datetime
 import aiohttp
 from google.cloud import aiplatform
 from google.cloud.aiplatform import VertexAI
 from core.logging_config import get_logger
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 
 # Configurar logger
 logger = get_logger(__name__)
 
-class MultimodalAdapter:
+class MultimodalAdapter(BaseAgentAdapter):
     """
     Adaptador para procesamiento multimodal utilizando Vertex AI.
     
@@ -33,6 +35,7 @@ class MultimodalAdapter:
         Args:
             model: Modelo de Vertex AI a utilizar para el procesamiento multimodal
         """
+        super().__init__()
         self.model = model
         self.vertex_ai_initialized = False
         
@@ -282,3 +285,75 @@ class MultimodalAdapter:
         except Exception as e:
             logger.error(f"Error al leer imagen desde archivo: {e}", exc_info=True)
             raise
+            
+    async def _process_query(self, query: str, user_id: str = None, session_id: str = None, **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la consulta del usuario relacionada con procesamiento multimodal.
+        
+        Args:
+            query: La consulta del usuario
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta del adaptador
+        """
+        try:
+            # Clasificar el tipo de consulta
+            query_type = await self._classify_query(query, user_id)
+            
+            # Verificar si hay una imagen en los kwargs
+            image_data = kwargs.get('image_data')
+            image_data2 = kwargs.get('image_data2')
+            
+            if not image_data:
+                return {
+                    "success": False,
+                    "error": "No se proporcionaron datos de imagen para procesar",
+                    "agent": self.__class__.__name__,
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+            # Determinar la operación a realizar según el tipo de consulta
+            result = None
+            if query_type == "image_comparison" and image_data2:
+                # Si es comparación de imágenes y tenemos dos imágenes
+                result = await self.compare_images(image_data, image_data2, comparison_prompt=query)
+            else:
+                # Procesamiento multimodal estándar
+                result = await self.process_multimodal(query, image_data)
+            
+            return {
+                "success": True,
+                "output": result.get("text", "Procesamiento multimodal completado"),
+                "query_type": query_type,
+                "model": result.get("model", self.model),
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error al procesar consulta multimodal: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
+        """
+        Obtiene el mapeo de intenciones a tipos de consulta específico para MultimodalAdapter.
+        
+        Returns:
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
+        """
+        return {
+            "comparar": "image_comparison",
+            "diferencia": "image_comparison",
+            "similitud": "image_comparison",
+            "describir": "image_description",
+            "analizar": "image_analysis",
+            "identificar": "object_identification",
+            "explicar": "content_explanation"
+        }

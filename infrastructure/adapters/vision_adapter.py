@@ -11,16 +11,18 @@ import base64
 import logging
 import os
 from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
 
 from core.logging_config import get_logger
 from infrastructure.adapters.telemetry_adapter import get_telemetry_adapter, measure_execution_time
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 from clients.vertex_ai.vision_client import vision_client
 
 # Configurar logger
 logger = get_logger(__name__)
 telemetry_adapter = get_telemetry_adapter()
 
-class VisionAdapter:
+class VisionAdapter(BaseAgentAdapter):
     """
     Adaptador para integrar capacidades de visión en los agentes.
     
@@ -30,6 +32,7 @@ class VisionAdapter:
     
     def __init__(self):
         """Inicializa el adaptador de visión."""
+        super().__init__()
         self._initialized = False
         self.is_initialized = False
         
@@ -460,7 +463,84 @@ class VisionAdapter:
             "client_stats": client_stats,
             "initialized": self.is_initialized
         }
-
+    async def _process_query(self, query: str, user_id: str = None, session_id: str = None, **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la consulta del usuario relacionada con visión.
+        
+        Args:
+            query: La consulta del usuario
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta del adaptador
+        """
+        try:
+            # Clasificar el tipo de consulta
+            query_type = await self._classify_query(query, user_id)
+            
+            # Verificar si hay una imagen en los kwargs
+            image_data = kwargs.get('image_data')
+            
+            if not image_data:
+                return {
+                    "success": False,
+                    "error": "No se proporcionaron datos de imagen para procesar",
+                    "agent": self.__class__.__name__,
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+            # Determinar la operación a realizar según el tipo de consulta
+            result = None
+            if query_type == "object_detection":
+                result = await self.detect_objects(image_data)
+            elif query_type == "text_detection":
+                result = await self.detect_text(image_data)
+            elif query_type == "face_detection":
+                result = await self.detect_faces(image_data)
+            elif query_type == "image_description":
+                result = await self.generate_description(image_data, prompt=query)
+            else:
+                # Análisis completo por defecto
+                result = await self.analyze_image(image_data)
+            
+            return {
+                "success": True,
+                "output": result.get("text", "Análisis de imagen completado"),
+                "query_type": query_type,
+                "analysis_result": result,
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error al procesar consulta de visión: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
+        """
+        Obtiene el mapeo de intenciones a tipos de consulta específico para VisionAdapter.
+        
+        Returns:
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
+        """
+        return {
+            "objeto": "object_detection",
+            "detectar objeto": "object_detection",
+            "texto": "text_detection",
+            "leer texto": "text_detection",
+            "cara": "face_detection",
+            "rostro": "face_detection",
+            "describir": "image_description",
+            "descripción": "image_description",
+            "analizar": "full_analysis",
+            "análisis": "full_analysis"
+        }
 
 # Instancia global del adaptador
 vision_adapter = VisionAdapter()

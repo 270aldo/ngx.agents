@@ -1,0 +1,114 @@
+[
+  {
+    "config": {
+      "policy": "lru",
+      "partitions": 2,
+      "l1_ratio": 0.2,
+      "prefetch": 0.7,
+      "compression": 1024
+    },
+    "hits": 14,
+    "misses": 6,
+    "hit_ratio": 0.7,
+    "avg_latency_ms": 60.60887575149536,
+    "min_latency_ms": 0.09417533874511719,
+    "max_latency_ms": 202.00204849243164,
+    "requests_per_second": 10.76296555946685,
+    "total_time_seconds": 1.8582239151000977,
+    "monitoring": {
+      "memory_usage": 0.3,
+      "error_rate": 0.01,
+      "alerts": []
+    },
+    "latency_stats": {
+      "min": 0.09417533874511719,
+      "max": 202.00204849243164,
+      "avg": 60.60887575149536,
+      "count": 20
+    }
+  },
+  {
+    "config": {
+      "policy": "lfu",
+      "partitions": 2,
+      "l1_ratio": 0.2,
+      "prefetch": 0.7,
+      "compression": 1024
+    },
+    "hits": 14,
+    "misses": 6,
+    "hit_ratio": 0.7,
+    "avg_latency_ms": 60.5739951133728,
+    "min_latency_ms": 0.08320808410644531,
+    "max_latency_ms": 201.60603523254395,
+    "requests_per_second": 9.91303326404088,
+    "total_time_seconds": 2.0175459384918213,
+    "monitoring": {
+      "memory_usage": 0.3,
+      "error_rate": 0.01,
+      "alerts": []
+    },
+    "latency_stats": {
+      "min": 0.08320808410644531,
+      "max": 201.60603523254395,
+      "avg": 60.5739951133728,
+      "count": 20
+    }
+  },
+  {
+    "config": {
+      "policy": "fifo",
+      "partitions": 2,
+      "l1_ratio": 0.2,
+      "prefetch": 0.7,
+      "compression": 1024
+    },
+    "hits": 13,
+    "misses": 7,
+    "hit_ratio": 0.65,
+    "avg_latency_ms": 70.69600820541382,
+    "min_latency_ms": 0.07486343383789062,
+    "max_latency_ms": 201.84779167175293,
+    "requests_per_second": 9.90677699380399,
+    "total_time_seconds": 2.01882004737854,
+    "monitoring": {
+      "memory_usage": 0.3,
+      "error_rate": 0.01,
+      "alerts": []
+    },
+    "latency_stats": {
+      "min": 0.07486343383789062,
+      "max": 201.84779167175293,
+      "avg": 70.69600820541382,
+      "count": 20
+    }
+  },
+  {
+    "config": {
+      "policy": "hybrid",
+      "partitions": 4,
+      "l1_ratio": 0.3,
+      "prefetch": 0.8,
+      "compression": 1024
+    },
+    "hits": 15,
+    "misses": 5,
+    "hit_ratio": 0.75,
+    "avg_latency_ms": 50.43666362762451,
+    "min_latency_ms": 0.08511543273925781,
+    "max_latency_ms": 201.47299766540527,
+    "requests_per_second": 12.384582813901616,
+    "total_time_seconds": 1.6149110794067383,
+    "monitoring": {
+      "memory_usage": 0.3,
+      "error_rate": 0.01,
+      "alerts": []
+    },
+    "latency_stats": {
+      "min": 0.08511543273925781,
+      "max": 201.47299766540527,
+      "avg": 50.43666362762451,
+      "count": 20
+    }
+  }
+]

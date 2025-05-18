@@ -5,6 +5,13 @@ Este módulo contiene pruebas unitarias para verificar el correcto funcionamient
 del adaptador del agente SystemsIntegrationOps con los componentes optimizados.
 """
 
+
+import os
+# Configurar modo mock para pruebas
+os.environ["MOCK_MODE"] = "True"
+os.environ["MOCK_VERTEX_AI"] = "True"
+os.environ["MOCK_A2A"] = "True"
+
 import pytest
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock

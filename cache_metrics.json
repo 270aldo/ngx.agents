@@ -1,0 +1,182 @@
+{
+  "metrics": [
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:23:33.524986"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:23:43.530616"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:23:53.537615"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:24:03.542096"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:24:13.545469"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:24:23.549493"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:24:33.555505"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:24:43.561672"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:24:53.567462"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:25:03.572155"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:25:13.577629"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:25:23.580117"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:25:33.583553"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:25:43.589553"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:25:53.594791"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:26:03.600036"
+    },
+    {
+      "hit_ratio": 0.7,
+      "memory_usage": 0.6,
+      "avg_latency_ms": 250.0,
+      "error_rate": 0.01,
+      "throughput": 10.0,
+      "policy": "hybrid",
+      "partitions": 4,
+      "timestamp": "2025-05-15T18:26:13.605057"
+    }
+  ],
+  "alerts": [],
+  "thresholds": {
+    "hit_ratio": 0.5,
+    "memory_usage": 0.8,
+    "latency_ms": 400.0,
+    "error_rate": 0.03
+  },
+  "last_updated": "2025-05-15T18:26:13.605073"
+}

@@ -1,1 +1,1 @@
-"""Mocks para pruebas unitarias."""
+# Paquete de mocks para pruebas

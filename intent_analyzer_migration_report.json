@@ -1,0 +1,49 @@
+{
+  "timestamp": "2025-05-15T18:42:14.216971",
+  "base_dir": "/Users/aldoolivas/Desktop/ngx-agents-refactorizado",
+  "backup_dir": "/Users/aldoolivas/Desktop/ngx-agents-refactorizado/backups/intent_analyzer_migration_20250515_184214",
+  "test_mode": false,
+  "dependencies": {
+    "required": {
+      "asyncio": "installed",
+      "json": "installed",
+      "uuid": "installed"
+    },
+    "optional": {
+      "numpy": "installed",
+      "opentelemetry-api": "missing",
+      "opentelemetry-sdk": "missing",
+      "opentelemetry-instrumentation": "missing"
+    }
+  },
+  "files": {
+    "checked": [
+      "core/intent_analyzer.py",
+      "core/intent_analyzer_optimized.py",
+      "infrastructure/adapters/intent_analyzer_adapter.py",
+      "tests/test_adapters/test_intent_analyzer_adapter.py"
+    ],
+    "modified": [
+      "infrastructure/adapters/intent_analyzer_adapter.py"
+    ],
+    "errors": []
+  },
+  "tests": {
+    "passed": [
+      "_test_analyze_intent",
+      "_test_analyze_intents_with_embeddings",
+      "_test_switching_analyzers",
+      "_test_error_handling"
+    ],
+    "failed": []
+  },
+  "status": "completed",
+  "end_timestamp": "2025-05-15T18:42:14.522595",
+  "summary": {
+    "files_checked": 4,
+    "files_modified": 1,
+    "files_with_errors": 0,
+    "tests_passed": 4,
+    "tests_failed": 0
+  }
+}

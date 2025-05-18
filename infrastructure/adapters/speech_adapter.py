@@ -11,9 +11,11 @@ import base64
 import logging
 import os
 from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
 
 from core.logging_config import get_logger
 from infrastructure.adapters.telemetry_adapter import get_telemetry_adapter, measure_execution_time
+from infrastructure.adapters.base_agent_adapter import BaseAgentAdapter
 from clients.vertex_ai.speech_client import speech_client
 from core.vision_metrics import vision_metrics
 
@@ -21,7 +23,7 @@ from core.vision_metrics import vision_metrics
 logger = get_logger(__name__)
 telemetry_adapter = get_telemetry_adapter()
 
-class SpeechAdapter:
+class SpeechAdapter(BaseAgentAdapter):
     """
     Adaptador para integrar capacidades de procesamiento de voz en los agentes.
     
@@ -31,6 +33,7 @@ class SpeechAdapter:
     
     def __init__(self):
         """Inicializa el adaptador de procesamiento de voz."""
+        super().__init__()
         self._initialized = False
         self.is_initialized = False
         
@@ -408,6 +411,97 @@ class SpeechAdapter:
             "initialized": self.is_initialized
         }
 
+
+    async def _process_query(self, query: str, user_id: str = None, session_id: str = None, **kwargs) -> Dict[str, Any]:
+        """
+        Procesa la consulta del usuario relacionada con procesamiento de voz.
+        
+        Args:
+            query: La consulta del usuario
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            **kwargs: Argumentos adicionales
+            
+        Returns:
+            Dict[str, Any]: Respuesta del adaptador
+        """
+        try:
+            # Clasificar el tipo de consulta
+            query_type = await self._classify_query(query, user_id)
+            
+            # Verificar si hay datos de audio en los kwargs
+            audio_data = kwargs.get('audio_data')
+            text = kwargs.get('text')
+            language_code = kwargs.get('language_code', 'es-ES')
+            voice_name = kwargs.get('voice_name', 'es-ES-Standard-A')
+            agent_id = kwargs.get('agent_id', 'unknown')
+            analysis_type = kwargs.get('analysis_type', 'emotion')
+            
+            # Determinar la operación a realizar según el tipo de consulta
+            result = None
+            
+            if query_type == "transcribe" and audio_data:
+                # Transcribir audio a texto
+                result = await self.transcribe_audio(audio_data, language_code, agent_id)
+            elif query_type == "synthesize" and text:
+                # Sintetizar texto a voz
+                result = await self.synthesize_speech(text, voice_name, language_code, agent_id)
+            elif query_type == "analyze" and audio_data:
+                # Analizar audio
+                result = await self.analyze_audio(audio_data, analysis_type, language_code, agent_id)
+            else:
+                # Verificar si tenemos lo necesario para alguna operación
+                if audio_data:
+                    # Si hay audio, transcribir por defecto
+                    result = await self.transcribe_audio(audio_data, language_code, agent_id)
+                elif text:
+                    # Si hay texto, sintetizar por defecto
+                    result = await self.synthesize_speech(text, voice_name, language_code, agent_id)
+                else:
+                    # No hay datos suficientes
+                    return {
+                        "success": False,
+                        "error": "No se proporcionaron datos de audio ni texto para procesar",
+                        "agent": self.__class__.__name__,
+                        "timestamp": datetime.now().isoformat()
+                    }
+            
+            return {
+                "success": True,
+                "output": result.get("text", "Procesamiento de voz completado"),
+                "query_type": query_type,
+                "result": result,
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error al procesar consulta de voz: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "agent": self.__class__.__name__,
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
+        """
+        Obtiene el mapeo de intenciones a tipos de consulta específico para SpeechAdapter.
+        
+        Returns:
+            Dict[str, str]: Mapeo de intenciones a tipos de consulta
+        """
+        return {
+            "transcribir": "transcribe",
+            "reconocer": "transcribe",
+            "convertir audio": "transcribe",
+            "hablar": "synthesize",
+            "sintetizar": "synthesize",
+            "generar voz": "synthesize",
+            "analizar": "analyze",
+            "detectar emociones": "analyze",
+            "emociones": "analyze",
+            "sentimiento": "analyze"
+        }
 
 # Instancia global del adaptador
 speech_adapter = SpeechAdapter()

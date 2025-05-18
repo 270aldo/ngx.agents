@@ -1,9 +1,8 @@
 """
-Módulo de gestión de embeddings para contexto.
+Gestor de embeddings para NGX Agents.
 
 Este módulo proporciona funcionalidades para generar, almacenar y buscar
-embeddings vectoriales, permitiendo búsquedas semánticas y recuperación
-de contexto relevante basado en similitud.
+embeddings, facilitando la comprensión semántica y la búsqueda por similitud.
 """
 
 import asyncio
@@ -13,519 +12,401 @@ import logging
 import os
 import time
 import numpy as np
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from clients.vertex_ai import vertex_ai_client
+from clients.vertex_ai.embedding_client import EmbeddingClient
+from clients.pinecone.pinecone_client import PineconeClient
 from core.logging_config import get_logger
-from core.telemetry import telemetry_manager
+from infrastructure.adapters.telemetry_adapter import get_telemetry_adapter
+from infrastructure.adapters.vector_store_adapter import MemoryVectorStore, PineconeVectorStore, VectorStoreAdapter
 
 # Configurar logger
 logger = get_logger(__name__)
+telemetry_adapter = get_telemetry_adapter()
 
 class EmbeddingsManager:
-    """
-    Gestor de embeddings para búsqueda semántica y recuperación de contexto.
+    """Gestor de embeddings para NGX Agents."""
     
-    Proporciona métodos para generar, almacenar y buscar embeddings vectoriales,
-    permitiendo recuperar contexto relevante basado en similitud semántica.
-    """
-    
-    def __init__(self, 
-                cache_enabled: bool = True, 
-                cache_ttl: int = 86400,  # 24 horas
-                vector_dimension: int = 768,
-                similarity_threshold: float = 0.7):
-        """
-        Inicializa el gestor de embeddings.
-        
-        Args:
-            cache_enabled: Habilitar caché de embeddings
-            cache_ttl: Tiempo de vida del caché en segundos
-            vector_dimension: Dimensión de los vectores de embedding
-            similarity_threshold: Umbral de similitud para considerar relevante
-        """
-        self.cache_enabled = cache_enabled
-        self.cache_ttl = cache_ttl
-        self.vector_dimension = vector_dimension
-        self.similarity_threshold = similarity_threshold
-        
-        # Almacenamiento de embeddings
-        self.embeddings_store = {}
-        
-        # Caché de textos a embeddings
-        self.text_to_embedding_cache = {}
+    def __init__(self, config=None):
+        """Inicializa el gestor de embeddings."""
+        self.config = config or self._load_default_config()
+        self.embedding_client = EmbeddingClient(self.config.get("embedding_client"))
+        self.vector_store = self._initialize_vector_store()
+        self.similarity_threshold = self.config.get("similarity_threshold", 0.7)
+        self.vector_dimension = self.config.get("vector_dimension", 3072)
         
         # Estadísticas
         self.stats = {
-            "embedding_requests": 0,
-            "batch_embedding_requests": 0,
-            "similarity_searches": 0,
-            "cache_hits": 0,
-            "cache_misses": 0,
+            "embedding_generations": 0,
+            "batch_generations": 0,
+            "storage_operations": 0,
+            "search_operations": 0,
+            "delete_operations": 0,
             "errors": 0
         }
         
         logger.info("Gestor de embeddings inicializado")
+        
+    def _load_default_config(self) -> Dict[str, Any]:
+        """Carga la configuración por defecto."""
+        import os
+        
+        # Función auxiliar para leer variables de entorno enteras
+        def get_env_int(var_name: str, default_value: int) -> int:
+            val_str = os.environ.get(var_name)
+            if val_str is None:
+                return default_value
+            try:
+                return int(val_str)
+            except ValueError:
+                logger.warning(f"Valor inválido para la variable de entorno {var_name}: '{val_str}'. Usando el valor por defecto: {default_value}")
+                return default_value
+        
+        return {
+            "similarity_threshold": float(os.environ.get("EMBEDDING_SIMILARITY_THRESHOLD", "0.7")),
+            "vector_dimension": get_env_int("EMBEDDING_VECTOR_DIMENSION", 768),
+            "vector_store_type": os.environ.get("VECTOR_STORE_TYPE", "memory"),
+            "embedding_client": {
+                "model_name": os.environ.get("VERTEX_EMBEDDING_MODEL", "textembedding-gecko"),
+                "use_redis_cache": os.environ.get("USE_REDIS_CACHE", "false").lower() == "true",
+                "redis_url": os.environ.get("REDIS_URL"),
+                "cache_ttl": get_env_int("EMBEDDING_CACHE_TTL", 86400)  # 24 horas por defecto
+            },
+            "pinecone": {
+                "api_key": os.environ.get("PINECONE_API_KEY"),
+                "environment": os.environ.get("PINECONE_ENVIRONMENT", "us-west1-gcp"),
+                "index_name": os.environ.get("PINECONE_INDEX_NAME", "ngx-embeddings"),
+                "dimension": get_env_int("PINECONE_DIMENSION", 768),
+                "metric": os.environ.get("PINECONE_METRIC", "cosine")
+            }
+        }
     
-    def _get_cache_key(self, text: str) -> str:
+    def _initialize_vector_store(self) -> VectorStoreAdapter:
+        """Inicializa el almacén vectorial según la configuración."""
+        vector_store_type = self.config.get("vector_store_type", "memory")
+        
+        if vector_store_type == "pinecone":
+            # Verificar si hay una API key de Pinecone
+            if not self.config.get("pinecone", {}).get("api_key"):
+                logger.warning("No se encontró API key de Pinecone. Usando almacenamiento en memoria.")
+                return MemoryVectorStore()
+            
+            # Inicializar cliente de Pinecone
+            pinecone_client = PineconeClient(self.config.get("pinecone"))
+            return PineconeVectorStore(pinecone_client)
+        else:
+            # Usar almacenamiento en memoria por defecto
+            return MemoryVectorStore()
+    
+    
+    @telemetry_adapter.measure_execution_time("embedding_generation_manager")
+    async def generate_embedding(self, text: str, namespace: Optional[str] = None) -> List[float]:
         """
-        Genera una clave de caché para un texto.
+        Genera un embedding para el texto proporcionado.
         
         Args:
-            text: Texto para generar la clave
+            text: Texto para generar el embedding
+            namespace: Namespace opcional para organización
             
         Returns:
-            str: Clave de caché
+            Lista de valores float que representan el embedding
         """
-        return hashlib.md5(text.encode()).hexdigest()
-    
-    def _clean_cache_if_needed(self) -> None:
-        """Limpia la caché si hay demasiadas entradas."""
-        max_cache_size = 10000
-        
-        if len(self.text_to_embedding_cache) > max_cache_size:
-            # Ordenar por timestamp y eliminar los más antiguos
-            sorted_items = sorted(
-                self.text_to_embedding_cache.items(),
-                key=lambda x: x[1]["timestamp"]
-            )
-            
-            # Eliminar el 20% más antiguo
-            items_to_remove = int(max_cache_size * 0.2)
-            for i in range(items_to_remove):
-                if i < len(sorted_items):
-                    del self.text_to_embedding_cache[sorted_items[i][0]]
-    
-    def _calculate_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
-        """
-        Calcula la similitud coseno entre dos embeddings.
-        
-        Args:
-            embedding1: Primer vector de embedding
-            embedding2: Segundo vector de embedding
-            
-        Returns:
-            float: Similitud coseno (0-1)
-        """
-        # Convertir a arrays de numpy
-        vec1 = np.array(embedding1)
-        vec2 = np.array(embedding2)
-        
-        # Calcular similitud coseno
-        dot_product = np.dot(vec1, vec2)
-        norm1 = np.linalg.norm(vec1)
-        norm2 = np.linalg.norm(vec2)
-        
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-            
-        return dot_product / (norm1 * norm2)
-    
-    async def generate_embedding(self, text: str) -> List[float]:
-        """
-        Genera un embedding para un texto.
-        
-        Args:
-            text: Texto para generar embedding
-            
-        Returns:
-            List[float]: Vector de embedding
-        """
-        # Registrar inicio de telemetría
-        span_id = telemetry_manager.start_span(
-            name="embeddings_generate",
-            attributes={"text_length": len(text)}
-        )
+        span = telemetry_adapter.start_span("EmbeddingsManager.generate_embedding", {
+            "text_length": len(text),
+            "namespace": namespace or "default"
+        })
         
         try:
             # Actualizar estadísticas
-            self.stats["embedding_requests"] += 1
+            self.stats["embedding_generations"] += 1
             
-            # Verificar caché
-            if self.cache_enabled:
-                cache_key = self._get_cache_key(text)
-                
-                if cache_key in self.text_to_embedding_cache:
-                    cache_entry = self.text_to_embedding_cache[cache_key]
-                    # Verificar TTL
-                    if time.time() - cache_entry["timestamp"] < self.cache_ttl:
-                        self.stats["cache_hits"] += 1
-                        telemetry_manager.set_span_attribute(span_id, "cache", "hit")
-                        return cache_entry["embedding"]
+            # Generar embedding usando el cliente
+            embedding = await self.embedding_client.generate_embedding(text, namespace)
             
-            self.stats["cache_misses"] += 1
-            
-            # Generar embedding con Vertex AI
-            embedding = await vertex_ai_client.generate_embedding(text)
-            
-            # Guardar en caché
-            if self.cache_enabled:
-                self.text_to_embedding_cache[cache_key] = {
-                    "embedding": embedding,
-                    "timestamp": time.time()
-                }
-                
-                # Limpiar caché si es necesario
-                self._clean_cache_if_needed()
-            
-            telemetry_manager.set_span_attribute(span_id, "embedding_size", len(embedding))
+            telemetry_adapter.set_span_attribute(span, "embedding_size", len(embedding))
             return embedding
             
         except Exception as e:
             logger.error(f"Error al generar embedding: {str(e)}", exc_info=True)
             self.stats["errors"] += 1
-            telemetry_manager.set_span_attribute(span_id, "error", str(e))
+            telemetry_adapter.record_exception(span, e)
             
             # Devolver un embedding vacío en caso de error
             return [0.0] * self.vector_dimension
             
         finally:
-            telemetry_manager.end_span(span_id)
+            telemetry_adapter.end_span(span)
     
-    async def batch_generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def store_embedding(self, text: str, embedding: Optional[List[float]] = None, 
+                           metadata: Optional[Dict[str, Any]] = None, namespace: Optional[str] = None) -> str:
         """
-        Genera embeddings para múltiples textos.
+        Almacena un embedding con metadatos.
         
         Args:
-            texts: Lista de textos
+            text: Texto original
+            embedding: Embedding pre-calculado (opcional)
+            metadata: Metadatos asociados al embedding
+            namespace: Namespace para organización
             
         Returns:
-            List[List[float]]: Lista de vectores de embedding
+            ID del embedding almacenado
         """
-        # Registrar inicio de telemetría
-        span_id = telemetry_manager.start_span(
-            name="embeddings_batch_generate",
-            attributes={"text_count": len(texts)}
-        )
+        span = telemetry_adapter.start_span("EmbeddingsManager.store_embedding", {
+            "text_length": len(text),
+            "namespace": namespace or "default",
+            "has_precalculated_embedding": embedding is not None
+        })
         
         try:
             # Actualizar estadísticas
-            self.stats["batch_embedding_requests"] += 1
+            self.stats["storage_operations"] += 1
             
-            # Verificar caché para cada texto
-            embeddings = []
-            texts_to_embed = []
-            indices_to_embed = []
-            
-            if self.cache_enabled:
-                for i, text in enumerate(texts):
-                    cache_key = self._get_cache_key(text)
-                    
-                    if cache_key in self.text_to_embedding_cache:
-                        cache_entry = self.text_to_embedding_cache[cache_key]
-                        # Verificar TTL
-                        if time.time() - cache_entry["timestamp"] < self.cache_ttl:
-                            self.stats["cache_hits"] += 1
-                            embeddings.append(cache_entry["embedding"])
-                            continue
-                    
-                    self.stats["cache_misses"] += 1
-                    texts_to_embed.append(text)
-                    indices_to_embed.append(i)
-                    embeddings.append(None)
-            else:
-                texts_to_embed = texts
-                indices_to_embed = list(range(len(texts)))
-                embeddings = [None] * len(texts)
-            
-            # Si todos los embeddings están en caché, retornar
-            if all(e is not None for e in embeddings):
-                telemetry_manager.set_span_attribute(span_id, "cache", "all_hit")
-                return embeddings
-            
-            # Generar embeddings para los textos restantes
-            if texts_to_embed:
-                new_embeddings = await vertex_ai_client.batch_generate_embeddings(texts_to_embed)
-                
-                # Actualizar lista de embeddings y caché
-                for i, embedding in zip(indices_to_embed, new_embeddings):
-                    embeddings[i] = embedding
-                    
-                    # Guardar en caché
-                    if self.cache_enabled:
-                        cache_key = self._get_cache_key(texts[i])
-                        self.text_to_embedding_cache[cache_key] = {
-                            "embedding": embedding,
-                            "timestamp": time.time()
-                        }
-                
-                # Limpiar caché si es necesario
-                if self.cache_enabled:
-                    self._clean_cache_if_needed()
-            
-            telemetry_manager.set_span_attribute(span_id, "embeddings_generated", len(texts_to_embed))
-            return embeddings
-            
-        except Exception as e:
-            logger.error(f"Error al generar embeddings en lote: {str(e)}", exc_info=True)
-            self.stats["errors"] += 1
-            telemetry_manager.set_span_attribute(span_id, "error", str(e))
-            
-            # Devolver embeddings vacíos en caso de error
-            return [[0.0] * self.vector_dimension for _ in range(len(texts))]
-            
-        finally:
-            telemetry_manager.end_span(span_id)
-    
-    async def store_embedding(self, 
-                           key: str, 
-                           text: str, 
-                           metadata: Optional[Dict[str, Any]] = None,
-                           embedding: Optional[List[float]] = None) -> bool:
-        """
-        Almacena un embedding con su texto y metadatos asociados.
-        
-        Args:
-            key: Clave única para identificar el embedding
-            text: Texto original
-            metadata: Metadatos adicionales
-            embedding: Vector de embedding (opcional, se genera si no se proporciona)
-            
-        Returns:
-            bool: True si se almacenó correctamente
-        """
-        try:
             # Generar embedding si no se proporciona
             if embedding is None:
-                embedding = await self.generate_embedding(text)
+                embedding = await self.generate_embedding(text, namespace)
             
-            # Almacenar en el store
-            self.embeddings_store[key] = {
-                "text": text,
-                "embedding": embedding,
-                "metadata": metadata or {},
-                "timestamp": time.time()
-            }
+            # Almacenar en el vector store
+            embedding_id = await self.vector_store.store(
+                vector=embedding,
+                text=text,
+                metadata=metadata,
+                namespace=namespace
+            )
             
-            logger.debug(f"Embedding almacenado con clave: {key}")
-            return True
+            telemetry_adapter.set_span_attribute(span, "embedding_id", embedding_id)
+            logger.debug(f"Embedding almacenado con ID: {embedding_id}")
+            return embedding_id
             
         except Exception as e:
             logger.error(f"Error al almacenar embedding: {str(e)}", exc_info=True)
             self.stats["errors"] += 1
-            return False
+            telemetry_adapter.record_exception(span, e)
+            return ""
+            
+        finally:
+            telemetry_adapter.end_span(span)
     
-    async def batch_store_embeddings(self, 
-                                  items: List[Dict[str, Any]]) -> List[bool]:
+    async def search_similar(self, query: Union[str, List[float]], namespace: Optional[str] = None, 
+                          top_k: int = 5, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
-        Almacena múltiples embeddings en lote.
+        Busca textos similares basados en embeddings.
         
         Args:
-            items: Lista de items a almacenar, cada uno con:
-                - key: Clave única
-                - text: Texto original
-                - metadata: Metadatos (opcional)
-                - embedding: Vector de embedding (opcional)
+            query: Texto o embedding para buscar similares
+            namespace: Namespace para la búsqueda
+            top_k: Número de resultados a retornar
+            filter: Filtro opcional para metadatos
             
         Returns:
-            List[bool]: Lista de resultados (True si se almacenó correctamente)
+            Lista de documentos similares con scores
         """
-        try:
-            # Extraer textos para generar embeddings en lote
-            texts = []
-            indices_with_missing_embeddings = []
-            
-            for i, item in enumerate(items):
-                if "embedding" not in item or item["embedding"] is None:
-                    texts.append(item["text"])
-                    indices_with_missing_embeddings.append(i)
-            
-            # Generar embeddings en lote si es necesario
-            if texts:
-                embeddings = await self.batch_generate_embeddings(texts)
-                
-                # Asignar embeddings generados
-                for idx, embedding in zip(indices_with_missing_embeddings, embeddings):
-                    items[idx]["embedding"] = embedding
-            
-            # Almacenar cada item
-            results = []
-            for item in items:
-                result = await self.store_embedding(
-                    key=item["key"],
-                    text=item["text"],
-                    metadata=item.get("metadata"),
-                    embedding=item["embedding"]
-                )
-                results.append(result)
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error al almacenar embeddings en lote: {str(e)}", exc_info=True)
-            self.stats["errors"] += 1
-            return [False] * len(items)
-    
-    async def find_similar(self, 
-                        query: str, 
-                        top_k: int = 5,
-                        threshold: Optional[float] = None) -> List[Dict[str, Any]]:
-        """
-        Encuentra items similares a una consulta.
-        
-        Args:
-            query: Texto de consulta
-            top_k: Número máximo de resultados
-            threshold: Umbral de similitud (opcional, usa el predeterminado si no se proporciona)
-            
-        Returns:
-            List[Dict[str, Any]]: Lista de items similares con sus puntuaciones
-        """
-        # Registrar inicio de telemetría
-        span_id = telemetry_manager.start_span(
-            name="embeddings_find_similar",
-            attributes={
-                "query_length": len(query),
-                "top_k": top_k
-            }
-        )
+        span = telemetry_adapter.start_span("EmbeddingsManager.search_similar", {
+            "query_type": "embedding" if isinstance(query, list) else "text",
+            "namespace": namespace or "default",
+            "top_k": top_k,
+            "has_filter": filter is not None
+        })
         
         try:
             # Actualizar estadísticas
-            self.stats["similarity_searches"] += 1
+            self.stats["search_operations"] += 1
             
-            # Usar umbral predeterminado si no se proporciona
-            if threshold is None:
-                threshold = self.similarity_threshold
+            # Obtener embedding de la consulta
+            query_embedding = query if isinstance(query, list) else await self.generate_embedding(query, namespace)
             
-            # Generar embedding para la consulta
-            query_embedding = await self.generate_embedding(query)
+            # Buscar en el vector store
+            results = await self.vector_store.search(
+                vector=query_embedding,
+                namespace=namespace,
+                top_k=top_k,
+                filter=filter
+            )
             
-            # Calcular similitud con todos los embeddings almacenados
-            similarities = []
+            # Convertir scores a similitud para mantener compatibilidad
+            for result in results:
+                if "score" in result:
+                    result["similarity"] = result.pop("score")
             
-            for key, item in self.embeddings_store.items():
-                similarity = self._calculate_similarity(query_embedding, item["embedding"])
-                
-                if similarity >= threshold:
-                    similarities.append({
-                        "key": key,
-                        "text": item["text"],
-                        "metadata": item["metadata"],
-                        "similarity": similarity
-                    })
-            
-            # Ordenar por similitud (descendente) y limitar a top_k
-            similarities.sort(key=lambda x: x["similarity"], reverse=True)
-            results = similarities[:top_k]
-            
-            telemetry_manager.set_span_attribute(span_id, "results_count", len(results))
+            telemetry_adapter.set_span_attribute(span, "results_count", len(results))
             return results
             
         except Exception as e:
             logger.error(f"Error al buscar similares: {str(e)}", exc_info=True)
             self.stats["errors"] += 1
-            telemetry_manager.set_span_attribute(span_id, "error", str(e))
+            telemetry_adapter.record_exception(span, e)
             return []
             
         finally:
-            telemetry_manager.end_span(span_id)
+            telemetry_adapter.end_span(span)
     
-    async def find_similar_by_embedding(self, 
-                                     embedding: List[float], 
-                                     top_k: int = 5,
-                                     threshold: Optional[float] = None) -> List[Dict[str, Any]]:
+    async def cluster_embeddings(self, embeddings: List[List[float]], n_clusters: int = 5) -> List[int]:
         """
-        Encuentra items similares a un embedding.
+        Agrupa embeddings en clusters.
         
         Args:
-            embedding: Vector de embedding
-            top_k: Número máximo de resultados
-            threshold: Umbral de similitud (opcional, usa el predeterminado si no se proporciona)
+            embeddings: Lista de embeddings a agrupar
+            n_clusters: Número de clusters a crear
             
         Returns:
-            List[Dict[str, Any]]: Lista de items similares con sus puntuaciones
+            Lista de etiquetas de cluster para cada embedding
         """
-        # Registrar inicio de telemetría
-        span_id = telemetry_manager.start_span(
-            name="embeddings_find_similar_by_embedding",
-            attributes={"top_k": top_k}
-        )
+        span = telemetry_adapter.start_span("EmbeddingsManager.cluster_embeddings", {
+            "embeddings_count": len(embeddings),
+            "n_clusters": n_clusters
+        })
+        
+        try:
+            # Importar scikit-learn para clustering
+            try:
+                from sklearn.cluster import KMeans
+                SKLEARN_AVAILABLE = True
+            except ImportError:
+                logger.warning("scikit-learn no está disponible. No se puede realizar clustering.")
+                SKLEARN_AVAILABLE = False
+                
+            if not SKLEARN_AVAILABLE:
+                # Retornar etiquetas aleatorias si no está disponible scikit-learn
+                import random
+                return [random.randint(0, n_clusters-1) for _ in range(len(embeddings))]
+            
+            # Convertir a array de numpy
+            X = np.array(embeddings)
+            
+            # Aplicar KMeans
+            kmeans = KMeans(n_clusters=min(n_clusters, len(embeddings)), random_state=42)
+            labels = kmeans.fit_predict(X)
+            
+            telemetry_adapter.set_span_attribute(span, "clusters_found", len(set(labels)))
+            return labels.tolist()
+            
+        except Exception as e:
+            logger.error(f"Error al agrupar embeddings: {str(e)}", exc_info=True)
+            self.stats["errors"] += 1
+            telemetry_adapter.record_exception(span, e)
+            
+            # Retornar etiquetas por defecto en caso de error
+            return [0] * len(embeddings)
+            
+        finally:
+            telemetry_adapter.end_span(span)
+    
+    async def batch_store_embeddings(self, texts: List[str], embeddings: Optional[List[List[float]]] = None,
+                                  metadatas: Optional[List[Dict[str, Any]]] = None, 
+                                  namespace: Optional[str] = None) -> List[str]:
+        """
+        Almacena múltiples embeddings en batch.
+        
+        Args:
+            texts: Lista de textos
+            embeddings: Lista de embeddings pre-calculados (opcional)
+            metadatas: Lista de metadatos asociados
+            namespace: Namespace opcional
+            
+        Returns:
+            Lista de IDs de los embeddings almacenados
+        """
+        span = telemetry_adapter.start_span("EmbeddingsManager.batch_store_embeddings", {
+            "texts_count": len(texts),
+            "namespace": namespace or "default",
+            "has_precalculated_embeddings": embeddings is not None
+        })
         
         try:
             # Actualizar estadísticas
-            self.stats["similarity_searches"] += 1
+            self.stats["batch_storage_operations"] += 1
             
-            # Usar umbral predeterminado si no se proporciona
-            if threshold is None:
-                threshold = self.similarity_threshold
+            # Generar embeddings si no se proporcionan
+            if embeddings is None:
+                embeddings = await self.batch_generate_embeddings(texts, namespace)
             
-            # Calcular similitud con todos los embeddings almacenados
-            similarities = []
+            # Almacenar en el vector store
+            ids = await self.vector_store.batch_store(
+                vectors=embeddings,
+                texts=texts,
+                metadatas=metadatas,
+                namespace=namespace
+            )
             
-            for key, item in self.embeddings_store.items():
-                similarity = self._calculate_similarity(embedding, item["embedding"])
-                
-                if similarity >= threshold:
-                    similarities.append({
-                        "key": key,
-                        "text": item["text"],
-                        "metadata": item["metadata"],
-                        "similarity": similarity
-                    })
-            
-            # Ordenar por similitud (descendente) y limitar a top_k
-            similarities.sort(key=lambda x: x["similarity"], reverse=True)
-            results = similarities[:top_k]
-            
-            telemetry_manager.set_span_attribute(span_id, "results_count", len(results))
-            return results
+            telemetry_adapter.set_span_attribute(span, "stored_count", len(ids))
+            return ids
             
         except Exception as e:
-            logger.error(f"Error al buscar similares por embedding: {str(e)}", exc_info=True)
+            logger.error(f"Error al almacenar embeddings en batch: {str(e)}", exc_info=True)
             self.stats["errors"] += 1
-            telemetry_manager.set_span_attribute(span_id, "error", str(e))
+            telemetry_adapter.record_exception(span, e)
             return []
             
         finally:
-            telemetry_manager.end_span(span_id)
+            telemetry_adapter.end_span(span)
     
-    def get_by_key(self, key: str) -> Optional[Dict[str, Any]]:
+    async def delete_embedding(self, embedding_id: str, namespace: Optional[str] = None) -> bool:
         """
-        Obtiene un item por su clave.
+        Elimina un embedding del almacenamiento.
         
         Args:
-            key: Clave del item
+            embedding_id: ID del embedding a eliminar
+            namespace: Namespace del embedding
             
         Returns:
-            Optional[Dict[str, Any]]: Item si existe, None en caso contrario
+            True si se eliminó correctamente
         """
-        if key in self.embeddings_store:
-            item = self.embeddings_store[key]
-            return {
-                "key": key,
-                "text": item["text"],
-                "embedding": item["embedding"],
-                "metadata": item["metadata"],
-                "timestamp": item["timestamp"]
-            }
-        return None
+        span = telemetry_adapter.start_span("EmbeddingsManager.delete_embedding", {
+            "embedding_id": embedding_id,
+            "namespace": namespace or "default"
+        })
+        
+        try:
+            # Actualizar estadísticas
+            self.stats["delete_operations"] += 1
+            
+            # Eliminar del vector store
+            success = await self.vector_store.delete(embedding_id, namespace)
+            
+            telemetry_adapter.set_span_attribute(span, "success", success)
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error al eliminar embedding: {str(e)}", exc_info=True)
+            self.stats["errors"] += 1
+            telemetry_adapter.record_exception(span, e)
+            return False
+            
+        finally:
+            telemetry_adapter.end_span(span)
     
-    def delete_by_key(self, key: str) -> bool:
+    async def get_embedding(self, embedding_id: str, namespace: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        Elimina un item por su clave.
+        Recupera un embedding específico.
         
         Args:
-            key: Clave del item
+            embedding_id: ID del embedding a recuperar
+            namespace: Namespace del embedding
             
         Returns:
-            bool: True si se eliminó correctamente
+            Diccionario con el embedding y sus metadatos
         """
-        if key in self.embeddings_store:
-            del self.embeddings_store[key]
-            return True
-        return False
-    
-    def clear_store(self) -> None:
-        """Limpia el almacén de embeddings."""
-        self.embeddings_store = {}
-        logger.info("Almacén de embeddings limpiado")
-    
-    def clear_cache(self) -> None:
-        """Limpia la caché de embeddings."""
-        self.text_to_embedding_cache = {}
-        logger.info("Caché de embeddings limpiado")
+        span = telemetry_adapter.start_span("EmbeddingsManager.get_embedding", {
+            "embedding_id": embedding_id,
+            "namespace": namespace or "default"
+        })
+        
+        try:
+            # Obtener del vector store
+            result = await self.vector_store.get(embedding_id, namespace)
+            
+            telemetry_adapter.set_span_attribute(span, "success", result is not None)
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error al obtener embedding: {str(e)}", exc_info=True)
+            self.stats["errors"] += 1
+            telemetry_adapter.record_exception(span, e)
+            return None
+            
+        finally:
+            telemetry_adapter.end_span(span)
     
     async def get_stats(self) -> Dict[str, Any]:
         """
@@ -534,14 +415,19 @@ class EmbeddingsManager:
         Returns:
             Dict[str, Any]: Estadísticas de uso
         """
+        # Obtener estadísticas del cliente
+        client_stats = await self.embedding_client.get_stats()
+        
+        # Obtener estadísticas del vector store
+        vector_store_stats = await self.vector_store.get_stats()
+        
         return {
-            "stats": self.stats,
-            "store_size": len(self.embeddings_store),
-            "cache_size": len(self.text_to_embedding_cache),
-            "cache_enabled": self.cache_enabled,
-            "cache_ttl": self.cache_ttl,
+            "manager_stats": self.stats,
+            "client_stats": client_stats,
+            "vector_store_stats": vector_store_stats,
             "vector_dimension": self.vector_dimension,
             "similarity_threshold": self.similarity_threshold,
+            "vector_store_type": self.config.get("vector_store_type", "memory"),
             "timestamp": datetime.now().isoformat()
         }
 

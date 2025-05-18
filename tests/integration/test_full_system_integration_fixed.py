@@ -13,6 +13,13 @@ las pruebas de integración:
 4. Errores en pruebas complejas
 """
 
+
+import os
+# Configurar modo mock para pruebas
+os.environ["MOCK_MODE"] = "True"
+os.environ["MOCK_VERTEX_AI"] = "True"
+os.environ["MOCK_A2A"] = "True"
+
 import asyncio
 import pytest
 import json

@@ -1,0 +1,46 @@
+{
+  "timestamp": "2025-05-15T19:18:36.940864",
+  "base_dir": "/Users/aldoolivas/Desktop/ngx-agents-refactorizado",
+  "backup_dir": "/Users/aldoolivas/Desktop/ngx-agents-refactorizado/backups/a2a_server_migration_20250515_191836",
+  "test_mode": false,
+  "dependencies": {
+    "required": {
+      "asyncio": "installed",
+      "json": "installed",
+      "uuid": "installed"
+    },
+    "optional": {
+      "opentelemetry-api": "missing",
+      "opentelemetry-sdk": "missing",
+      "opentelemetry-instrumentation": "missing"
+    }
+  },
+  "files": {
+    "checked": [
+      "infrastructure/a2a_server.py",
+      "infrastructure/a2a_optimized.py",
+      "infrastructure/adapters/a2a_adapter.py",
+      "tests/adapters/test_a2a_adapter.py"
+    ],
+    "modified": [],
+    "errors": []
+  },
+  "tests": {
+    "passed": [
+      "_test_server_start_stop",
+      "_test_agent_registration",
+      "_test_message_sending",
+      "_test_agent_calling"
+    ],
+    "failed": []
+  },
+  "status": "completed",
+  "end_timestamp": "2025-05-15T19:18:39.164474",
+  "summary": {
+    "files_checked": 4,
+    "files_modified": 0,
+    "files_with_errors": 0,
+    "tests_passed": 4,
+    "tests_failed": 0
+  }
+}
