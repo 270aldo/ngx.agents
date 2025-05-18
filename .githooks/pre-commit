@@ -1,0 +1,46 @@
+#!/bin/bash
+# Hook pre-commit para verificar la calidad del código y el formato de los mensajes de commit
+
+echo "Ejecutando verificaciones pre-commit..."
+
+# Verificar si hay cambios en archivos Python
+PYTHON_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.py$')
+if [ -n "$PYTHON_FILES" ]; then
+    echo "Verificando formato de archivos Python..."
+    
+    # Verificar formato con black (si está instalado)
+    if command -v black &> /dev/null; then
+        if ! black --check $PYTHON_FILES; then
+            echo "Error: El formato del código no cumple con las convenciones de black."
+            echo "Ejecuta 'black' en los archivos modificados antes de hacer commit."
+            exit 1
+        fi
+    else
+        echo "Advertencia: black no está instalado. Saltando verificación de formato."
+    fi
+    
+    # Verificar con flake8 (si está instalado)
+    if command -v flake8 &> /dev/null; then
+        if ! flake8 $PYTHON_FILES; then
+            echo "Error: El código no cumple con las convenciones de flake8."
+            echo "Corrige los problemas antes de hacer commit."
+            exit 1
+        fi
+    else
+        echo "Advertencia: flake8 no está instalado. Saltando verificación de estilo."
+    fi
+    
+    # Verificar con mypy (si está instalado)
+    if command -v mypy &> /dev/null; then
+        if ! mypy --ignore-missing-imports $PYTHON_FILES; then
+            echo "Error: El código tiene problemas de tipado según mypy."
+            echo "Corrige los problemas antes de hacer commit."
+            exit 1
+        fi
+    else
+        echo "Advertencia: mypy no está instalado. Saltando verificación de tipos."
+    fi
+fi
+
+echo "Verificaciones de código completadas con éxito."
+exit 0

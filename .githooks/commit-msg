@@ -1,0 +1,27 @@
+#!/bin/bash
+# Hook commit-msg para verificar el formato de los mensajes de commit
+
+COMMIT_MSG_FILE=$1
+COMMIT_MSG=$(cat $COMMIT_MSG_FILE)
+
+# Patrón para mensajes de commit según el estándar definido
+# Formato: Tipo(alcance): mensaje
+# Tipos permitidos: Feat, Fix, Docs, Style, Refactor, Test, Chore
+PATTERN="^(Feat|Fix|Docs|Style|Refactor|Test|Chore)\([a-z0-9-]+\): .{1,100}$"
+
+if ! [[ $COMMIT_MSG =~ $PATTERN ]]; then
+    echo "Error: El mensaje de commit no sigue el formato requerido."
+    echo "Formato: Tipo(alcance): mensaje"
+    echo "Tipos permitidos: Feat, Fix, Docs, Style, Refactor, Test, Chore"
+    echo "Ejemplos:"
+    echo "  Feat(component): add new component"
+    echo "  Fix(api): fix api error"
+    echo "  Docs(readme): update readme"
+    echo "  Refactor(utils): refactor utils"
+    echo "  Style(tailwind): add new tailwind class"
+    echo "  Test(unit): add unit test"
+    echo "  Chore(deps): update dependencies"
+    exit 1
+fi
+
+exit 0
