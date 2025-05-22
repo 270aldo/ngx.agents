@@ -17,7 +17,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from clients.vertex_ai.embedding_client import EmbeddingClient
-from clients.pinecone.pinecone_client import PineconeClient
 from core.logging_config import get_logger
 from infrastructure.adapters.telemetry_adapter import get_telemetry_adapter
 from infrastructure.adapters.vector_store_adapter import MemoryVectorStore, PineconeVectorStore, VectorStoreAdapter
@@ -74,12 +73,15 @@ class EmbeddingsManager:
                 "redis_url": os.environ.get("REDIS_URL"),
                 "cache_ttl": get_env_int("EMBEDDING_CACHE_TTL", 86400)  # 24 horas por defecto
             },
-            "pinecone": {
-                "api_key": os.environ.get("PINECONE_API_KEY"),
-                "environment": os.environ.get("PINECONE_ENVIRONMENT", "us-west1-gcp"),
-                "index_name": os.environ.get("PINECONE_INDEX_NAME", "ngx-embeddings"),
-                "dimension": get_env_int("PINECONE_DIMENSION", 768),
-                "metric": os.environ.get("PINECONE_METRIC", "cosine")
+            "vertex_vector_search": {
+                "project_id": os.environ.get("GOOGLE_CLOUD_PROJECT"),
+                "location": os.environ.get("VERTEX_LOCATION", "us-central1"),
+                "credentials_path": os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
+                "index_name": os.environ.get("VERTEX_VECTOR_SEARCH_INDEX", "ngx-embeddings"),
+                "index_endpoint_name": os.environ.get("VERTEX_VECTOR_SEARCH_ENDPOINT", "ngx-embeddings-endpoint"),
+                "deployed_index_id": os.environ.get("VERTEX_VECTOR_SEARCH_DEPLOYED_INDEX_ID", "ngx-embeddings-deployed"),
+                "dimension": get_env_int("VERTEX_VECTOR_DIMENSION", 3072),
+                "distance_measure": os.environ.get("VERTEX_VECTOR_DISTANCE_MEASURE", "DOT_PRODUCT_DISTANCE")
             }
         }
     
@@ -96,6 +98,19 @@ class EmbeddingsManager:
             # Inicializar cliente de Pinecone
             pinecone_client = PineconeClient(self.config.get("pinecone"))
             return PineconeVectorStore(pinecone_client)
+        elif vector_store_type == "vertex":
+            # Importar el adaptador de Vertex AI Vector Search
+            try:
+                from infrastructure.adapters.vertex_vector_store_adapter import VertexVectorStore
+                
+                # Inicializar cliente de Vertex AI Vector Search
+                from clients.vertex_ai.vector_search_client import VertexVectorSearchClient
+                vertex_client = VertexVectorSearchClient(self.config.get("vertex_vector_search"))
+                return VertexVectorStore(vertex_client)
+            except ImportError as e:
+                logger.error(f"Error al importar VertexVectorStore: {e}")
+                logger.warning("Usando almacenamiento en memoria como alternativa.")
+                return MemoryVectorStore()
         else:
             # Usar almacenamiento en memoria por defecto
             return MemoryVectorStore()
