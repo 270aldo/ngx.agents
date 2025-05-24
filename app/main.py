@@ -277,7 +277,23 @@ async def shutdown_event():
         except Exception as e:
             logger.error(f"Error al cerrar State Manager: {e}")
 
-        # TODO: Implementar cierre de conexiones a otros servicios externos si es necesario
+        # Cerrar cliente Vertex AI
+        try:
+            from clients.vertex_ai.client import vertex_ai_client
+
+            await vertex_ai_client.close()
+            logger.info("Cliente Vertex AI cerrado correctamente")
+        except Exception as e:
+            logger.error(f"Error al cerrar cliente Vertex AI: {e}")
+
+        # Cerrar cliente Supabase si tiene método close
+        try:
+            supabase_client = SupabaseClient.get_instance()
+            if hasattr(supabase_client, "close"):
+                await supabase_client.close()
+                logger.info("Cliente Supabase cerrado correctamente")
+        except Exception as e:
+            logger.error(f"Error al cerrar cliente Supabase: {e}")
 
         logger.info("Aplicación NGX Agents cerrada correctamente")
     except Exception as e:
