@@ -115,16 +115,32 @@ The system uses embeddings and semantic analysis to classify user intents:
 - Multimodal processing implementation
 - Base infrastructure refactoring
 
+### Recently Completed (2025-05-23)
+- **FASE 1 - Estabilización Crítica**
+  - ✅ Error de sintaxis en chaos_testing.py corregido
+  - ✅ Cierre de conexiones Redis implementado en StateManager
+  - ✅ Configuración CORS segura implementada
+  - ✅ Cierre de servicios externos (Vertex AI, Supabase) implementado
+
 ### In Progress
 - Vertex AI Client optimization (90%)
-- State Manager enhancement (90%)
+- State Manager enhancement (95%) - close() method added
 - Intent Analyzer improvements (90%)
 - Performance testing and optimization
 
-### Planned
-- Advanced generation features (10%)
-- Embeddings Manager expansion (25%)
-- Production deployment configuration
+### Pending Refactorization (FASE 2-4)
+- **FASE 2 - Estabilización**
+  - Limpiar 587 imports no usados
+  - Corregir manejo de excepciones (bare except)
+  - Reemplazar print() con logging
+- **FASE 3 - Optimización**
+  - Connection pooling para Redis
+  - Circuit breakers para servicios externos
+  - Límites de tamaño en caché
+- **FASE 4 - Calidad**
+  - Type hints completos
+  - Validación de entrada en endpoints
+  - Tests para escenarios de error
 
 ## 💻 Development Guidelines
 
