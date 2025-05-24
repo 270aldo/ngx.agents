@@ -70,12 +70,22 @@ if settings.telemetry_enabled:
 setup_telemetry_middleware(
     app
 )  # Esta función ya verifica si la telemetría está habilitada
+
+# Configurar CORS de manera segura
+cors_origins = settings.cors_allowed_origins
+if settings.environment == "production" and "*" in cors_origins:
+    # En producción, no permitir todos los orígenes
+    logger.warning(
+        "CORS configurado con '*' en producción. Usando orígenes por defecto."
+    )
+    cors_origins = ["https://app.ngxagents.com"]  # Dominio de producción
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, limitar a dominios específicos
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_origins,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=settings.cors_allow_methods,
+    allow_headers=settings.cors_allow_headers,
 )
 
 # Incluir routers
