@@ -8,6 +8,7 @@ Uso:
     from config.secrets import settings
     gcs_key = settings.GOOGLE_APPLICATION_CREDENTIALS
 """
+
 from functools import lru_cache
 import os
 from typing import Optional
@@ -16,7 +17,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     """Configuración de credenciales y parámetros de servicios externos."""
-    
+
     # Gemini / Vertex / Perplexity
     GEMINI_API_KEY: Optional[str] = None
     VERTEX_API_KEY: Optional[str] = None
@@ -34,22 +35,24 @@ class Settings(BaseSettings):
     # Control de reintentos (por servicio)
     MAX_RETRIES: int = 3
     RETRY_BACKOFF: float = 1.5
-    
+
     # Timeouts (segundos)
     DEFAULT_TIMEOUT: float = 30.0
-    
+
     class Config:
         """Configuración para cargar variables desde .env"""
+
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
+        extra = "ignore"  # Ignorar campos extra no definidos
 
 
 @lru_cache()
 def get_settings() -> Settings:
     """
     Obtiene la configuración de credenciales con caché LRU.
-    
+
     Returns:
         Settings: Objeto con las credenciales cargadas desde variables de entorno.
     """
