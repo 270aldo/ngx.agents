@@ -1,0 +1,50 @@
+groups:
+  - name: ngx_agents_agent_alerts
+    interval: 30s
+    rules:
+      # Tiempo de respuesta alto de agentes
+      - alert: SlowAgentResponse
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(ngx_agents_agent_response_time_seconds_bucket[5m]))
+            by (agent_id, le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "Agente {{ $labels.agent_id }} respondiendo lentamente"
+          description: "P95 de tiempo de respuesta: {{ $value }}s (umbral: 5s)"
+      
+      # Alta tasa de fallos en agentes
+      - alert: HighAgentFailureRate
+        expr: |
+          sum(rate(ngx_agents_agent_invocations_total{status="error"}[5m]))
+          by (agent_id)
+          /
+          sum(rate(ngx_agents_agent_invocations_total[5m]))
+          by (agent_id)
+          > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          team: ai
+        annotations:
+          summary: "Alta tasa de fallos en agente {{ $labels.agent_id }}"
+          description: "Tasa de fallos: {{ $value | humanizePercentage }}"
+      
+      # Agente no responde
+      - alert: AgentUnresponsive
+        expr: |
+          sum(increase(ngx_agents_agent_invocations_total[10m]))
+          by (agent_id) == 0
+          and
+          ngx_agents_agents_active > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "Agente {{ $labels.agent_id }} no ha procesado requests"
+          description: "El agente no ha procesado ningún request en los últimos 10 minutos"

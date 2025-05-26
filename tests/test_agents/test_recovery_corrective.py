@@ -6,12 +6,9 @@ Verifica la integración con el servicio de clasificación de programas.
 
 import unittest
 import asyncio
-import json
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 
 from agents.recovery_corrective.agent import RecoveryCorrective
-from services.program_classification_service import ProgramClassificationService
-from agents.shared.program_definitions import get_program_definition
 
 
 class TestRecoveryCorrective(unittest.TestCase):
@@ -24,27 +21,42 @@ class TestRecoveryCorrective(unittest.TestCase):
         self.gemini_client_mock.generate_text = AsyncMock()
         self.gemini_client_mock.generate_response = AsyncMock()
         self.gemini_client_mock.generate_structured_output = AsyncMock()
-        
+
         # Configurar respuestas predeterminadas para los mocks
         self.gemini_client_mock.generate_response.return_value = "Respuesta de prueba"
-        self.gemini_client_mock.generate_structured_output.return_value = {"test": "data"}
+        self.gemini_client_mock.generate_structured_output.return_value = {
+            "test": "data"
+        }
 
         # Crear mock para el servicio de clasificación de programas
         self.program_classification_service_mock = AsyncMock()
         self.program_classification_service_mock.classify_program_type = AsyncMock()
-        self.program_classification_service_mock.classify_program_type.return_value = "PRIME"
-        
+        self.program_classification_service_mock.classify_program_type.return_value = (
+            "PRIME"
+        )
+
         # Crear instancia del agente con mocks
-        with patch('agents.recovery_corrective.agent.GeminiClient', return_value=self.gemini_client_mock):
-            with patch('agents.recovery_corrective.agent.ProgramClassificationService', return_value=self.program_classification_service_mock):
+        with patch(
+            "agents.recovery_corrective.agent.GeminiClient",
+            return_value=self.gemini_client_mock,
+        ):
+            with patch(
+                "agents.recovery_corrective.agent.ProgramClassificationService",
+                return_value=self.program_classification_service_mock,
+            ):
                 self.agent = RecoveryCorrective()
                 self.agent.gemini_client = self.gemini_client_mock
-                self.agent.program_classification_service = self.program_classification_service_mock
+                self.agent.program_classification_service = (
+                    self.program_classification_service_mock
+                )
 
     def test_init(self):
         """Verifica que el agente se inicializa correctamente con el servicio de clasificación de programas."""
         self.assertIsNotNone(self.agent.program_classification_service)
-        self.assertEqual(self.agent.program_classification_service, self.program_classification_service_mock)
+        self.assertEqual(
+            self.agent.program_classification_service,
+            self.program_classification_service_mock,
+        )
 
     def test_injury_prevention_skill_uses_program_classification(self):
         """Verifica que la skill de prevención de lesiones utiliza el servicio de clasificación de programas."""
@@ -54,28 +66,30 @@ class TestRecoveryCorrective(unittest.TestCase):
             if skill.name == "injury_prevention":
                 injury_prevention_skill = skill
                 break
-        
-        self.assertIsNotNone(injury_prevention_skill, "No se encontró la skill de prevención de lesiones")
-        
+
+        self.assertIsNotNone(
+            injury_prevention_skill, "No se encontró la skill de prevención de lesiones"
+        )
+
         # Crear datos de entrada para la skill
         from agents.recovery_corrective.agent import InjuryPreventionInput
-        
+
         input_data = InjuryPreventionInput(
             query="¿Cómo puedo prevenir lesiones al correr?",
             activity_type="Running",
             user_profile={
                 "age": 35,
                 "gender": "Masculino",
-                "goals": ["Mejorar rendimiento", "Prevenir lesiones"]
-            }
+                "goals": ["Mejorar rendimiento", "Prevenir lesiones"],
+            },
         )
-        
+
         # Ejecutar la skill
         asyncio.run(injury_prevention_skill.handler(input_data))
-        
+
         # Verificar que se llamó al servicio de clasificación de programas
         self.program_classification_service_mock.classify_program_type.assert_called_once()
-        
+
         # Verificar que se utilizó el tipo de programa en el prompt
         call_args = self.gemini_client_mock.generate_response.call_args[0][0]
         self.assertIn("PRIME", call_args)
@@ -88,12 +102,14 @@ class TestRecoveryCorrective(unittest.TestCase):
             if skill.name == "rehabilitation":
                 rehabilitation_skill = skill
                 break
-        
-        self.assertIsNotNone(rehabilitation_skill, "No se encontró la skill de rehabilitación")
-        
+
+        self.assertIsNotNone(
+            rehabilitation_skill, "No se encontró la skill de rehabilitación"
+        )
+
         # Crear datos de entrada para la skill
         from agents.recovery_corrective.agent import RehabilitationInput
-        
+
         input_data = RehabilitationInput(
             query="Tengo una lesión en el hombro, ¿cómo puedo rehabilitarlo?",
             injury_type="Hombro",
@@ -101,16 +117,16 @@ class TestRecoveryCorrective(unittest.TestCase):
             user_profile={
                 "age": 35,
                 "gender": "Masculino",
-                "goals": ["Recuperación", "Volver a entrenar"]
-            }
+                "goals": ["Recuperación", "Volver a entrenar"],
+            },
         )
-        
+
         # Ejecutar la skill
         asyncio.run(rehabilitation_skill.handler(input_data))
-        
+
         # Verificar que se llamó al servicio de clasificación de programas
         self.program_classification_service_mock.classify_program_type.assert_called_once()
-        
+
         # Verificar que se utilizó el tipo de programa en el prompt
         call_args = self.gemini_client_mock.generate_response.call_args[0][0]
         self.assertIn("PRIME", call_args)
@@ -123,28 +139,34 @@ class TestRecoveryCorrective(unittest.TestCase):
             if skill.name == "sleep_optimization":
                 sleep_optimization_skill = skill
                 break
-        
-        self.assertIsNotNone(sleep_optimization_skill, "No se encontró la skill de optimización del sueño")
-        
+
+        self.assertIsNotNone(
+            sleep_optimization_skill,
+            "No se encontró la skill de optimización del sueño",
+        )
+
         # Crear datos de entrada para la skill
         from agents.recovery_corrective.agent import SleepOptimizationInput
-        
+
         input_data = SleepOptimizationInput(
             query="¿Cómo puedo mejorar mi calidad de sueño?",
-            sleep_issues=["Dificultad para conciliar el sueño", "Despertares nocturnos"],
+            sleep_issues=[
+                "Dificultad para conciliar el sueño",
+                "Despertares nocturnos",
+            ],
             user_profile={
                 "age": 35,
                 "gender": "Masculino",
-                "goals": ["Mejorar recuperación", "Optimizar rendimiento"]
-            }
+                "goals": ["Mejorar recuperación", "Optimizar rendimiento"],
+            },
         )
-        
+
         # Ejecutar la skill
         asyncio.run(sleep_optimization_skill.handler(input_data))
-        
+
         # Verificar que se llamó al servicio de clasificación de programas
         self.program_classification_service_mock.classify_program_type.assert_called_once()
-        
+
         # Verificar que se utilizó el tipo de programa en el prompt
         call_args = self.gemini_client_mock.generate_response.call_args[0][0]
         self.assertIn("PRIME", call_args)

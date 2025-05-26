@@ -5,7 +5,6 @@ Este módulo utiliza pydantic-settings para cargar y validar la configuración
 desde variables de entorno.
 """
 
-import os
 from typing import Optional
 from pydantic import AnyUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict

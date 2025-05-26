@@ -7,18 +7,18 @@ y estrategias de crononutrición basadas en biomarcadores y perfil del usuario.
 Implementa los protocolos oficiales ADK y A2A para comunicación entre agentes.
 """
 
-import logging
 import uuid
 import time
 import json
 import os
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List
 from google.cloud import aiplatform
 
 from clients.gemini_client import GeminiClient
 from clients.supabase_client import SupabaseClient
+from integrations.nutrition.service import NutritionIntegrationService
+from integrations.nutrition.normalizer import NutritionSource
 from tools.mcp_toolkit import MCPToolkit
-from tools.mcp_client import MCPClient
 from agents.base.adk_agent import ADKAgent
 from infrastructure.adapters.state_manager_adapter import state_manager_adapter
 from infrastructure.adapters.intent_analyzer_adapter import intent_analyzer_adapter
@@ -33,19 +33,28 @@ from adk.toolkit import Toolkit
 
 # Importar esquemas para las skills
 from agents.precision_nutrition_architect.schemas import (
-    CreateMealPlanInput, CreateMealPlanOutput,
-    RecommendSupplementsInput, RecommendSupplementsOutput,
-    AnalyzeBiomarkersInput, AnalyzeBiomarkersOutput,
+    CreateMealPlanInput,
+    CreateMealPlanOutput,
+    RecommendSupplementsInput,
+    RecommendSupplementsOutput,
+    AnalyzeBiomarkersInput,
+    AnalyzeBiomarkersOutput,
     BiomarkerAnalysis,
-    PlanChrononutritionInput, PlanChrononutritionOutput,
-    AnalyzeFoodImageInput, AnalyzeFoodImageOutput,
-    MealPlanArtifact, SupplementRecommendationArtifact,
-    BiomarkerAnalysisArtifact, ChrononutritionPlanArtifact,
-    FoodImageAnalysisArtifact
+    PlanChrononutritionInput,
+    PlanChrononutritionOutput,
+    AnalyzeFoodImageInput,
+    AnalyzeFoodImageOutput,
+    FoodImageAnalysisArtifact,
+    SyncNutritionDataInput,
+    SyncNutritionDataOutput,
+    AnalyzeNutritionTrendsInput,
+    AnalyzeNutritionTrendsOutput,
+    NutritionTrend,
 )
 
 # Configurar logger
 logger = get_logger(__name__)
+
 
 class PrecisionNutritionArchitect(ADKAgent):
     """
@@ -56,7 +65,7 @@ class PrecisionNutritionArchitect(ADKAgent):
 
     Implementa los protocolos oficiales ADK y A2A para comunicación entre agentes.
     """
-    
+
     AGENT_ID = "precision_nutrition_architect"
     AGENT_NAME = "NGX Precision Nutrition Architect"
     AGENT_DESCRIPTION = "Genera planes alimenticios detallados, recomendaciones de suplementación y estrategias de crononutrición basadas en biomarcadores y perfil del usuario."
@@ -68,10 +77,10 @@ class PrecisionNutritionArchitect(ADKAgent):
     Prioriza la salud, el rendimiento y la adherencia del usuario.
     """
     DEFAULT_MODEL = "gemini-1.5-flash"
-    
+
     def __init__(
         self,
-        state_manager = None,
+        state_manager=None,
         mcp_toolkit: Optional[MCPToolkit] = None,
         a2a_server_url: Optional[str] = None,
         model: Optional[str] = None,
@@ -79,11 +88,11 @@ class PrecisionNutritionArchitect(ADKAgent):
         agent_id: str = AGENT_ID,
         name: str = AGENT_NAME,
         description: str = AGENT_DESCRIPTION,
-        **kwargs
+        **kwargs,
     ):
         """
         Inicializa el agente PrecisionNutritionArchitect.
-        
+
         Args:
             state_manager: Gestor de estado para persistencia
             mcp_toolkit: Toolkit de MCP para herramientas adicionales
@@ -98,19 +107,21 @@ class PrecisionNutritionArchitect(ADKAgent):
         _model = model or self.DEFAULT_MODEL
         _instruction = instruction or self.DEFAULT_INSTRUCTION
         _mcp_toolkit = mcp_toolkit if mcp_toolkit is not None else MCPToolkit()
-        
+
         # Inicializar el servicio de clasificación de programas con caché
         self.gemini_client = GeminiClient()
-        
+
         # Configurar caché para el servicio de clasificación de programas
-        use_redis = os.environ.get('USE_REDIS_CACHE', 'false').lower() == 'true'
-        cache_ttl = int(os.environ.get('PROGRAM_CACHE_TTL', '3600'))  # 1 hora por defecto
+        use_redis = os.environ.get("USE_REDIS_CACHE", "false").lower() == "true"
+        cache_ttl = int(
+            os.environ.get("PROGRAM_CACHE_TTL", "3600")
+        )  # 1 hora por defecto
         self.program_classification_service = ProgramClassificationService(
             gemini_client=self.gemini_client,
             use_cache=use_redis,  # Habilitar caché según la configuración
-            cache_ttl=cache_ttl  # Establecer el tiempo de vida de la caché
+            cache_ttl=cache_ttl,  # Establecer el tiempo de vida de la caché
         )
-        
+
         # Definir las skills antes de llamar al constructor de ADKAgent
         self.skills = [
             Skill(
@@ -118,38 +129,52 @@ class PrecisionNutritionArchitect(ADKAgent):
                 description="Crea un plan de comidas personalizado basado en el perfil, preferencias y objetivos del usuario.",
                 handler=self._skill_create_meal_plan,
                 input_schema=CreateMealPlanInput,
-                output_schema=CreateMealPlanOutput
+                output_schema=CreateMealPlanOutput,
             ),
             Skill(
                 name="recommend_supplements",
                 description="Recomienda suplementos basados en el perfil, biomarcadores y objetivos del usuario.",
                 handler=self._skill_recommend_supplements,
                 input_schema=RecommendSupplementsInput,
-                output_schema=RecommendSupplementsOutput
+                output_schema=RecommendSupplementsOutput,
             ),
             Skill(
                 name="analyze_biomarkers",
                 description="Analiza biomarcadores y genera recomendaciones nutricionales personalizadas.",
                 handler=self._skill_analyze_biomarkers,
                 input_schema=AnalyzeBiomarkersInput,
-                output_schema=AnalyzeBiomarkersOutput
+                output_schema=AnalyzeBiomarkersOutput,
             ),
             Skill(
                 name="plan_chrononutrition",
                 description="Planifica el timing nutricional para optimizar el rendimiento y la recuperación.",
                 handler=self._skill_plan_chrononutrition,
                 input_schema=PlanChrononutritionInput,
-                output_schema=PlanChrononutritionOutput
+                output_schema=PlanChrononutritionOutput,
             ),
             Skill(
                 name="analyze_food_image",
                 description="Analiza imágenes de alimentos para identificar componentes, estimar valores nutricionales y proporcionar recomendaciones.",
                 handler=self._skill_analyze_food_image,
                 input_schema=AnalyzeFoodImageInput,
-                output_schema=AnalyzeFoodImageOutput
-            )
+                output_schema=AnalyzeFoodImageOutput,
+            ),
+            Skill(
+                name="sync_nutrition_data",
+                description="Sincroniza datos nutricionales desde plataformas externas como MyFitnessPal.",
+                handler=self._skill_sync_nutrition_data,
+                input_schema=SyncNutritionDataInput,
+                output_schema=SyncNutritionDataOutput,
+            ),
+            Skill(
+                name="analyze_nutrition_trends",
+                description="Analiza tendencias nutricionales y cumplimiento del plan alimenticio.",
+                handler=self._skill_analyze_nutrition_trends,
+                input_schema=AnalyzeNutritionTrendsInput,
+                output_schema=AnalyzeNutritionTrendsOutput,
+            ),
         ]
-        
+
         # Definir las capacidades del agente
         _capabilities = [
             "meal_plan_creation",
@@ -158,11 +183,13 @@ class PrecisionNutritionArchitect(ADKAgent):
             "chrononutrition_planning",
             "biomarker_analysis",
             "food_image_analysis",
+            "nutrition_data_sync",
+            "nutrition_trends_analysis",
         ]
-        
+
         # Crear un toolkit de ADK
         adk_toolkit = Toolkit()
-        
+
         # Inicializar el agente ADK
         super().__init__(
             agent_id=agent_id,
@@ -174,72 +201,120 @@ class PrecisionNutritionArchitect(ADKAgent):
             adk_toolkit=adk_toolkit,
             capabilities=_capabilities,
             a2a_server_url=a2a_server_url,
-            **kwargs
+            **kwargs,
         )
-        
+
         # Configurar clientes adicionales
         self.gemini_client = GeminiClient(model_name=self.model)
         self.supabase_client = SupabaseClient()
-        
+
+        # Inicializar servicio de integración nutricional
+        nutrition_config = {
+            "myfitnesspal": {
+                "api_endpoint": os.getenv(
+                    "MFP_API_ENDPOINT", "https://api.myfitnesspal.com"
+                )
+            }
+        }
+        self.nutrition_service = NutritionIntegrationService(nutrition_config)
+        logger.info("Servicio de integración nutricional inicializado")
+
         # Inicializar Vertex AI
         gcp_project_id = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
         gcp_region = os.getenv("GCP_REGION", "us-central1")
         try:
-            logger.info(f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}")
+            logger.info(
+                f"Inicializando AI Platform con Proyecto: {gcp_project_id}, Región: {gcp_region}"
+            )
             aiplatform.init(project=gcp_project_id, location=gcp_region)
-            logger.info("AI Platform (Vertex AI SDK) inicializado correctamente para PrecisionNutritionArchitect.")
+            logger.info(
+                "AI Platform (Vertex AI SDK) inicializado correctamente para PrecisionNutritionArchitect."
+            )
         except Exception as e:
-            logger.error(f"Error al inicializar AI Platform para PrecisionNutritionArchitect: {e}", exc_info=True)
-        
+            logger.error(
+                f"Error al inicializar AI Platform para PrecisionNutritionArchitect: {e}",
+                exc_info=True,
+            )
+
         # Inicializar procesadores de visión y multimodales
         try:
             from core.vision_processor import VisionProcessor
             from infrastructure.adapters.multimodal_adapter import MultimodalAdapter
             from clients.vertex_ai.vision_client import VertexAIVisionClient
             from clients.vertex_ai.multimodal_client import VertexAIMultimodalClient
-            
+
             # Inicializar procesador de visión
             self.vision_processor = VisionProcessor()
             logger.info("Procesador de visión inicializado correctamente")
-            
+
             # Inicializar adaptador multimodal
             self.multimodal_adapter = MultimodalAdapter()
             logger.info("Adaptador multimodal inicializado correctamente")
-            
+
             # Inicializar clientes especializados
             self.vision_client = VertexAIVisionClient()
             self.multimodal_client = VertexAIMultimodalClient()
             logger.info("Clientes de visión y multimodal inicializados correctamente")
-            
+
             # Inicializar tracer para telemetría
             from opentelemetry import trace
+
             self.tracer = trace.get_tracer(__name__)
             logger.info("Tracer para telemetría inicializado correctamente")
-            
+
             # Marcar capacidades como disponibles
             self._vision_capabilities_available = True
         except ImportError as e:
-            logger.warning(f"No se pudieron inicializar algunos componentes para capacidades avanzadas: {e}")
+            logger.warning(
+                f"No se pudieron inicializar algunos componentes para capacidades avanzadas: {e}"
+            )
             # Crear implementaciones simuladas para mantener la compatibilidad
             self._vision_capabilities_available = False
-            
+
             # Crear implementaciones simuladas
-            self.vision_processor = type('DummyVisionProcessor', (), {
-                'analyze_food_image': lambda self, image_data: {"detected_foods": [], "text": "Análisis de imagen simulado"}
-            })()
-            
-            self.multimodal_adapter = type('DummyMultimodalAdapter', (), {
-                'process_multimodal': lambda self, prompt, image_data, temperature=0.2, max_output_tokens=1024:
-                    {"text": "Análisis multimodal simulado"}
-            })()
-            
-            self.tracer = type('DummyTracer', (), {
-                'start_as_current_span': lambda name: type('DummySpan', (), {'__enter__': lambda self: None, '__exit__': lambda self, *args: None})()
-            })
-            
-        logger.info(f"{self.name} ({self.agent_id}) inicializado con integración oficial de Google ADK.")
-    
-    async def _get_context(self, user_id: Optional[str], session_id: Optional[str]) -> Dict[str, Any]:
+            self.vision_processor = type(
+                "DummyVisionProcessor",
+                (),
+                {
+                    "analyze_food_image": lambda self, image_data: {
+                        "detected_foods": [],
+                        "text": "Análisis de imagen simulado",
+                    }
+                },
+            )()
+
+            self.multimodal_adapter = type(
+                "DummyMultimodalAdapter",
+                (),
+                {
+                    "process_multimodal": lambda self, prompt, image_data, temperature=0.2, max_output_tokens=1024: {
+                        "text": "Análisis multimodal simulado"
+                    }
+                },
+            )()
+
+            self.tracer = type(
+                "DummyTracer",
+                (),
+                {
+                    "start_as_current_span": lambda name: type(
+                        "DummySpan",
+                        (),
+                        {
+                            "__enter__": lambda self: None,
+                            "__exit__": lambda self, *args: None,
+                        },
+                    )()
+                },
+            )
+
+        logger.info(
+            f"{self.name} ({self.agent_id}) inicializado con integración oficial de Google ADK."
+        )
+
+    async def _get_context(
+        self, user_id: Optional[str], session_id: Optional[str]
+    ) -> Dict[str, Any]:
         """
         Obtiene el contexto de la conversación desde el adaptador del StateManager.
 
@@ -250,19 +325,29 @@ class PrecisionNutritionArchitect(ADKAgent):
         Returns:
             Dict[str, Any]: Contexto de la conversación.
         """
-        context_key = f"context_{user_id}_{session_id}" if user_id and session_id else f"context_default_{uuid.uuid4().hex[:6]}"
-        
+        context_key = (
+            f"context_{user_id}_{session_id}"
+            if user_id and session_id
+            else f"context_default_{uuid.uuid4().hex[:6]}"
+        )
+
         try:
             # Intentar cargar desde el adaptador del StateManager
             if user_id and session_id:
                 try:
-                    state_data = await state_manager_adapter.load_state(user_id, session_id)
+                    state_data = await state_manager_adapter.load_state(
+                        user_id, session_id
+                    )
                     if state_data and isinstance(state_data, dict):
-                        logger.debug(f"Contexto cargado desde adaptador del StateManager para user_id={user_id}, session_id={session_id}")
+                        logger.debug(
+                            f"Contexto cargado desde adaptador del StateManager para user_id={user_id}, session_id={session_id}"
+                        )
                         return state_data
                 except Exception as e:
-                    logger.warning(f"Error al cargar contexto desde adaptador del StateManager: {e}")
-            
+                    logger.warning(
+                        f"Error al cargar contexto desde adaptador del StateManager: {e}"
+                    )
+
             # Si no hay contexto o hay error, crear uno nuevo
             return {
                 "conversation_history": [],
@@ -270,7 +355,7 @@ class PrecisionNutritionArchitect(ADKAgent):
                 "meal_plans": [],
                 "supplement_recommendations": [],
                 "biomarker_analyses": [],
-                "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
+                "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
         except Exception as e:
             logger.error(f"Error al obtener contexto: {e}", exc_info=True)
@@ -281,10 +366,12 @@ class PrecisionNutritionArchitect(ADKAgent):
                 "meal_plans": [],
                 "supplement_recommendations": [],
                 "biomarker_analyses": [],
-                "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
+                "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
 
-    async def _update_context(self, context: Dict[str, Any], user_id: str, session_id: str) -> None:
+    async def _update_context(
+        self, context: Dict[str, Any], user_id: str, session_id: str
+    ) -> None:
         """
         Actualiza el contexto de la conversación en el adaptador del StateManager.
 
@@ -296,123 +383,168 @@ class PrecisionNutritionArchitect(ADKAgent):
         try:
             # Actualizar la marca de tiempo
             context["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            
+
             # Guardar el contexto en el adaptador del StateManager
             await state_manager_adapter.save_state(user_id, session_id, context)
-            logger.info(f"Contexto actualizado en adaptador del StateManager para user_id={user_id}, session_id={session_id}")
+            logger.info(
+                f"Contexto actualizado en adaptador del StateManager para user_id={user_id}, session_id={session_id}"
+            )
         except Exception as e:
             logger.error(f"Error al actualizar contexto: {e}", exc_info=True)
-    
+
     # --- Métodos para análisis de intenciones ---
     async def _classify_query(self, query: str) -> str:
         """
         Clasifica el tipo de consulta del usuario utilizando el adaptador del Intent Analyzer.
-        
+
         Args:
             query: Consulta del usuario
-            
+
         Returns:
             str: Tipo de consulta clasificada
         """
         try:
             # Utilizar el adaptador del Intent Analyzer para analizar la intención
             intent_analysis = await intent_analyzer_adapter.analyze_intent(query)
-            
+
             # Mapear la intención primaria a los tipos de consulta del agente
             primary_intent = intent_analysis.get("primary_intent", "").lower()
-            
+
             # Mapeo de intenciones a tipos de consulta
             intent_to_query_type = {
                 "meal_plan": "create_meal_plan",
                 "supplement": "recommend_supplements",
                 "biomarker": "analyze_biomarkers",
-                "chrononutrition": "plan_chrononutrition"
+                "chrononutrition": "plan_chrononutrition",
             }
-            
+
             # Buscar coincidencias exactas
             if primary_intent in intent_to_query_type:
                 return intent_to_query_type[primary_intent]
-            
+
             # Buscar coincidencias parciales
             for intent, query_type in intent_to_query_type.items():
                 if intent in primary_intent:
                     return query_type
-            
+
             # Si no hay coincidencias, usar el método de palabras clave como fallback
             return self._classify_query_by_keywords(query)
         except Exception as e:
-            logger.error(f"Error al clasificar consulta con Intent Analyzer: {e}", exc_info=True)
+            logger.error(
+                f"Error al clasificar consulta con Intent Analyzer: {e}", exc_info=True
+            )
             # En caso de error, usar el método de palabras clave como fallback
             return self._classify_query_by_keywords(query)
-    
+
     def _classify_query_by_keywords(self, query: str) -> str:
         """
         Clasifica el tipo de consulta del usuario utilizando palabras clave.
-        
+
         Args:
             query: Consulta del usuario
-            
+
         Returns:
             str: Tipo de consulta clasificada
         """
         query_lower = query.lower()
-        
+
         # Palabras clave para plan de comidas
         meal_plan_keywords = [
-            "plan", "comida", "alimentación", "dieta", "menú", "receta", 
-            "comer", "alimento", "nutrición", "macros", "calorías"
+            "plan",
+            "comida",
+            "alimentación",
+            "dieta",
+            "menú",
+            "receta",
+            "comer",
+            "alimento",
+            "nutrición",
+            "macros",
+            "calorías",
         ]
-        
+
         # Palabras clave para suplementos
         supplements_keywords = [
-            "suplemento", "vitamina", "mineral", "proteína", "creatina", 
-            "omega", "aminoácido", "bcaa", "pre-entreno", "post-entreno"
+            "suplemento",
+            "vitamina",
+            "mineral",
+            "proteína",
+            "creatina",
+            "omega",
+            "aminoácido",
+            "bcaa",
+            "pre-entreno",
+            "post-entreno",
         ]
-        
+
         # Palabras clave para biomarcadores
         biomarkers_keywords = [
-            "biomarcador", "análisis", "sangre", "laboratorio", "glucosa", 
-            "colesterol", "triglicéridos", "hormona", "enzima", "vitamina d"
+            "biomarcador",
+            "análisis",
+            "sangre",
+            "laboratorio",
+            "glucosa",
+            "colesterol",
+            "triglicéridos",
+            "hormona",
+            "enzima",
+            "vitamina d",
         ]
-        
+
         # Palabras clave para crononutrición
         chrononutrition_keywords = [
-            "crononutrición", "ayuno", "intermitente", "ventana", "timing", 
-            "horario", "comida", "pre-entreno", "post-entreno", "desayuno", "cena"
+            "crononutrición",
+            "ayuno",
+            "intermitente",
+            "ventana",
+            "timing",
+            "horario",
+            "comida",
+            "pre-entreno",
+            "post-entreno",
+            "desayuno",
+            "cena",
         ]
-        
+
         # Verificar coincidencias con palabras clave
         for keyword in chrononutrition_keywords:
             if keyword in query_lower:
                 return "plan_chrononutrition"
-                
+
         for keyword in biomarkers_keywords:
             if keyword in query_lower:
                 return "analyze_biomarkers"
-                
+
         for keyword in supplements_keywords:
             if keyword in query_lower:
                 return "recommend_supplements"
-                
+
         for keyword in meal_plan_keywords:
             if keyword in query_lower:
                 return "create_meal_plan"
-                
+
         # Si no hay coincidencias, devolver tipo general
         return "create_meal_plan"
-    
+
     # --- Métodos para comunicación entre agentes ---
-    async def _consult_other_agent(self, agent_id: str, query: str, user_id: Optional[str] = None, session_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _consult_other_agent(
+        self,
+        agent_id: str,
+        query: str,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Consulta a otro agente utilizando el adaptador de A2A.
-        
+
         Args:
             agent_id: ID del agente a consultar
             query: Consulta a enviar al agente
             user_id: ID del usuario
             session_id: ID de la sesión
             context: Contexto adicional para la consulta
-            
+
         Returns:
             Dict[str, Any]: Respuesta del agente consultado
         """
@@ -421,16 +553,14 @@ class PrecisionNutritionArchitect(ADKAgent):
             task_context = {
                 "user_id": user_id,
                 "session_id": session_id,
-                "additional_context": context or {}
+                "additional_context": context or {},
             }
-            
+
             # Llamar al agente utilizando el adaptador de A2A
             response = await a2a_adapter.call_agent(
-                agent_id=agent_id,
-                user_input=query,
-                context=task_context
+                agent_id=agent_id, user_input=query, context=task_context
             )
-            
+
             logger.info(f"Respuesta recibida del agente {agent_id}")
             return response
         except Exception as e:
@@ -440,155 +570,211 @@ class PrecisionNutritionArchitect(ADKAgent):
                 "error": str(e),
                 "output": f"Error al consultar al agente {agent_id}",
                 "agent_id": agent_id,
-                "agent_name": agent_id
+                "agent_name": agent_id,
             }
-    
+
     # --- Métodos de Habilidades (Skills) ---
-    
-    async def _skill_create_meal_plan(self, input_data: CreateMealPlanInput) -> CreateMealPlanOutput:
+
+    async def _skill_create_meal_plan(
+        self, input_data: CreateMealPlanInput
+    ) -> CreateMealPlanOutput:
         """
         Skill para generar un plan de comidas personalizado.
-        
+
         Args:
             input_data: Datos de entrada para la skill
-            
+
         Returns:
             CreateMealPlanOutput: Plan de comidas generado
         """
-        logger.info(f"Ejecutando habilidad: _skill_create_meal_plan con input: {input_data.user_input[:30]}...")
-        
+        logger.info(
+            f"Ejecutando habilidad: _skill_create_meal_plan con input: {input_data.user_input[:30]}..."
+        )
+
         try:
             # Generar el plan de comidas
             meal_plan_dict = await self._generate_meal_plan(
-                input_data.user_input,
-                input_data.user_profile
+                input_data.user_input, input_data.user_profile
             )
-            
+
             # Crear la salida de la skill
             return CreateMealPlanOutput(**meal_plan_dict)
-            
+
         except Exception as e:
-            logger.error(f"Error en skill '_skill_create_meal_plan': {e}", exc_info=True)
+            logger.error(
+                f"Error en skill '_skill_create_meal_plan': {e}", exc_info=True
+            )
             # En caso de error, devolver un plan básico
             return CreateMealPlanOutput(
                 daily_plan=[],
                 total_calories=None,
                 macronutrient_distribution=None,
-                recommendations=["Error al generar el plan de comidas. Consulte a un profesional."],
-                notes=str(e)
+                recommendations=[
+                    "Error al generar el plan de comidas. Consulte a un profesional."
+                ],
+                notes=str(e),
             )
-    
-    async def _skill_recommend_supplements(self, input_data: RecommendSupplementsInput) -> RecommendSupplementsOutput:
+
+    async def _skill_recommend_supplements(
+        self, input_data: RecommendSupplementsInput
+    ) -> RecommendSupplementsOutput:
         """
         Skill para recomendar suplementos personalizados.
-        
+
         Args:
             input_data: Datos de entrada para la skill
-            
+
         Returns:
             RecommendSupplementsOutput: Recomendaciones de suplementos generadas
         """
-        logger.info(f"Ejecutando habilidad: _skill_recommend_supplements con input: {input_data.user_input[:30]}...")
-        
+        logger.info(
+            f"Ejecutando habilidad: _skill_recommend_supplements con input: {input_data.user_input[:30]}..."
+        )
+
         try:
             # Determinar el tipo de programa del usuario para personalizar las recomendaciones
             context = {
                 "user_profile": input_data.user_profile or {},
-                "goals": input_data.user_profile.get("goals", []) if input_data.user_profile else []
+                "goals": (
+                    input_data.user_profile.get("goals", [])
+                    if input_data.user_profile
+                    else []
+                ),
             }
-            
+
             try:
                 # Clasificar el tipo de programa del usuario
-                program_type = await self.program_classification_service.classify_program_type(context)
-                logger.info(f"Tipo de programa determinado para recomendaciones de suplementos: {program_type}")
-                
+                program_type = (
+                    await self.program_classification_service.classify_program_type(
+                        context
+                    )
+                )
+                logger.info(
+                    f"Tipo de programa determinado para recomendaciones de suplementos: {program_type}"
+                )
+
                 # Obtener definición del programa para personalizar las recomendaciones
                 program_def = get_program_definition(program_type)
-                
+
                 # Verificar si hay recomendaciones de suplementos específicas para el programa
                 program_supplements = []
-                if program_def and program_def.get("key_protocols") and "supplementation" in program_def.get("key_protocols", {}):
-                    program_supplements = program_def.get("key_protocols", {}).get("supplementation", [])
-                    logger.info(f"Encontradas {len(program_supplements)} recomendaciones de suplementos para el programa {program_type}")
+                if (
+                    program_def
+                    and program_def.get("key_protocols")
+                    and "supplementation" in program_def.get("key_protocols", {})
+                ):
+                    program_supplements = program_def.get("key_protocols", {}).get(
+                        "supplementation", []
+                    )
+                    logger.info(
+                        f"Encontradas {len(program_supplements)} recomendaciones de suplementos para el programa {program_type}"
+                    )
             except Exception as e:
-                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales.")
+                logger.warning(
+                    f"No se pudo determinar el tipo de programa: {e}. Usando recomendaciones generales."
+                )
                 program_type = "GENERAL"
                 program_supplements = []
-            
+
             # Generar recomendaciones de suplementos
             rec_dict = await self._generate_supplement_recommendation(
                 input_data.user_input,
                 input_data.user_profile,
                 program_type=program_type,
-                program_supplements=program_supplements
+                program_supplements=program_supplements,
             )
-            
+
             # Crear la salida de la skill
             return RecommendSupplementsOutput(**rec_dict)
-            
+
         except Exception as e:
-            logger.error(f"Error en skill '_skill_recommend_supplements': {e}", exc_info=True)
+            logger.error(
+                f"Error en skill '_skill_recommend_supplements': {e}", exc_info=True
+            )
             # En caso de error, devolver recomendaciones básicas
             return RecommendSupplementsOutput(
                 supplements=[],
                 general_recommendations="Error al generar recomendaciones de suplementos. Consulte a un profesional.",
-                notes=str(e)
+                notes=str(e),
             )
-    
-    async def _skill_analyze_biomarkers(self, input_data: AnalyzeBiomarkersInput) -> AnalyzeBiomarkersOutput:
+
+    async def _skill_analyze_biomarkers(
+        self, input_data: AnalyzeBiomarkersInput
+    ) -> AnalyzeBiomarkersOutput:
         """
         Skill para analizar biomarcadores y proporcionar recomendaciones nutricionales.
-        
+
         Args:
             input_data: Datos de entrada para la skill
-            
+
         Returns:
             AnalyzeBiomarkersOutput: Análisis de biomarcadores generado
         """
-        logger.info(f"Ejecutando habilidad: _skill_analyze_biomarkers con input: {input_data.user_input[:30]}...")
-        
+        logger.info(
+            f"Ejecutando habilidad: _skill_analyze_biomarkers con input: {input_data.user_input[:30]}..."
+        )
+
         try:
             # Generar el análisis de biomarcadores
             biomarker_data = await self._generate_biomarker_analysis(
-                input_data.user_input,
-                input_data.biomarkers
+                input_data.user_input, input_data.biomarkers
             )
-            
+
             # Crear la lista de análisis de biomarcadores
             analyses_list = []
             for analysis in biomarker_data.get("analyses", []):
-                analyses_list.append(BiomarkerAnalysis(
-                    name=analysis.get("name", "No especificado"),
-                    value=analysis.get("value", "No disponible"),
-                    status=analysis.get("status", "No evaluado"),
-                    reference_range=analysis.get("reference_range", "No disponible"),
-                    interpretation=analysis.get("interpretation", "No disponible"),
-                    nutritional_implications=analysis.get("nutritional_implications", ["No especificado"]),
-                    recommendations=analysis.get("recommendations", ["Consulte a un profesional"])
-                ))
-            
+                analyses_list.append(
+                    BiomarkerAnalysis(
+                        name=analysis.get("name", "No especificado"),
+                        value=analysis.get("value", "No disponible"),
+                        status=analysis.get("status", "No evaluado"),
+                        reference_range=analysis.get(
+                            "reference_range", "No disponible"
+                        ),
+                        interpretation=analysis.get("interpretation", "No disponible"),
+                        nutritional_implications=analysis.get(
+                            "nutritional_implications", ["No especificado"]
+                        ),
+                        recommendations=analysis.get(
+                            "recommendations", ["Consulte a un profesional"]
+                        ),
+                    )
+                )
+
             # Si no hay análisis, crear al menos uno predeterminado
             if not analyses_list:
-                analyses_list.append(BiomarkerAnalysis(
-                    name="Análisis general",
-                    value="N/A",
-                    status="No evaluado",
-                    reference_range="N/A",
-                    interpretation="No se proporcionaron biomarcadores específicos para analizar",
-                    nutritional_implications=["Mantener una dieta equilibrada"],
-                    recommendations=["Consulte a un profesional de la salud para un análisis detallado"]
-                ))
-            
+                analyses_list.append(
+                    BiomarkerAnalysis(
+                        name="Análisis general",
+                        value="N/A",
+                        status="No evaluado",
+                        reference_range="N/A",
+                        interpretation="No se proporcionaron biomarcadores específicos para analizar",
+                        nutritional_implications=["Mantener una dieta equilibrada"],
+                        recommendations=[
+                            "Consulte a un profesional de la salud para un análisis detallado"
+                        ],
+                    )
+                )
+
             # Crear la salida de la skill
             return AnalyzeBiomarkersOutput(
                 analyses=analyses_list,
-                overall_assessment=biomarker_data.get("overall_assessment", "No se pudo realizar una evaluación completa."),
-                nutritional_priorities=biomarker_data.get("nutritional_priorities", ["Mantener una dieta equilibrada"]),
-                supplement_considerations=biomarker_data.get("supplement_considerations", ["Consulte a un profesional"])
+                overall_assessment=biomarker_data.get(
+                    "overall_assessment", "No se pudo realizar una evaluación completa."
+                ),
+                nutritional_priorities=biomarker_data.get(
+                    "nutritional_priorities", ["Mantener una dieta equilibrada"]
+                ),
+                supplement_considerations=biomarker_data.get(
+                    "supplement_considerations", ["Consulte a un profesional"]
+                ),
             )
-            
+
         except Exception as e:
-            logger.error(f"Error en skill '_skill_analyze_biomarkers': {e}", exc_info=True)
+            logger.error(
+                f"Error en skill '_skill_analyze_biomarkers': {e}", exc_info=True
+            )
             # En caso de error, devolver un análisis básico
             return AnalyzeBiomarkersOutput(
                 analyses=[
@@ -599,38 +785,48 @@ class PrecisionNutritionArchitect(ADKAgent):
                         reference_range="N/A",
                         interpretation="No se pudo analizar debido a un error",
                         nutritional_implications=["Mantener una dieta equilibrada"],
-                        recommendations=["Consulte a un profesional de la salud"]
+                        recommendations=["Consulte a un profesional de la salud"],
                     )
                 ],
                 overall_assessment="No se pudo realizar el análisis debido a un error en el procesamiento.",
-                nutritional_priorities=["Mantener una dieta equilibrada", "Consultar con un profesional"],
-                supplement_considerations=["Consulte a un profesional antes de tomar cualquier suplemento"]
+                nutritional_priorities=[
+                    "Mantener una dieta equilibrada",
+                    "Consultar con un profesional",
+                ],
+                supplement_considerations=[
+                    "Consulte a un profesional antes de tomar cualquier suplemento"
+                ],
             )
-    
-    async def _skill_plan_chrononutrition(self, input_data: PlanChrononutritionInput) -> PlanChrononutritionOutput:
+
+    async def _skill_plan_chrononutrition(
+        self, input_data: PlanChrononutritionInput
+    ) -> PlanChrononutritionOutput:
         """
         Skill para planificar estrategias de crononutrición personalizadas.
-        
+
         Args:
             input_data: Datos de entrada para la skill
-            
+
         Returns:
             PlanChrononutritionOutput: Plan de crononutrición generado
         """
-        logger.info(f"Ejecutando habilidad: _skill_plan_chrononutrition con input: {input_data.user_input[:30]}...")
-        
+        logger.info(
+            f"Ejecutando habilidad: _skill_plan_chrononutrition con input: {input_data.user_input[:30]}..."
+        )
+
         try:
             # Generar el plan de crononutrición
             chronoplan_dict = await self._generate_chrononutrition_plan(
-                input_data.user_input,
-                input_data.user_profile
+                input_data.user_input, input_data.user_profile
             )
-            
+
             # Crear la salida de la skill
             return PlanChrononutritionOutput(**chronoplan_dict)
-            
+
         except Exception as e:
-            logger.error(f"Error en skill '_skill_plan_chrononutrition': {e}", exc_info=True)
+            logger.error(
+                f"Error en skill '_skill_plan_chrononutrition': {e}", exc_info=True
+            )
             # En caso de error, devolver un plan básico
             return PlanChrononutritionOutput(
                 time_windows=[],
@@ -638,80 +834,98 @@ class PrecisionNutritionArchitect(ADKAgent):
                 eating_period=None,
                 pre_workout_nutrition=None,
                 post_workout_nutrition=None,
-                general_recommendations="Error al generar el plan de crononutrición. Consulte a un profesional."
+                general_recommendations="Error al generar el plan de crononutrición. Consulte a un profesional.",
             )
-    
+
     # --- Métodos de generación de contenido ---
-    
+
     async def _generate_meal_plan(
         self, user_input: str, user_profile: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Genera un plan de comidas personalizado basado en la entrada del usuario y su perfil.
-        
+
         Args:
             user_input: Texto de entrada del usuario
             user_profile: Perfil del usuario con información relevante (opcional)
-            
+
         Returns:
             Dict[str, Any]: Plan de comidas generado
         """
         logger.info(f"Generando plan de comidas para entrada: {user_input[:50]}...")
-        
+
         try:
             # Determinar el tipo de programa del usuario para personalizar el plan
             context = {
                 "user_profile": user_profile or {},
-                "goals": user_profile.get("goals", []) if user_profile else []
+                "goals": user_profile.get("goals", []) if user_profile else [],
             }
-            
+
             try:
                 # Clasificar el tipo de programa del usuario utilizando el servicio con caché
                 start_time = time.time()
-                program_type = await self.program_classification_service.classify_program_type(context)
+                program_type = (
+                    await self.program_classification_service.classify_program_type(
+                        context
+                    )
+                )
                 elapsed_time = time.time() - start_time
-                logger.info(f"Tipo de programa determinado para plan de comidas: {program_type} (tiempo: {elapsed_time:.2f}s)")
-                
+                logger.info(
+                    f"Tipo de programa determinado para plan de comidas: {program_type} (tiempo: {elapsed_time:.2f}s)"
+                )
+
                 # Obtener estadísticas de caché para monitoreo
-                cache_stats = await self.program_classification_service.get_cache_stats()
-                logger.debug(f"Estadísticas de caché del servicio de clasificación: {cache_stats}")
-                
+                cache_stats = (
+                    await self.program_classification_service.get_cache_stats()
+                )
+                logger.debug(
+                    f"Estadísticas de caché del servicio de clasificación: {cache_stats}"
+                )
+
                 # Obtener definición del programa para personalizar el plan
                 program_def = get_program_definition(program_type)
                 program_context = f"""\nCONTEXTO DEL PROGRAMA {program_type}:\n"""
-                
+
                 if program_def:
                     program_context += f"- {program_def.get('description', '')}\n"
-                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
-                    
+                    program_context += (
+                        f"- Objetivo: {program_def.get('objective', '')}\n"
+                    )
+
                     # Añadir necesidades nutricionales específicas del programa si están disponibles
                     if program_def.get("nutritional_needs"):
                         program_context += "- Necesidades nutricionales específicas:\n"
                         for need in program_def.get("nutritional_needs", []):
                             program_context += f"  * {need}\n"
-                    
+
                     # Añadir estrategias nutricionales si están disponibles
-                    if program_def.get("key_protocols") and "nutrition" in program_def.get("key_protocols", {}):
+                    if program_def.get(
+                        "key_protocols"
+                    ) and "nutrition" in program_def.get("key_protocols", {}):
                         program_context += "- Estrategias nutricionales recomendadas:\n"
                         # Obtener recomendaciones específicas del programa utilizando el servicio con caché
                         nutrition_recommendations = await self.program_classification_service.get_program_specific_recommendations(
                             program_type, "nutrition"
                         )
-                        
+
                         # Usar las recomendaciones obtenidas del servicio o caer en el fallback
                         if nutrition_recommendations:
                             for strategy in nutrition_recommendations:
                                 program_context += f"  * {strategy}\n"
                         else:
                             # Fallback a las recomendaciones del programa_def si el servicio no devuelve datos
-                            for strategy in program_def.get("key_protocols", {}).get("nutrition", []):
+                            for strategy in program_def.get("key_protocols", {}).get(
+                                "nutrition", []
+                            ):
                                 program_context += f"  * {strategy}\n"
-                
+
             except Exception as e:
-                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando plan general.")
+                logger.warning(
+                    f"No se pudo determinar el tipo de programa: {e}. Usando plan general."
+                )
                 program_type = "GENERAL"
                 program_context = ""
-            
+
             # Preparar prompt para el modelo
             prompt = f"""
             Eres un nutricionista experto especializado en nutrición de precisión. 
@@ -728,7 +942,7 @@ class PrecisionNutritionArchitect(ADKAgent):
             
             Devuelve el plan en formato JSON estructurado.
             """
-            
+
             # Añadir información del perfil si está disponible
             if user_profile:
                 prompt += f"""
@@ -744,7 +958,7 @@ class PrecisionNutritionArchitect(ADKAgent):
                 - Alergias: {', '.join(user_profile.get('allergies', ['Ninguna']))}
                 - Preferencias: {', '.join(user_profile.get('preferences', ['Ninguna']))}
                 """
-            
+
             # Generar el plan nutricional usando generate_text
             response_text = await self.gemini_client.generate_text(prompt)
 
@@ -752,7 +966,8 @@ class PrecisionNutritionArchitect(ADKAgent):
             try:
                 # Buscar un objeto JSON en la respuesta
                 import re
-                json_match = re.search(r'({.*})', response_text, re.DOTALL)
+
+                json_match = re.search(r"({.*})", response_text, re.DOTALL)
                 if json_match:
                     response = json.loads(json_match.group(1))
                 else:
@@ -783,7 +998,7 @@ class PrecisionNutritionArchitect(ADKAgent):
                     "recommended_foods": ["Alimentos saludables recomendados"],
                     "foods_to_avoid": ["Alimentos a evitar"],
                 }
-            
+
             # Formatear la respuesta según el esquema esperado
             formatted_response = {
                 "daily_plan": [],
@@ -791,32 +1006,38 @@ class PrecisionNutritionArchitect(ADKAgent):
                 "macronutrient_distribution": response.get("macronutrients", {}),
                 "recommendations": [
                     f"Objetivo: {response.get('objective', 'No especificado')}",
-                    "Alimentos recomendados: " + ", ".join(response.get("recommended_foods", [])),
-                    "Alimentos a evitar: " + ", ".join(response.get("foods_to_avoid", [])),
+                    "Alimentos recomendados: "
+                    + ", ".join(response.get("recommended_foods", [])),
+                    "Alimentos a evitar: "
+                    + ", ".join(response.get("foods_to_avoid", [])),
                 ],
-                "notes": response.get("notes", "")
+                "notes": response.get("notes", ""),
             }
-            
+
             # Convertir las comidas al formato esperado
             for meal in response.get("meals", []):
                 meal_items = []
                 for example in meal.get("examples", []):
-                    meal_items.append({
-                        "name": example,
-                        "portion": "Porción estándar",
-                        "calories": None,
-                        "macros": None
-                    })
-                
-                formatted_response["daily_plan"].append({
-                    "name": meal.get("name", "Comida"),
-                    "time": meal.get("time", "No especificado"),
-                    "items": meal_items,
-                    "notes": meal.get("notes", "")
-                })
-            
+                    meal_items.append(
+                        {
+                            "name": example,
+                            "portion": "Porción estándar",
+                            "calories": None,
+                            "macros": None,
+                        }
+                    )
+
+                formatted_response["daily_plan"].append(
+                    {
+                        "name": meal.get("name", "Comida"),
+                        "time": meal.get("time", "No especificado"),
+                        "items": meal_items,
+                        "notes": meal.get("notes", ""),
+                    }
+                )
+
             return formatted_response
-            
+
         except Exception as e:
             logger.error(f"Error al generar plan de comidas: {e}", exc_info=True)
             # Devolver un plan básico en caso de error
@@ -830,40 +1051,47 @@ class PrecisionNutritionArchitect(ADKAgent):
                                 "name": "Ejemplo de desayuno balanceado",
                                 "portion": "Porción estándar",
                                 "calories": None,
-                                "macros": None
+                                "macros": None,
                             }
                         ],
-                        "notes": "Plan generado como respaldo debido a un error."
+                        "notes": "Plan generado como respaldo debido a un error.",
                     }
                 ],
                 "total_calories": "No disponible debido a un error",
                 "macronutrient_distribution": {},
-                "recommendations": ["Consulte con un nutricionista para un plan personalizado."],
-                "notes": f"Error al generar plan: {str(e)}"
+                "recommendations": [
+                    "Consulte con un nutricionista para un plan personalizado."
+                ],
+                "notes": f"Error al generar plan: {str(e)}",
             }
 
     async def _generate_supplement_recommendation(
-        self, user_input: str, user_profile: Optional[Dict[str, Any]] = None,
-        program_type: str = "GENERAL", program_supplements: List[str] = None
+        self,
+        user_input: str,
+        user_profile: Optional[Dict[str, Any]] = None,
+        program_type: str = "GENERAL",
+        program_supplements: List[str] = None,
     ) -> Dict[str, Any]:
         """
         Genera recomendaciones de suplementación personalizadas basadas en la entrada del usuario, su perfil y tipo de programa.
-        
+
         Args:
             user_input: Texto de entrada del usuario
             user_profile: Perfil del usuario con información relevante (opcional)
             program_type: Tipo de programa del usuario (PRIME, LONGEVITY, etc.)
             program_supplements: Lista de suplementos recomendados para el programa específico
-            
+
         Returns:
             Dict[str, Any]: Recomendaciones de suplementación generadas
         """
-        logger.info(f"Generando recomendaciones de suplementos para programa: {program_type}")
-        
+        logger.info(
+            f"Generando recomendaciones de suplementos para programa: {program_type}"
+        )
+
         # Inicializar la lista de suplementos del programa si es None
         if program_supplements is None:
             program_supplements = []
-        
+
         # Preparar contexto específico del programa para el prompt
         program_context = ""
         if program_type != "GENERAL" and program_supplements:
@@ -877,7 +1105,7 @@ class PrecisionNutritionArchitect(ADKAgent):
             Asegúrate de incluir estos suplementos en tus recomendaciones si son apropiados para la solicitud del usuario,
             y explica cómo se alinean con los objetivos del programa {program_type}.
             """
-        
+
         # Preparar prompt para el modelo
         prompt = f"""
         Eres un experto en nutrición y suplementación personalizada.
@@ -922,7 +1150,8 @@ class PrecisionNutritionArchitect(ADKAgent):
             try:
                 # Buscar un objeto JSON en la respuesta
                 import re
-                json_match = re.search(r'({.*})', response_text, re.DOTALL)
+
+                json_match = re.search(r"({.*})", response_text, re.DOTALL)
                 if json_match:
                     response = json.loads(json_match.group(1))
                 else:
@@ -944,15 +1173,17 @@ class PrecisionNutritionArchitect(ADKAgent):
                     ],
                     "general_recommendations": "Estas recomendaciones son generales y deben ser validadas por un profesional de la salud.",
                 }
-            
+
             # Formatear la respuesta según el esquema esperado
             formatted_response = {
                 "supplements": [],
-                "general_recommendations": response.get("general_recommendations", 
-                    "Estas recomendaciones son generales y deben ser validadas por un profesional de la salud."),
-                "notes": response.get("notes", "")
+                "general_recommendations": response.get(
+                    "general_recommendations",
+                    "Estas recomendaciones son generales y deben ser validadas por un profesional de la salud.",
+                ),
+                "notes": response.get("notes", ""),
             }
-            
+
             # Convertir los suplementos al formato esperado
             for supplement in response.get("supplements", []):
                 formatted_supplement = {
@@ -961,15 +1192,17 @@ class PrecisionNutritionArchitect(ADKAgent):
                     "timing": supplement.get("timing", "Según indicaciones"),
                     "benefits": supplement.get("benefits", ["No especificado"]),
                     "precautions": supplement.get("precautions", []),
-                    "natural_alternatives": supplement.get("natural_alternatives", [])
+                    "natural_alternatives": supplement.get("natural_alternatives", []),
                 }
-                
+
                 formatted_response["supplements"].append(formatted_supplement)
-            
+
             return formatted_response
-            
+
         except Exception as e:
-            logger.error(f"Error al generar recomendaciones de suplementos: {e}", exc_info=True)
+            logger.error(
+                f"Error al generar recomendaciones de suplementos: {e}", exc_info=True
+            )
             # Devolver recomendaciones básicas en caso de error
             return {
                 "supplements": [
@@ -978,22 +1211,28 @@ class PrecisionNutritionArchitect(ADKAgent):
                         "dosage": "Según indicaciones del fabricante",
                         "timing": "Con las comidas",
                         "benefits": ["Apoyo nutricional básico"],
-                        "precautions": ["Consulte a un profesional de la salud antes de comenzar cualquier suplementación"],
-                        "natural_alternatives": ["Dieta variada rica en frutas y verduras"]
+                        "precautions": [
+                            "Consulte a un profesional de la salud antes de comenzar cualquier suplementación"
+                        ],
+                        "natural_alternatives": [
+                            "Dieta variada rica en frutas y verduras"
+                        ],
                     }
                 ],
                 "general_recommendations": "Debido a un error en el procesamiento, se proporcionan recomendaciones básicas. Por favor, consulte a un profesional de la salud para recomendaciones personalizadas.",
-                "notes": f"Error al generar recomendaciones: {str(e)}"
+                "notes": f"Error al generar recomendaciones: {str(e)}",
             }
-    
-    async def _generate_biomarker_analysis(self, user_input: str, biomarkers: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _generate_biomarker_analysis(
+        self, user_input: str, biomarkers: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Genera un análisis detallado de biomarcadores con recomendaciones personalizadas.
-        
+
         Args:
             user_input: Texto de entrada del usuario
             biomarkers: Diccionario con los datos de biomarcadores
-            
+
         Returns:
             Dict[str, Any]: Análisis detallado de biomarcadores
         """
@@ -1034,16 +1273,19 @@ class PrecisionNutritionArchitect(ADKAgent):
           "supplement_considerations": ["Consideración 1", "Consideración 2"]
         }}
         """
-        
+
         try:
-            logger.debug(f"Generando prompt para análisis de biomarcadores: {prompt[:500]}...") # Loguea una parte del prompt
+            logger.debug(
+                f"Generando prompt para análisis de biomarcadores: {prompt[:500]}..."
+            )  # Loguea una parte del prompt
             response_text = await self.gemini_client.generate_text(prompt)
-            
+
             # Intentar extraer el JSON de la respuesta
             try:
                 # Buscar un objeto JSON en la respuesta
                 import re
-                json_match = re.search(r'({.*})', response_text, re.DOTALL)
+
+                json_match = re.search(r"({.*})", response_text, re.DOTALL)
                 if json_match:
                     analysis = json.loads(json_match.group(1))
                 else:
@@ -1051,7 +1293,7 @@ class PrecisionNutritionArchitect(ADKAgent):
                     analysis = json.loads(response_text)
             except Exception as json_error:
                 logger.error(f"Error al parsear JSON de la respuesta: {json_error}")
-                analysis = { 
+                analysis = {
                     "analyses": [
                         {
                             "name": "Error en análisis",
@@ -1059,19 +1301,27 @@ class PrecisionNutritionArchitect(ADKAgent):
                             "status": "No evaluado",
                             "reference_range": "N/A",
                             "interpretation": "No se pudo analizar debido a un error",
-                            "nutritional_implications": ["Mantener una dieta equilibrada"],
-                            "recommendations": ["Consulte a un profesional de la salud"]
+                            "nutritional_implications": [
+                                "Mantener una dieta equilibrada"
+                            ],
+                            "recommendations": [
+                                "Consulte a un profesional de la salud"
+                            ],
                         }
                     ],
                     "overall_assessment": "No se pudo realizar una evaluación completa debido a un error",
                     "nutritional_priorities": ["Mantener una dieta equilibrada"],
-                    "supplement_considerations": ["Consulte a un profesional antes de tomar cualquier suplemento"]
+                    "supplement_considerations": [
+                        "Consulte a un profesional antes de tomar cualquier suplemento"
+                    ],
                 }
-            
+
             return analysis
-            
+
         except Exception as e:
-            logger.error(f"Error al generar análisis de biomarcadores: {e}", exc_info=True)
+            logger.error(
+                f"Error al generar análisis de biomarcadores: {e}", exc_info=True
+            )
             # Devolver un análisis básico en caso de error
             return {
                 "analyses": [
@@ -1082,22 +1332,26 @@ class PrecisionNutritionArchitect(ADKAgent):
                         "reference_range": "N/A",
                         "interpretation": "No se pudo analizar debido a un error",
                         "nutritional_implications": ["Mantener una dieta equilibrada"],
-                        "recommendations": ["Consulte a un profesional de la salud"]
+                        "recommendations": ["Consulte a un profesional de la salud"],
                     }
                 ],
                 "overall_assessment": "No se pudo realizar una evaluación completa debido a un error",
                 "nutritional_priorities": ["Mantener una dieta equilibrada"],
-                "supplement_considerations": ["Consulte a un profesional antes de tomar cualquier suplemento"]
+                "supplement_considerations": [
+                    "Consulte a un profesional antes de tomar cualquier suplemento"
+                ],
             }
-    
-    async def _generate_chrononutrition_plan(self, user_input: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _generate_chrononutrition_plan(
+        self, user_input: str, user_profile: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Genera un plan de crononutrición optimizado basado en la entrada del usuario y su perfil.
-        
+
         Args:
             user_input: Texto de entrada del usuario
             user_profile: Perfil del usuario con información relevante
-            
+
         Returns:
             Dict[str, Any]: Plan de crononutrición detallado
         """
@@ -1116,16 +1370,22 @@ class PrecisionNutritionArchitect(ADKAgent):
             if user_profile.get("goals"):
                 profile_items.append(f"Objetivos: {user_profile['goals']}")
             if user_profile.get("dietary_restrictions"):
-                profile_items.append(f"Restricciones alimenticias: {user_profile['dietary_restrictions']}")
+                profile_items.append(
+                    f"Restricciones alimenticias: {user_profile['dietary_restrictions']}"
+                )
             if user_profile.get("allergies"):
                 profile_items.append(f"Alergias: {user_profile['allergies']}")
             if user_profile.get("activity_level"):
-                profile_items.append(f"Nivel de actividad: {user_profile['activity_level']}")
+                profile_items.append(
+                    f"Nivel de actividad: {user_profile['activity_level']}"
+                )
             if user_profile.get("training_schedule"):
-                profile_items.append(f"Horario de entrenamiento: {user_profile['training_schedule']}")
-            
+                profile_items.append(
+                    f"Horario de entrenamiento: {user_profile['training_schedule']}"
+                )
+
             profile_summary = "\n".join(profile_items)
-        
+
         # Preparar prompt para el modelo
         prompt = f"""
         {self.instruction}
@@ -1160,16 +1420,19 @@ class PrecisionNutritionArchitect(ADKAgent):
           ]
         }}
         """
-        
+
         try:
-            logger.debug(f"Generando prompt para plan de crononutrición: {prompt[:500]}...") # Loguea una parte del prompt
+            logger.debug(
+                f"Generando prompt para plan de crononutrición: {prompt[:500]}..."
+            )  # Loguea una parte del prompt
             response_text = await self.gemini_client.generate_text(prompt)
-            
+
             # Intentar extraer el JSON de la respuesta
             try:
                 # Buscar un objeto JSON en la respuesta
                 import re
-                json_match = re.search(r'({.*})', response_text, re.DOTALL)
+
+                json_match = re.search(r"({.*})", response_text, re.DOTALL)
                 if json_match:
                     chronoplan = json.loads(json_match.group(1))
                 else:
@@ -1177,26 +1440,35 @@ class PrecisionNutritionArchitect(ADKAgent):
                     chronoplan = json.loads(response_text)
             except Exception as json_error:
                 logger.error(f"Error al parsear JSON de la respuesta: {json_error}")
-                chronoplan = { 
+                chronoplan = {
                     "time_windows": [
                         {
                             "time": "07:00-08:00",
                             "meal": "Desayuno",
                             "description": "Comida rica en proteínas y carbohidratos complejos",
-                            "examples": ["Avena con frutas y nueces", "Huevos revueltos con tostada integral"]
+                            "examples": [
+                                "Avena con frutas y nueces",
+                                "Huevos revueltos con tostada integral",
+                            ],
                         },
                         {
                             "time": "12:00-13:00",
                             "meal": "Almuerzo",
                             "description": "Comida balanceada con proteínas, carbohidratos y grasas saludables",
-                            "examples": ["Pechuga de pollo con arroz integral y vegetales", "Ensalada con salmón y quinoa"]
+                            "examples": [
+                                "Pechuga de pollo con arroz integral y vegetales",
+                                "Ensalada con salmón y quinoa",
+                            ],
                         },
                         {
                             "time": "19:00-20:00",
                             "meal": "Cena",
                             "description": "Comida ligera rica en proteínas y vegetales",
-                            "examples": ["Pescado al horno con vegetales asados", "Tofu salteado con verduras"]
-                        }
+                            "examples": [
+                                "Pescado al horno con vegetales asados",
+                                "Tofu salteado con verduras",
+                            ],
+                        },
                     ],
                     "fasting_period": "20:00-07:00 (11 horas)",
                     "eating_period": "07:00-20:00 (13 horas)",
@@ -1205,12 +1477,12 @@ class PrecisionNutritionArchitect(ADKAgent):
                     "general_recommendations": [
                         "Mantener una hidratación adecuada a lo largo del día",
                         "Ajustar la ingesta calórica según los días de entrenamiento y descanso",
-                        "Evitar comidas pesadas antes de dormir"
-                    ]
+                        "Evitar comidas pesadas antes de dormir",
+                    ],
                 }
-            
+
             return chronoplan
-            
+
         except Exception as e:
             logger.error(f"Error al generar plan de crononutrición: {e}", exc_info=True)
             # Devolver un plan básico en caso de error
@@ -1220,20 +1492,29 @@ class PrecisionNutritionArchitect(ADKAgent):
                         "time": "07:00-08:00",
                         "meal": "Desayuno",
                         "description": "Comida rica en proteínas y carbohidratos complejos",
-                        "examples": ["Avena con frutas y nueces", "Huevos revueltos con tostada integral"]
+                        "examples": [
+                            "Avena con frutas y nueces",
+                            "Huevos revueltos con tostada integral",
+                        ],
                     },
                     {
                         "time": "12:00-13:00",
                         "meal": "Almuerzo",
                         "description": "Comida balanceada con proteínas, carbohidratos y grasas saludables",
-                        "examples": ["Pechuga de pollo con arroz integral y vegetales", "Ensalada con salmón y quinoa"]
+                        "examples": [
+                            "Pechuga de pollo con arroz integral y vegetales",
+                            "Ensalada con salmón y quinoa",
+                        ],
                     },
                     {
                         "time": "19:00-20:00",
                         "meal": "Cena",
                         "description": "Comida ligera rica en proteínas y vegetales",
-                        "examples": ["Pescado al horno con vegetales asados", "Tofu salteado con verduras"]
-                    }
+                        "examples": [
+                            "Pescado al horno con vegetales asados",
+                            "Tofu salteado con verduras",
+                        ],
+                    },
                 ],
                 "fasting_period": "20:00-07:00 (11 horas)",
                 "eating_period": "07:00-20:00 (13 horas)",
@@ -1242,70 +1523,90 @@ class PrecisionNutritionArchitect(ADKAgent):
                 "general_recommendations": [
                     "Mantener una hidratación adecuada a lo largo del día",
                     "Ajustar la ingesta calórica según los días de entrenamiento y descanso",
-                    "Evitar comidas pesadas antes de dormir"
-                ]
+                    "Evitar comidas pesadas antes de dormir",
+                ],
             }
-    
-    async def _skill_analyze_food_image(self, input_data: AnalyzeFoodImageInput) -> AnalyzeFoodImageOutput:
+
+    async def _skill_analyze_food_image(
+        self, input_data: AnalyzeFoodImageInput
+    ) -> AnalyzeFoodImageOutput:
         """
         Skill para analizar imágenes de alimentos.
-        
+
         Args:
             input_data: Datos de entrada para la skill
-            
+
         Returns:
             AnalyzeFoodImageOutput: Análisis de la imagen de alimentos
         """
         logger.info(f"Ejecutando skill de análisis de imágenes de alimentos")
-        
+
         try:
             # Obtener datos de la imagen
             image_data = input_data.image_data
             user_profile = input_data.user_profile or {}
             dietary_preferences = input_data.dietary_preferences or []
-            
+
             # Determinar el tipo de programa del usuario para personalizar el análisis
             context = {
                 "user_profile": user_profile,
-                "goals": user_profile.get("goals", []) if user_profile else []
+                "goals": user_profile.get("goals", []) if user_profile else [],
             }
-            
+
             try:
                 # Clasificar el tipo de programa del usuario
-                program_type = await self.program_classification_service.classify_program_type(context)
-                logger.info(f"Tipo de programa determinado para análisis de imagen de alimentos: {program_type}")
-                
+                program_type = (
+                    await self.program_classification_service.classify_program_type(
+                        context
+                    )
+                )
+                logger.info(
+                    f"Tipo de programa determinado para análisis de imagen de alimentos: {program_type}"
+                )
+
                 # Obtener definición del programa para personalizar el análisis
                 program_def = get_program_definition(program_type)
                 program_context = f"""\nCONTEXTO DEL PROGRAMA {program_type}:\n"""
-                
+
                 if program_def:
                     program_context += f"- {program_def.get('description', '')}\n"
-                    program_context += f"- Objetivo: {program_def.get('objective', '')}\n"
-                    
+                    program_context += (
+                        f"- Objetivo: {program_def.get('objective', '')}\n"
+                    )
+
                     # Añadir necesidades nutricionales específicas del programa si están disponibles
                     if program_def.get("nutritional_needs"):
                         program_context += "- Necesidades nutricionales específicas:\n"
                         for need in program_def.get("nutritional_needs", []):
                             program_context += f"  * {need}\n"
             except Exception as e:
-                logger.warning(f"No se pudo determinar el tipo de programa: {e}. Usando análisis general.")
+                logger.warning(
+                    f"No se pudo determinar el tipo de programa: {e}. Usando análisis general."
+                )
                 program_type = "GENERAL"
                 program_context = ""
-            
+
             # Utilizar las capacidades de visión del agente base
             with self.tracer.start_as_current_span("food_image_analysis"):
                 # Verificar si las capacidades de visión están disponibles
-                if not hasattr(self, '_vision_capabilities_available') or not self._vision_capabilities_available:
-                    logger.warning("Capacidades de visión no disponibles. Usando análisis simulado.")
-                    vision_result = {"detected_foods": [], "text": "Análisis de imagen simulado"}
+                if (
+                    not hasattr(self, "_vision_capabilities_available")
+                    or not self._vision_capabilities_available
+                ):
+                    logger.warning(
+                        "Capacidades de visión no disponibles. Usando análisis simulado."
+                    )
+                    vision_result = {
+                        "detected_foods": [],
+                        "text": "Análisis de imagen simulado",
+                    }
                 else:
                     # Analizar la imagen utilizando el procesador de visión
                     vision_result = await self.vision_processor.analyze_image(
                         image_data=image_data,
-                        prompt="Analiza esta imagen de alimentos e identifica todos los alimentos visibles."
+                        prompt="Analiza esta imagen de alimentos e identifica todos los alimentos visibles.",
                     )
-                
+
                 # Extraer información de alimentos de la imagen usando el modelo multimodal
                 prompt = f"""
                 Eres un experto en nutrición y análisis de alimentos. Analiza esta imagen de alimentos y proporciona:
@@ -1320,14 +1621,14 @@ class PrecisionNutritionArchitect(ADKAgent):
                 
                 Proporciona un análisis detallado y objetivo basado únicamente en lo que es visible en la imagen.
                 """
-                
+
                 multimodal_result = await self.multimodal_adapter.process_multimodal(
                     prompt=prompt,
                     image_data=image_data,
                     temperature=0.2,
-                    max_output_tokens=1024
+                    max_output_tokens=1024,
                 )
-                
+
                 # Extraer información de alimentos detectados
                 food_items = []
                 for food in vision_result.get("detected_foods", []):
@@ -1339,16 +1640,16 @@ class PrecisionNutritionArchitect(ADKAgent):
                         "macronutrients": {
                             "proteínas": "No disponible",
                             "carbohidratos": "No disponible",
-                            "grasas": "No disponible"
-                        }
+                            "grasas": "No disponible",
+                        },
                     }
                     food_items.append(food_item)
-                
+
                 # Si no se detectaron alimentos, extraer de la respuesta multimodal
                 if not food_items:
                     # Analizar la respuesta multimodal para extraer alimentos
                     analysis_text = multimodal_result.get("text", "")
-                    
+
                     # Generar prompt para extraer alimentos estructurados
                     extraction_prompt = f"""
                     Basándote en el siguiente análisis de una imagen de alimentos, extrae una lista estructurada
@@ -1377,39 +1678,56 @@ class PrecisionNutritionArchitect(ADKAgent):
                       }
                     ]
                     """
-                    
-                    extraction_response = await self.gemini_client.generate_structured_output(extraction_prompt)
-                    
+
+                    extraction_response = (
+                        await self.gemini_client.generate_structured_output(
+                            extraction_prompt
+                        )
+                    )
+
                     # Procesar la respuesta
                     if isinstance(extraction_response, list):
                         for food in extraction_response:
                             if isinstance(food, dict) and "name" in food:
-                                food_items.append({
-                                    "name": food.get("name", "Alimento no identificado"),
-                                    "confidence_score": 0.7,  # Valor por defecto
-                                    "estimated_calories": food.get("estimated_calories", "No disponible"),
-                                    "estimated_portion": food.get("estimated_portion", "Porción estándar"),
-                                    "macronutrients": food.get("macronutrients", {
-                                        "proteínas": "No disponible",
-                                        "carbohidratos": "No disponible",
-                                        "grasas": "No disponible"
-                                    })
-                                })
-                
+                                food_items.append(
+                                    {
+                                        "name": food.get(
+                                            "name", "Alimento no identificado"
+                                        ),
+                                        "confidence_score": 0.7,  # Valor por defecto
+                                        "estimated_calories": food.get(
+                                            "estimated_calories", "No disponible"
+                                        ),
+                                        "estimated_portion": food.get(
+                                            "estimated_portion", "Porción estándar"
+                                        ),
+                                        "macronutrients": food.get(
+                                            "macronutrients",
+                                            {
+                                                "proteínas": "No disponible",
+                                                "carbohidratos": "No disponible",
+                                                "grasas": "No disponible",
+                                            },
+                                        ),
+                                    }
+                                )
+
                 # Si aún no hay alimentos identificados, crear uno genérico
                 if not food_items:
-                    food_items.append({
-                        "name": "Comida no identificada específicamente",
-                        "confidence_score": 0.5,
-                        "estimated_calories": "No disponible",
-                        "estimated_portion": "No disponible",
-                        "macronutrients": {
-                            "proteínas": "No disponible",
-                            "carbohidratos": "No disponible",
-                            "grasas": "No disponible"
+                    food_items.append(
+                        {
+                            "name": "Comida no identificada específicamente",
+                            "confidence_score": 0.5,
+                            "estimated_calories": "No disponible",
+                            "estimated_portion": "No disponible",
+                            "macronutrients": {
+                                "proteínas": "No disponible",
+                                "carbohidratos": "No disponible",
+                                "grasas": "No disponible",
+                            },
                         }
-                    })
-                
+                    )
+
                 # Generar evaluación nutricional
                 nutritional_assessment_prompt = f"""
                 Basándote en el siguiente análisis de una imagen de alimentos, genera una evaluación nutricional
@@ -1423,9 +1741,11 @@ class PrecisionNutritionArchitect(ADKAgent):
                 2. Aspectos positivos de la comida
                 3. Áreas de mejora
                 """
-                
-                nutritional_assessment = await self.gemini_client.generate_text(nutritional_assessment_prompt)
-                
+
+                nutritional_assessment = await self.gemini_client.generate_text(
+                    nutritional_assessment_prompt
+                )
+
                 # Generar recomendaciones
                 recommendations_prompt = f"""
                 Basándote en el siguiente análisis de una imagen de alimentos, genera 3-5 recomendaciones
@@ -1438,10 +1758,16 @@ class PrecisionNutritionArchitect(ADKAgent):
                 Las recomendaciones deben ser concretas, prácticas y enfocadas en mejorar el valor nutricional
                 manteniendo el tipo de comida similar.
                 """
-                
-                recommendations_response = await self.gemini_client.generate_text(recommendations_prompt)
-                recommendations = [rec.strip() for rec in recommendations_response.split("\n") if rec.strip()]
-                
+
+                recommendations_response = await self.gemini_client.generate_text(
+                    recommendations_prompt
+                )
+                recommendations = [
+                    rec.strip()
+                    for rec in recommendations_response.split("\n")
+                    if rec.strip()
+                ]
+
                 # Generar alternativas más saludables
                 alternatives_prompt = f"""
                 Basándote en el siguiente análisis de una imagen de alimentos, sugiere 2-3 alternativas más saludables
@@ -1457,27 +1783,36 @@ class PrecisionNutritionArchitect(ADKAgent):
                 
                 Devuelve la información en formato JSON estructurado.
                 """
-                
-                alternatives_response = await self.gemini_client.generate_structured_output(alternatives_prompt)
-                
+
+                alternatives_response = (
+                    await self.gemini_client.generate_structured_output(
+                        alternatives_prompt
+                    )
+                )
+
                 # Procesar alternativas
                 alternatives = []
                 if isinstance(alternatives_response, list):
                     alternatives = alternatives_response
-                elif isinstance(alternatives_response, dict) and "alternatives" in alternatives_response:
+                elif (
+                    isinstance(alternatives_response, dict)
+                    and "alternatives" in alternatives_response
+                ):
                     alternatives = alternatives_response["alternatives"]
                 else:
                     # Crear alternativas genéricas
                     for food in food_items:
-                        alternatives.append({
-                            "original": food["name"],
-                            "alternative": f"Versión más saludable de {food['name']}",
-                            "benefit": "Mayor valor nutricional y menos calorías"
-                        })
-                
+                        alternatives.append(
+                            {
+                                "original": food["name"],
+                                "alternative": f"Versión más saludable de {food['name']}",
+                                "benefit": "Mayor valor nutricional y menos calorías",
+                            }
+                        )
+
                 # Calcular puntuación de salud (simulada)
                 health_score = 7.5  # Valor simulado entre 0-10
-                
+
                 # Crear artefacto con el análisis
                 artifact_id = str(uuid.uuid4())
                 artifact = FoodImageAnalysisArtifact(
@@ -1485,20 +1820,26 @@ class PrecisionNutritionArchitect(ADKAgent):
                     created_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                     food_count=len(food_items),
                     health_score=health_score,
-                    processed_image_url=""  # En un caso real, aquí iría la URL de la imagen procesada
+                    processed_image_url="",  # En un caso real, aquí iría la URL de la imagen procesada
                 )
-                
+
                 # Determinar tipo de comida
                 meal_type = "No determinado"
                 if "desayuno" in multimodal_result.get("text", "").lower():
                     meal_type = "Desayuno"
-                elif "almuerzo" in multimodal_result.get("text", "").lower() or "comida" in multimodal_result.get("text", "").lower():
+                elif (
+                    "almuerzo" in multimodal_result.get("text", "").lower()
+                    or "comida" in multimodal_result.get("text", "").lower()
+                ):
                     meal_type = "Almuerzo"
                 elif "cena" in multimodal_result.get("text", "").lower():
                     meal_type = "Cena"
-                elif "snack" in multimodal_result.get("text", "").lower() or "merienda" in multimodal_result.get("text", "").lower():
+                elif (
+                    "snack" in multimodal_result.get("text", "").lower()
+                    or "merienda" in multimodal_result.get("text", "").lower()
+                ):
                     meal_type = "Snack"
-                
+
                 # Crear la salida de la skill
                 return AnalyzeFoodImageOutput(
                     identified_foods=food_items,
@@ -1507,12 +1848,12 @@ class PrecisionNutritionArchitect(ADKAgent):
                     nutritional_assessment=nutritional_assessment,
                     health_score=health_score,
                     recommendations=recommendations,
-                    alternatives=alternatives
+                    alternatives=alternatives,
                 )
-                
+
         except Exception as e:
             logger.error(f"Error al analizar imagen de alimentos: {e}", exc_info=True)
-            
+
             # En caso de error, devolver un análisis básico
             return AnalyzeFoodImageOutput(
                 identified_foods=[
@@ -1524,14 +1865,325 @@ class PrecisionNutritionArchitect(ADKAgent):
                         "macronutrients": {
                             "proteínas": "No disponible",
                             "carbohidratos": "No disponible",
-                            "grasas": "No disponible"
-                        }
+                            "grasas": "No disponible",
+                        },
                     }
                 ],
                 total_calories="No disponible",
                 meal_type="No determinado",
                 nutritional_assessment="No se pudo realizar el análisis debido a un error en el procesamiento.",
                 health_score=None,
-                recommendations=["Consulte a un nutricionista para un análisis preciso de su alimentación."],
-                alternatives=[]
+                recommendations=[
+                    "Consulte a un nutricionista para un análisis preciso de su alimentación."
+                ],
+                alternatives=[],
             )
+
+    async def _skill_sync_nutrition_data(
+        self, input: SyncNutritionDataInput
+    ) -> SyncNutritionDataOutput:
+        """
+        Sincroniza datos nutricionales desde plataformas externas.
+
+        Args:
+            input: Entrada con configuración de sincronización
+
+        Returns:
+            Resultado de la sincronización con resumen e insights
+        """
+        try:
+            logger.info(
+                f"Sincronizando datos nutricionales para usuario {input.user_id}"
+            )
+
+            # Mapear el nombre de la plataforma al enum
+            source_map = {
+                "myfitnesspal": NutritionSource.MYFITNESSPAL,
+                "cronometer": NutritionSource.CRONOMETER,
+                "loseit": NutritionSource.LOSEIT,
+            }
+
+            source = source_map.get(input.platform.lower())
+            if not source:
+                return SyncNutritionDataOutput(
+                    success=False,
+                    days_synced=0,
+                    meals_synced=0,
+                    foods_synced=0,
+                    summary={},
+                    insights=[],
+                    error_message=f"Plataforma no soportada: {input.platform}",
+                )
+
+            # Sincronizar datos
+            sync_result = await self.nutrition_service.sync_nutrition_data(
+                user_id=input.user_id,
+                source=source,
+                days_back=input.days_back,
+                force_refresh=input.force_refresh,
+            )
+
+            if not sync_result.success:
+                return SyncNutritionDataOutput(
+                    success=False,
+                    days_synced=0,
+                    meals_synced=0,
+                    foods_synced=0,
+                    summary={},
+                    insights=[],
+                    error_message=sync_result.error_message,
+                )
+
+            # Obtener resumen de tendencias
+            trends = await self.nutrition_service.get_nutrition_trends(
+                user_id=input.user_id, days=input.days_back
+            )
+
+            # Generar insights personalizados
+            insights = trends.get("insights", [])
+
+            # Agregar insights adicionales basados en los datos sincronizados
+            if sync_result.meals_synced > 0:
+                avg_meals_per_day = sync_result.meals_synced / max(
+                    sync_result.days_synced, 1
+                )
+                if avg_meals_per_day < 3:
+                    insights.append(
+                        f"Estás registrando un promedio de {avg_meals_per_day:.1f} comidas por día. "
+                        "Considera registrar todas tus comidas para un análisis más preciso."
+                    )
+
+            summary = {
+                "average_daily_calories": trends.get("average_daily_calories", 0),
+                "average_daily_protein": trends.get("average_daily_protein_g", 0),
+                "average_daily_carbs": trends.get("average_daily_carbs_g", 0),
+                "average_daily_fat": trends.get("average_daily_fat_g", 0),
+                "calorie_trend": trends.get("calorie_trend", "stable"),
+                "goal_adherence": trends.get("average_goal_adherence_percent", 0),
+                "macro_balance": trends.get("average_macro_balance", {}),
+            }
+
+            return SyncNutritionDataOutput(
+                success=True,
+                days_synced=sync_result.days_synced,
+                meals_synced=sync_result.meals_synced,
+                foods_synced=sync_result.foods_synced,
+                summary=summary,
+                insights=insights,
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Error al sincronizar datos nutricionales: {e}", exc_info=True
+            )
+            return SyncNutritionDataOutput(
+                success=False,
+                days_synced=0,
+                meals_synced=0,
+                foods_synced=0,
+                summary={},
+                insights=[],
+                error_message=str(e),
+            )
+
+    async def _skill_analyze_nutrition_trends(
+        self, input: AnalyzeNutritionTrendsInput
+    ) -> AnalyzeNutritionTrendsOutput:
+        """
+        Analiza tendencias nutricionales y cumplimiento del plan.
+
+        Args:
+            input: Entrada con parámetros de análisis
+
+        Returns:
+            Análisis de tendencias con recomendaciones
+        """
+        try:
+            logger.info(
+                f"Analizando tendencias nutricionales para usuario {input.user_id}"
+            )
+
+            # Obtener tendencias del servicio
+            trends_data = await self.nutrition_service.get_nutrition_trends(
+                user_id=input.user_id, days=input.days
+            )
+
+            if "error" in trends_data:
+                return AnalyzeNutritionTrendsOutput(
+                    trends=[],
+                    overall_compliance=0.0,
+                    macro_balance={},
+                    recommendations=[trends_data["error"]],
+                    needs_adjustment=True,
+                )
+
+            # Analizar tendencias para cada métrica solicitada
+            nutrition_trends = []
+
+            metric_map = {
+                "calories": ("average_daily_calories", "calorías", "kcal"),
+                "protein": ("average_daily_protein_g", "proteína", "g"),
+                "carbs": ("average_daily_carbs_g", "carbohidratos", "g"),
+                "fat": ("average_daily_fat_g", "grasa", "g"),
+            }
+
+            for metric in input.metrics:
+                if metric in metric_map:
+                    data_key, metric_name, unit = metric_map[metric]
+                    avg_value = trends_data.get(data_key, 0)
+                    trend_direction = trends_data.get(f"{metric}_trend", "stable")
+
+                    # Calcular variación (simplificado)
+                    variation = 0.0
+                    if trend_direction == "increasing":
+                        variation = 10.0  # Placeholder
+                    elif trend_direction == "decreasing":
+                        variation = -10.0  # Placeholder
+
+                    # Generar recomendación basada en la tendencia
+                    recommendation = self._generate_trend_recommendation(
+                        metric, avg_value, trend_direction, trends_data
+                    )
+
+                    nutrition_trends.append(
+                        NutritionTrend(
+                            metric=metric_name,
+                            average=avg_value,
+                            trend=trend_direction,
+                            variation=variation,
+                            recommendation=recommendation,
+                        )
+                    )
+
+            # Calcular cumplimiento general
+            overall_compliance = trends_data.get("average_goal_adherence_percent", 75.0)
+            if overall_compliance is None:
+                overall_compliance = 75.0  # Valor por defecto si no hay metas
+
+            # Obtener balance de macros
+            macro_balance = trends_data.get(
+                "average_macro_balance",
+                {"protein_percent": 25.0, "carbs_percent": 45.0, "fat_percent": 30.0},
+            )
+
+            # Generar recomendaciones generales
+            recommendations = self._generate_general_recommendations(
+                trends_data, overall_compliance, macro_balance
+            )
+
+            # Determinar si el plan necesita ajustes
+            needs_adjustment = (
+                overall_compliance < 80.0
+                or any(
+                    t.trend == "decreasing"
+                    for t in nutrition_trends
+                    if t.metric == "proteína"
+                )
+                or macro_balance.get("protein_percent", 0) < 20
+                or macro_balance.get("fat_percent", 0) > 40
+            )
+
+            return AnalyzeNutritionTrendsOutput(
+                trends=nutrition_trends,
+                overall_compliance=overall_compliance,
+                macro_balance=macro_balance,
+                recommendations=recommendations,
+                needs_adjustment=needs_adjustment,
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Error al analizar tendencias nutricionales: {e}", exc_info=True
+            )
+            return AnalyzeNutritionTrendsOutput(
+                trends=[],
+                overall_compliance=0.0,
+                macro_balance={},
+                recommendations=[f"Error en el análisis: {str(e)}"],
+                needs_adjustment=True,
+            )
+
+    def _generate_trend_recommendation(
+        self, metric: str, avg_value: float, trend: str, trends_data: Dict[str, Any]
+    ) -> str:
+        """Genera recomendaciones específicas para cada tendencia."""
+
+        if metric == "calories":
+            if trend == "increasing" and avg_value > 2500:
+                return "Tu consumo calórico está aumentando. Considera revisar las porciones si tu objetivo es mantener o perder peso."
+            elif trend == "decreasing" and avg_value < 1500:
+                return "Tu consumo calórico está disminuyendo significativamente. Asegúrate de consumir suficientes calorías para mantener tu metabolismo activo."
+            else:
+                return "Tu consumo calórico se mantiene estable. Continúa monitoreando según tus objetivos."
+
+        elif metric == "protein":
+            if avg_value < 50:
+                return "Tu consumo de proteína es bajo. Considera agregar más fuentes de proteína magra a tus comidas."
+            elif avg_value > 150:
+                return "Tu consumo de proteína es alto. Asegúrate de mantener una hidratación adecuada."
+            else:
+                return "Tu consumo de proteína es adecuado. Mantén la variedad de fuentes proteicas."
+
+        elif metric == "carbs":
+            if trend == "increasing" and avg_value > 300:
+                return "Tu consumo de carbohidratos está aumentando. Prioriza carbohidratos complejos y fibra."
+            elif avg_value < 100:
+                return "Tu consumo de carbohidratos es bajo. Si haces ejercicio intenso, considera aumentar la ingesta."
+            else:
+                return "Tu consumo de carbohidratos es moderado. Enfócate en fuentes de calidad."
+
+        elif metric == "fat":
+            if avg_value > 100:
+                return "Tu consumo de grasas es elevado. Prioriza grasas saludables como omega-3 y monoinsaturadas."
+            elif avg_value < 40:
+                return "Tu consumo de grasas es bajo. Las grasas saludables son esenciales para las hormonas y absorción de vitaminas."
+            else:
+                return "Tu consumo de grasas es adecuado. Mantén el equilibrio entre diferentes tipos de grasas."
+
+        return "Continúa monitoreando esta métrica según tus objetivos personales."
+
+    def _generate_general_recommendations(
+        self,
+        trends_data: Dict[str, Any],
+        compliance: float,
+        macro_balance: Dict[str, float],
+    ) -> List[str]:
+        """Genera recomendaciones generales basadas en el análisis completo."""
+
+        recommendations = []
+
+        # Recomendaciones basadas en cumplimiento
+        if compliance < 70:
+            recommendations.append(
+                "Tu adherencia al plan es baja. Considera simplificar las metas o buscar alternativas más prácticas."
+            )
+        elif compliance > 90:
+            recommendations.append(
+                "Excelente adherencia al plan. Mantén la consistencia para resultados óptimos."
+            )
+
+        # Recomendaciones basadas en balance de macros
+        protein_percent = macro_balance.get("protein_percent", 0)
+        carbs_percent = macro_balance.get("carbs_percent", 0)
+        fat_percent = macro_balance.get("fat_percent", 0)
+
+        if protein_percent < 20:
+            recommendations.append(
+                "Tu porcentaje de proteína es bajo. Aumenta el consumo de proteínas para preservar masa muscular."
+            )
+
+        if carbs_percent > 60:
+            recommendations.append(
+                "Tu dieta es muy alta en carbohidratos. Considera balancear con más proteína y grasas saludables."
+            )
+
+        if fat_percent < 20:
+            recommendations.append(
+                "Tu consumo de grasas es muy bajo. Las grasas saludables son esenciales para la salud hormonal."
+            )
+
+        # Agregar insights específicos si están disponibles
+        if "insights" in trends_data:
+            recommendations.extend(trends_data["insights"][:2])  # Limitar a 2 insights
+
+        return recommendations

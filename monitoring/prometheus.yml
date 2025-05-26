@@ -1,0 +1,56 @@
+# Configuración de Prometheus para NGX Agents
+global:
+  scrape_interval: 15s # Intervalo de scraping por defecto
+  evaluation_interval: 15s # Intervalo de evaluación de reglas
+  external_labels:
+    monitor: 'ngx-agents-monitor'
+    environment: 'development'
+
+# Configuración de alerting
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - 'alertmanager:9093'
+
+# Archivos de reglas de alertas
+rule_files:
+  - "alerts/*.yml"
+
+# Configuración de scraping
+scrape_configs:
+  # Job para la aplicación principal de NGX Agents
+  - job_name: 'ngx-agents'
+    static_configs:
+      - targets: ['localhost:8000']
+        labels:
+          service: 'ngx-agents-api'
+          team: 'backend'
+    scrape_path: '/metrics'
+    scrape_interval: 10s
+  
+  # Job para el servidor A2A
+  - job_name: 'ngx-agents-a2a'
+    static_configs:
+      - targets: ['localhost:9000']
+        labels:
+          service: 'ngx-agents-a2a'
+          team: 'backend'
+    scrape_path: '/metrics'
+    scrape_interval: 10s
+  
+  # Job para Redis (si está expuesto)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['localhost:9121']
+        labels:
+          service: 'redis'
+          team: 'infrastructure'
+  
+  # Job para el propio Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          team: 'monitoring'

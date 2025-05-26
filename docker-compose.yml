@@ -1,0 +1,272 @@
+version: '3.8'
+
+services:
+  # Redis for caching and state management
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ngx-network
+
+  # PostgreSQL for Supabase (local development)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-ngx_agents}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ngx-network
+
+  # A2A Server
+  a2a-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.a2a
+    image: ngx-agents-a2a:latest
+    container_name: ngx-a2a-server
+    ports:
+      - "9000:9000"
+    environment:
+      - A2A_HOST=0.0.0.0
+      - A2A_PORT=9000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ngx-network
+    restart: unless-stopped
+
+  # FastAPI Application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ngx-agents-api:latest
+    container_name: ngx-api
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - A2A_HOST=a2a-server
+      - A2A_PORT=9000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-ngx_agents}
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
+      - VERTEX_PROJECT_ID=${VERTEX_PROJECT_ID}
+      - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
+    volumes:
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      a2a-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ngx-network
+    restart: unless-stopped
+
+  # Orchestrator Agent
+  orchestrator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.base
+      target: runtime
+    image: ngx-agents-base:latest
+    container_name: ngx-orchestrator
+    command: ["python", "-m", "agents.orchestrator.run"]
+    environment:
+      - AGENT_NAME=orchestrator
+      - AGENT_PORT=9001
+      - A2A_HOST=a2a-server
+      - A2A_PORT=9000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
+      - VERTEX_PROJECT_ID=${VERTEX_PROJECT_ID}
+      - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
+    volumes:
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      a2a-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ngx-network
+    restart: unless-stopped
+
+  # Elite Training Strategist Agent
+  elite-training:
+    build:
+      context: .
+      dockerfile: docker/agents/Dockerfile.elite_training
+      args:
+        BASE_IMAGE: ngx-agents-base:latest
+    image: ngx-agent-elite-training:latest
+    container_name: ngx-elite-training
+    environment:
+      - AGENT_NAME=elite_training_strategist
+      - AGENT_PORT=9002
+      - A2A_HOST=a2a-server
+      - A2A_PORT=9000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
+      - VERTEX_PROJECT_ID=${VERTEX_PROJECT_ID}
+      - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
+    volumes:
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      orchestrator:
+        condition: service_started
+    networks:
+      - ngx-network
+    restart: unless-stopped
+
+  # Precision Nutrition Architect Agent
+  nutrition:
+    build:
+      context: .
+      dockerfile: docker/agents/Dockerfile.nutrition
+      args:
+        BASE_IMAGE: ngx-agents-base:latest
+    image: ngx-agent-nutrition:latest
+    container_name: ngx-nutrition
+    environment:
+      - AGENT_NAME=precision_nutrition_architect
+      - AGENT_PORT=9003
+      - A2A_HOST=a2a-server
+      - A2A_PORT=9000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
+      - VERTEX_PROJECT_ID=${VERTEX_PROJECT_ID}
+      - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
+    volumes:
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      orchestrator:
+        condition: service_started
+    networks:
+      - ngx-network
+    restart: unless-stopped
+
+  # Progress Tracker Agent
+  progress-tracker:
+    build:
+      context: .
+      dockerfile: docker/agents/Dockerfile.progress_tracker
+      args:
+        BASE_IMAGE: ngx-agents-base:latest
+    image: ngx-agent-progress:latest
+    container_name: ngx-progress-tracker
+    environment:
+      - AGENT_NAME=progress_tracker
+      - AGENT_PORT=9004
+      - A2A_HOST=a2a-server
+      - A2A_PORT=9000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
+      - VERTEX_PROJECT_ID=${VERTEX_PROJECT_ID}
+      - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
+    volumes:
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      orchestrator:
+        condition: service_started
+    networks:
+      - ngx-network
+    restart: unless-stopped
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ngx-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - ngx-network
+    restart: unless-stopped
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ngx-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - ngx-network
+    restart: unless-stopped
+
+networks:
+  ngx-network:
+    driver: bridge
+    name: ngx-network
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

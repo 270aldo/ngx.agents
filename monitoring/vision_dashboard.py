@@ -7,18 +7,11 @@ y configurar alertas.
 """
 
 import asyncio
-import json
-import logging
 import os
-import time
-from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from fastapi import FastAPI, HTTPException, Depends, Query, WebSocket
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Query, WebSocket
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -38,7 +31,7 @@ logger = get_logger(__name__)
 app = FastAPI(
     title="Dashboard de Visión y Multimodal",
     description="Dashboard para monitoreo de capacidades de visión y multimodales",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Configurar directorio de plantillas y archivos estáticos
@@ -55,11 +48,13 @@ os.makedirs(os.path.join(static_dir, "js"), exist_ok=True)
 templates = Jinja2Templates(directory=templates_dir)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+
 # Modelos de datos
 class AlertConfig(BaseModel):
     threshold_name: str
     value: float
     enabled: bool = True
+
 
 class AlertNotification(BaseModel):
     severity: str
@@ -67,6 +62,7 @@ class AlertNotification(BaseModel):
     message: str
     timestamp: str
     data: Dict[str, Any]
+
 
 # Rutas del dashboard
 @app.get("/", response_class=HTMLResponse)
@@ -172,6 +168,7 @@ async def dashboard_home():
     </html>
     """
 
+
 @app.get("/api/metrics")
 async def get_current_metrics():
     """Obtiene las métricas actuales."""
@@ -180,7 +177,10 @@ async def get_current_metrics():
         return metrics
     except Exception as e:
         logger.error(f"Error al obtener métricas: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error al obtener métricas: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error al obtener métricas: {str(e)}"
+        )
+
 
 @app.get("/api/metrics/history")
 async def get_metrics_history(period: str = Query("hourly", enum=["hourly", "daily"])):
@@ -190,7 +190,10 @@ async def get_metrics_history(period: str = Query("hourly", enum=["hourly", "dai
         return {"period": period, "history": history}
     except Exception as e:
         logger.error(f"Error al obtener historial de métricas: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error al obtener historial de métricas: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error al obtener historial de métricas: {str(e)}"
+        )
+
 
 @app.get("/api/components/stats")
 async def get_components_stats():
@@ -201,16 +204,22 @@ async def get_components_stats():
         optimizer_stats = await image_optimizer.get_stats()
         document_processor_stats = await document_processor.get_stats()
         object_recognition_stats = await object_recognition.get_stats()
-        
+
         return {
             "image_cache": cache_stats,
             "image_optimizer": optimizer_stats,
             "document_processor": document_processor_stats,
-            "object_recognition": object_recognition_stats
+            "object_recognition": object_recognition_stats,
         }
     except Exception as e:
-        logger.error(f"Error al obtener estadísticas de componentes: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error al obtener estadísticas de componentes: {str(e)}")
+        logger.error(
+            f"Error al obtener estadísticas de componentes: {e}", exc_info=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener estadísticas de componentes: {str(e)}",
+        )
+
 
 @app.get("/api/alerts")
 async def get_alerts(limit: int = Query(10, ge=1, le=100)):
@@ -220,17 +229,29 @@ async def get_alerts(limit: int = Query(10, ge=1, le=100)):
         return {"alerts": alerts, "count": len(alerts)}
     except Exception as e:
         logger.error(f"Error al obtener alertas: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error al obtener alertas: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error al obtener alertas: {str(e)}"
+        )
+
 
 @app.post("/api/alerts/config")
 async def update_alert_config(config: AlertConfig):
     """Actualiza la configuración de alertas."""
     try:
-        await alert_manager.update_threshold(config.threshold_name, config.value, config.enabled)
-        return {"status": "success", "message": f"Configuración de alerta '{config.threshold_name}' actualizada"}
+        await alert_manager.update_threshold(
+            config.threshold_name, config.value, config.enabled
+        )
+        return {
+            "status": "success",
+            "message": f"Configuración de alerta '{config.threshold_name}' actualizada",
+        }
     except Exception as e:
         logger.error(f"Error al actualizar configuración de alerta: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error al actualizar configuración de alerta: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al actualizar configuración de alerta: {str(e)}",
+        )
+
 
 @app.websocket("/ws/metrics")
 async def websocket_metrics(websocket: WebSocket):
@@ -240,10 +261,10 @@ async def websocket_metrics(websocket: WebSocket):
         while True:
             # Obtener métricas actuales
             metrics = await vision_metrics.get_metrics()
-            
+
             # Enviar métricas al cliente
             await websocket.send_json(metrics)
-            
+
             # Esperar antes de la siguiente actualización
             await asyncio.sleep(5)
     except Exception as e:
@@ -251,11 +272,14 @@ async def websocket_metrics(websocket: WebSocket):
     finally:
         await websocket.close()
 
+
 def start_dashboard(host: str = "0.0.0.0", port: int = 8080):
     """Inicia el dashboard."""
     import uvicorn
+
     logger.info(f"Iniciando dashboard en http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)
+
 
 if __name__ == "__main__":
     start_dashboard()

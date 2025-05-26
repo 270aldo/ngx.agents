@@ -7,11 +7,9 @@ de conversaciones, con soporte para persistencia, caché y embeddings.
 
 import asyncio
 import json
-import logging
 import time
 import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 from core.logging_config import get_logger
 
@@ -24,14 +22,16 @@ except ImportError:
 # Configurar logger
 logger = get_logger(__name__)
 
-# Intentar importar Redis para caché distribuida
+# Intentar importar Redis y el pool manager
 try:
     import redis.asyncio as redis
+    from core.redis_pool import redis_pool_manager
 
     REDIS_AVAILABLE = True
 except ImportError:
     logger.warning("Redis no está disponible. Usando caché en memoria.")
     REDIS_AVAILABLE = False
+    redis_pool_manager = None
 
 
 class LRUCache:
@@ -230,14 +230,16 @@ class StateManager:
                 return True
 
             # Inicializar Redis si está disponible
-            if REDIS_AVAILABLE and self.redis_url and self.enable_persistence:
+            if REDIS_AVAILABLE and self.enable_persistence and redis_pool_manager:
                 try:
-                    self.redis_client = redis.Redis.from_url(
-                        self.redis_url, decode_responses=True
-                    )
-                    # Verificar conexión
-                    await self.redis_client.ping()
-                    logger.info("Conexión a Redis establecida")
+                    # Usar el pool manager para obtener el cliente
+                    self.redis_client = await redis_pool_manager.get_client()
+                    if self.redis_client:
+                        # Verificar conexión
+                        await self.redis_client.ping()
+                        logger.info("Conexión a Redis establecida desde el pool")
+                    else:
+                        logger.warning("No se pudo obtener cliente Redis del pool")
                 except Exception as e:
                     logger.error(f"Error al conectar con Redis: {str(e)}")
                     self.redis_client = None
@@ -740,13 +742,13 @@ class StateManager:
         """
         async with self._lock:
             try:
-                # Cerrar conexión Redis si está activa
+                # Cerrar cliente Redis (no el pool, ya que es compartido)
                 if self.redis_client:
-                    logger.info("Cerrando conexión Redis...")
-                    await self.redis_client.close()
-                    await self.redis_client.connection_pool.disconnect()
+                    logger.info("Liberando cliente Redis...")
+                    # Solo cerrar el cliente, no el pool compartido
+                    await self.redis_client.close(close_connection_pool=False)
                     self.redis_client = None
-                    logger.info("Conexión Redis cerrada correctamente")
+                    logger.info("Cliente Redis liberado correctamente")
 
                 # Limpiar cachés en memoria
                 self.memory_cache.clear()

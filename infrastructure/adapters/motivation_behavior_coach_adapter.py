@@ -6,8 +6,7 @@ necesarios para utilizar el sistema A2A optimizado y el cliente Vertex AI optimi
 """
 
 import logging
-import time
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any
 from datetime import datetime
 
 from agents.motivation_behavior_coach.agent import MotivationBehaviorCoach
@@ -18,14 +17,15 @@ from clients.vertex_ai.client import VertexAIClient
 # Configurar logger
 logger = logging.getLogger(__name__)
 
+
 class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
     """
     Adaptador para el agente MotivationBehaviorCoach que utiliza los componentes optimizados.
-    
+
     Este adaptador extiende el agente MotivationBehaviorCoach original y utiliza la clase
     BaseAgentAdapter para implementar métodos comunes.
     """
-    
+
     def __init__(self):
         """
         Inicializa el adaptador MotivationBehaviorCoach.
@@ -34,29 +34,51 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
         self.telemetry = get_telemetry()
         self.agent_name = "motivation_behavior_coach"
         self.vertex_ai_client = VertexAIClient()
-        
+
         # Configuración de clasificación
         self.fallback_keywords = [
-            "motivación", "motivation", "hábito", "habit", 
-            "comportamiento", "behavior", "cambio", "change",
-            "meta", "goal", "objetivo", "objective",
-            "obstáculo", "obstacle", "barrera", "barrier",
-            "psicología", "psychology", "mentalidad", "mindset"
+            "motivación",
+            "motivation",
+            "hábito",
+            "habit",
+            "comportamiento",
+            "behavior",
+            "cambio",
+            "change",
+            "meta",
+            "goal",
+            "objetivo",
+            "objective",
+            "obstáculo",
+            "obstacle",
+            "barrera",
+            "barrier",
+            "psicología",
+            "psychology",
+            "mentalidad",
+            "mindset",
         ]
-        
+
         self.excluded_keywords = [
-            "nutrición", "nutrition", "entrenamiento", "training",
-            "médico", "medical", "doctor", "lesión", "injury"
+            "nutrición",
+            "nutrition",
+            "entrenamiento",
+            "training",
+            "médico",
+            "medical",
+            "doctor",
+            "lesión",
+            "injury",
         ]
-    
+
     def get_agent_name(self) -> str:
         """Devuelve el nombre del agente."""
         return self.agent_name
-    
+
     def _create_default_context(self) -> Dict[str, Any]:
         """
         Crea un contexto predeterminado para el agente MotivationBehaviorCoach.
-        
+
         Returns:
             Dict[str, Any]: Contexto predeterminado
         """
@@ -68,13 +90,13 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             "motivation_strategies": [],
             "behavior_change_plans": [],
             "obstacle_management_plans": [],
-            "last_updated": datetime.now().isoformat()
+            "last_updated": datetime.now().isoformat(),
         }
-    
+
     def _get_intent_to_query_type_mapping(self) -> Dict[str, str]:
         """
         Obtiene el mapeo de intenciones a tipos de consulta específico para MotivationBehaviorCoach.
-        
+
         Returns:
             Dict[str, str]: Mapeo de intenciones a tipos de consulta
         """
@@ -100,15 +122,22 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             "barrera": "obstacle_management",
             "barrier": "obstacle_management",
             "problema": "obstacle_management",
-            "problem": "obstacle_management"
+            "problem": "obstacle_management",
         }
-    
-    async def _process_query(self, query: str, user_id: str, session_id: str,
-                           program_type: str, state: Dict[str, Any], profile: Dict[str, Any],
-                           **kwargs) -> Dict[str, Any]:
+
+    async def _process_query(
+        self,
+        query: str,
+        user_id: str,
+        session_id: str,
+        program_type: str,
+        state: Dict[str, Any],
+        profile: Dict[str, Any],
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Procesa la consulta del usuario.
-        
+
         Args:
             query: La consulta del usuario
             user_id: ID del usuario
@@ -117,43 +146,59 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             state: Estado actual del usuario
             profile: Perfil del usuario
             **kwargs: Argumentos adicionales
-            
+
         Returns:
             Dict[str, Any]: Respuesta del agente
         """
         try:
             # Registrar telemetría para el inicio del procesamiento
             if self.telemetry:
-                with self.telemetry.start_as_current_span(f"{self.__class__.__name__}._process_query") as span:
+                with self.telemetry.start_as_current_span(
+                    f"{self.__class__.__name__}._process_query"
+                ) as span:
                     span.set_attribute("user_id", user_id)
                     span.set_attribute("session_id", session_id)
                     span.set_attribute("program_type", program_type)
-            
+
             # Determinar el tipo de consulta basado en el mapeo de intenciones
             query_type = self._determine_query_type(query)
-            logger.info(f"MotivationBehaviorCoachAdapter procesando consulta de tipo: {query_type}")
-            
+            logger.info(
+                f"MotivationBehaviorCoachAdapter procesando consulta de tipo: {query_type}"
+            )
+
             # Obtener o crear el contexto
             context = state.get("motivation_context", self._create_default_context())
-            
+
             # Procesar según el tipo de consulta
             if query_type == "habit_formation":
-                result = await self._handle_habit_formation(query, context, profile, program_type)
+                result = await self._handle_habit_formation(
+                    query, context, profile, program_type
+                )
             elif query_type == "motivation_strategies":
-                result = await self._handle_motivation_strategies(query, context, profile, program_type)
+                result = await self._handle_motivation_strategies(
+                    query, context, profile, program_type
+                )
             elif query_type == "behavior_change":
-                result = await self._handle_behavior_change(query, context, profile, program_type)
+                result = await self._handle_behavior_change(
+                    query, context, profile, program_type
+                )
             elif query_type == "goal_setting":
-                result = await self._handle_goal_setting(query, context, profile, program_type)
+                result = await self._handle_goal_setting(
+                    query, context, profile, program_type
+                )
             elif query_type == "obstacle_management":
-                result = await self._handle_obstacle_management(query, context, profile, program_type)
+                result = await self._handle_obstacle_management(
+                    query, context, profile, program_type
+                )
             else:
                 # Tipo de consulta no reconocido, usar procesamiento genérico
-                result = await self._handle_generic_query(query, context, profile, program_type)
-            
+                result = await self._handle_generic_query(
+                    query, context, profile, program_type
+                )
+
             # Actualizar el contexto en el estado
             state["motivation_context"] = context
-            
+
             # Construir la respuesta
             response = {
                 "success": True,
@@ -162,51 +207,59 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
                 "program_type": program_type,
                 "agent": self.__class__.__name__,
                 "timestamp": datetime.now().isoformat(),
-                "context": context
+                "context": context,
             }
-            
+
             return response
-            
+
         except Exception as e:
-            logger.error(f"Error al procesar consulta en MotivationBehaviorCoachAdapter: {str(e)}", exc_info=True)
+            logger.error(
+                f"Error al procesar consulta en MotivationBehaviorCoachAdapter: {str(e)}",
+                exc_info=True,
+            )
             return {
                 "success": False,
                 "error": str(e),
                 "agent": self.__class__.__name__,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def _determine_query_type(self, query: str) -> str:
         """
         Determina el tipo de consulta basado en el texto.
-        
+
         Args:
             query: Consulta del usuario
-            
+
         Returns:
             str: Tipo de consulta identificado
         """
         query_lower = query.lower()
         intent_mapping = self._get_intent_to_query_type_mapping()
-        
+
         for intent, query_type in intent_mapping.items():
             if intent.lower() in query_lower:
                 return query_type
-        
+
         # Si no se encuentra un tipo específico, devolver formación de hábitos por defecto
         return "habit_formation"
-    
-    async def _handle_habit_formation(self, query: str, context: Dict[str, Any], 
-                                    profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+
+    async def _handle_habit_formation(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        profile: Dict[str, Any],
+        program_type: str,
+    ) -> Dict[str, Any]:
         """
         Maneja una consulta de formación de hábitos.
-        
+
         Args:
             query: Consulta del usuario
             context: Contexto actual
             profile: Perfil del usuario
             program_type: Tipo de programa
-            
+
         Returns:
             Dict[str, Any]: Resultado del plan de hábitos
         """
@@ -229,36 +282,40 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             recomienda la estrategia más adecuada y ofrece 3 consejos para el éxito a largo plazo.
             Asegúrate de que las estrategias estén respaldadas por la ciencia y clasifica su dificultad (Baja, Media, Alta).
             """,
-            context=context
+            context=context,
         )
-        
+
         # Actualizar el contexto con el nuevo plan de hábitos
         if "habit_plans" not in context:
             context["habit_plans"] = []
-            
-        context["habit_plans"].append({
-            "date": datetime.now().isoformat(),
-            "query": query,
-            "plan": habit_plan_response,
-            "program_type": program_type
-        })
-        
-        return {
-            "response": habit_plan_response,
-            "context": context
-        }
-    
-    async def _handle_motivation_strategies(self, query: str, context: Dict[str, Any], 
-                                          profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+
+        context["habit_plans"].append(
+            {
+                "date": datetime.now().isoformat(),
+                "query": query,
+                "plan": habit_plan_response,
+                "program_type": program_type,
+            }
+        )
+
+        return {"response": habit_plan_response, "context": context}
+
+    async def _handle_motivation_strategies(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        profile: Dict[str, Any],
+        program_type: str,
+    ) -> Dict[str, Any]:
         """
         Maneja una consulta de estrategias de motivación.
-        
+
         Args:
             query: Consulta del usuario
             context: Contexto actual
             profile: Perfil del usuario
             program_type: Tipo de programa
-            
+
         Returns:
             Dict[str, Any]: Resultado de las estrategias de motivación
         """
@@ -289,36 +346,40 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             - Ciencia detrás de la estrategia
             - Ejemplo de aplicación específico para el programa {program_type}
             """,
-            context=context
+            context=context,
         )
-        
+
         # Actualizar el contexto con las nuevas estrategias de motivación
         if "motivation_strategies" not in context:
             context["motivation_strategies"] = []
-            
-        context["motivation_strategies"].append({
-            "date": datetime.now().isoformat(),
-            "query": query,
-            "strategies": motivation_response,
-            "program_type": program_type
-        })
-        
-        return {
-            "response": motivation_response,
-            "context": context
-        }
-    
-    async def _handle_behavior_change(self, query: str, context: Dict[str, Any], 
-                                    profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+
+        context["motivation_strategies"].append(
+            {
+                "date": datetime.now().isoformat(),
+                "query": query,
+                "strategies": motivation_response,
+                "program_type": program_type,
+            }
+        )
+
+        return {"response": motivation_response, "context": context}
+
+    async def _handle_behavior_change(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        profile: Dict[str, Any],
+        program_type: str,
+    ) -> Dict[str, Any]:
         """
         Maneja una consulta de cambio de comportamiento.
-        
+
         Args:
             query: Consulta del usuario
             context: Contexto actual
             profile: Perfil del usuario
             program_type: Tipo de programa
-            
+
         Returns:
             Dict[str, Any]: Resultado del plan de cambio de comportamiento
         """
@@ -354,36 +415,40 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             - Duración estimada
             - Indicadores de éxito
             """,
-            context=context
+            context=context,
         )
-        
+
         # Actualizar el contexto con el nuevo plan de cambio de comportamiento
         if "behavior_change_plans" not in context:
             context["behavior_change_plans"] = []
-            
-        context["behavior_change_plans"].append({
-            "date": datetime.now().isoformat(),
-            "query": query,
-            "plan": behavior_change_response,
-            "program_type": program_type
-        })
-        
-        return {
-            "response": behavior_change_response,
-            "context": context
-        }
-    
-    async def _handle_goal_setting(self, query: str, context: Dict[str, Any], 
-                                 profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+
+        context["behavior_change_plans"].append(
+            {
+                "date": datetime.now().isoformat(),
+                "query": query,
+                "plan": behavior_change_response,
+                "program_type": program_type,
+            }
+        )
+
+        return {"response": behavior_change_response, "context": context}
+
+    async def _handle_goal_setting(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        profile: Dict[str, Any],
+        program_type: str,
+    ) -> Dict[str, Any]:
         """
         Maneja una consulta de establecimiento de metas.
-        
+
         Args:
             query: Consulta del usuario
             context: Contexto actual
             profile: Perfil del usuario
             program_type: Tipo de programa
-            
+
         Returns:
             Dict[str, Any]: Resultado del plan de metas
         """
@@ -410,36 +475,40 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             6. Posibles obstáculos y estrategias para superarlos
             7. Sistema de seguimiento del progreso
             """,
-            context=context
+            context=context,
         )
-        
+
         # Actualizar el contexto con el nuevo plan de metas
         if "goal_plans" not in context:
             context["goal_plans"] = []
-            
-        context["goal_plans"].append({
-            "date": datetime.now().isoformat(),
-            "query": query,
-            "plan": goal_setting_response,
-            "program_type": program_type
-        })
-        
-        return {
-            "response": goal_setting_response,
-            "context": context
-        }
-    
-    async def _handle_obstacle_management(self, query: str, context: Dict[str, Any], 
-                                        profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+
+        context["goal_plans"].append(
+            {
+                "date": datetime.now().isoformat(),
+                "query": query,
+                "plan": goal_setting_response,
+                "program_type": program_type,
+            }
+        )
+
+        return {"response": goal_setting_response, "context": context}
+
+    async def _handle_obstacle_management(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        profile: Dict[str, Any],
+        program_type: str,
+    ) -> Dict[str, Any]:
         """
         Maneja una consulta de manejo de obstáculos.
-        
+
         Args:
             query: Consulta del usuario
             context: Contexto actual
             profile: Perfil del usuario
             program_type: Tipo de programa
-            
+
         Returns:
             Dict[str, Any]: Resultado del plan de manejo de obstáculos
         """
@@ -464,36 +533,40 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             4. Estrategias de prevención
             5. Ajustes de mentalidad recomendados
             """,
-            context=context
+            context=context,
         )
-        
+
         # Actualizar el contexto con el nuevo plan de manejo de obstáculos
         if "obstacle_management_plans" not in context:
             context["obstacle_management_plans"] = []
-            
-        context["obstacle_management_plans"].append({
-            "date": datetime.now().isoformat(),
-            "query": query,
-            "plan": obstacle_management_response,
-            "program_type": program_type
-        })
-        
-        return {
-            "response": obstacle_management_response,
-            "context": context
-        }
-    
-    async def _handle_generic_query(self, query: str, context: Dict[str, Any], 
-                                  profile: Dict[str, Any], program_type: str) -> Dict[str, Any]:
+
+        context["obstacle_management_plans"].append(
+            {
+                "date": datetime.now().isoformat(),
+                "query": query,
+                "plan": obstacle_management_response,
+                "program_type": program_type,
+            }
+        )
+
+        return {"response": obstacle_management_response, "context": context}
+
+    async def _handle_generic_query(
+        self,
+        query: str,
+        context: Dict[str, Any],
+        profile: Dict[str, Any],
+        program_type: str,
+    ) -> Dict[str, Any]:
         """
         Maneja una consulta genérica.
-        
+
         Args:
             query: Consulta del usuario
             context: Contexto actual
             profile: Perfil del usuario
             program_type: Tipo de programa
-            
+
         Returns:
             Dict[str, Any]: Resultado de la respuesta genérica
         """
@@ -514,43 +587,40 @@ class MotivationBehaviorCoachAdapter(MotivationBehaviorCoach, BaseAgentAdapter):
             Proporciona una respuesta detallada, basada en principios de psicología positiva, ciencia del comportamiento y técnicas de coaching validadas.
             Incluye ejemplos prácticos y recomendaciones específicas cuando sea apropiado.
             """,
-            context=context
+            context=context,
         )
-        
+
         # Actualizar el historial de conversación
         if "conversation_history" not in context:
             context["conversation_history"] = []
-            
-        context["conversation_history"].append({
-            "date": datetime.now().isoformat(),
-            "query": query,
-            "response": generic_response
-        })
-        
-        return {
-            "response": generic_response,
-            "context": context
-        }
-    
+
+        context["conversation_history"].append(
+            {
+                "date": datetime.now().isoformat(),
+                "query": query,
+                "response": generic_response,
+            }
+        )
+
+        return {"response": generic_response, "context": context}
+
     async def _generate_response(self, prompt: str, context: Dict[str, Any]) -> str:
         """
         Genera una respuesta utilizando el modelo de lenguaje.
-        
+
         Args:
             prompt: Prompt para el modelo
             context: Contexto actual
-            
+
         Returns:
             str: Respuesta generada
         """
         try:
             # Llamar al cliente de Vertex AI optimizado
             response = await self.vertex_ai_client.generate_content(
-                prompt=prompt,
-                temperature=0.7,
-                max_output_tokens=1024
+                prompt=prompt, temperature=0.7, max_output_tokens=1024
             )
-            
+
             # Extraer el texto de la respuesta
             return response["text"]
         except Exception as e:

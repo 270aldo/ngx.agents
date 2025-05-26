@@ -1,0 +1,24 @@
+# Dockerfile for Orchestrator Agent
+ARG BASE_IMAGE=ngx-agents-base:latest
+FROM ${BASE_IMAGE}
+
+# Agent-specific metadata
+LABEL maintainer="NGX Team" \
+      agent.name="orchestrator" \
+      agent.version="1.0.0" \
+      agent.description="Central orchestrator for NGX Agents"
+
+# Agent-specific environment variables
+ENV AGENT_NAME=orchestrator \
+    AGENT_PORT=9001 \
+    LOG_LEVEL=INFO
+
+# Expose agent port
+EXPOSE ${AGENT_PORT}
+
+# Health check for orchestrator
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:${AGENT_PORT}/health || exit 1
+
+# Run the orchestrator agent
+CMD ["python", "-m", "agents.orchestrator.run"]

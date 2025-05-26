@@ -6,8 +6,7 @@ mediante JWT.
 """
 
 import asyncio
-import logging
-from typing import Dict, Any, List
+from typing import Dict, Any
 from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -37,9 +36,16 @@ from app.routers import (
     circuit_breaker,
     degraded_mode,
     chaos_testing,
+    stream,
+    feedback,
+    audio,
+    visualization,
+    wearables,
 )
 from clients.supabase_client import SupabaseClient
 from app.middleware.telemetry import setup_telemetry_middleware
+from core.metrics import initialize_metrics
+from app.middleware.cdn_middleware import setup_cdn_middleware
 
 # Configurar logging
 logger = configure_logging(__name__)
@@ -71,6 +77,9 @@ setup_telemetry_middleware(
     app
 )  # Esta función ya verifica si la telemetría está habilitada
 
+# Configurar CDN middleware
+setup_cdn_middleware(app)
+
 # Configurar CORS de manera segura
 cors_origins = settings.cors_allowed_origins
 if settings.environment == "production" and "*" in cors_origins:
@@ -92,6 +101,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(agents.router)
 app.include_router(chat.router)
+app.include_router(stream.router)
+app.include_router(feedback.router)
 app.include_router(a2a.router)
 app.include_router(budget.router)
 app.include_router(prompt_analyzer.router)
@@ -102,6 +113,14 @@ app.include_router(request_prioritizer.router)
 app.include_router(circuit_breaker.router)
 app.include_router(degraded_mode.router)
 app.include_router(chaos_testing.router)
+app.include_router(audio.router)
+app.include_router(visualization.router)
+app.include_router(wearables.router)
+
+# CDN router
+from app.routers import cdn
+
+app.include_router(cdn.router)
 
 # Incluir health check router
 from infrastructure.health_router import setup_health_router
@@ -112,6 +131,10 @@ setup_health_router(app, prefix="/api/v1")
 from app.handlers.alert_handler import setup_alert_handler
 
 setup_alert_handler(app)
+
+# Inicializar sistema de métricas con Prometheus
+initialize_metrics(app)
+logger.info("Sistema de métricas Prometheus inicializado")
 
 
 # Obtener tracer para la aplicación principal
@@ -156,19 +179,23 @@ async def startup_event():
             await state_manager.initialize()
             logger.info("State Manager inicializado correctamente")
 
+            # Inicializar servicio de feedback
+            from core.feedback_service import feedback_service
+
+            await feedback_service.initialize()
+            logger.info("Servicio de feedback inicializado correctamente")
+
             # Inicializar sistema de presupuestos si está habilitado
             if settings.enable_budgets:
-                from core.budget import budget_manager
+                pass
 
                 logger.info("Sistema de presupuestos inicializado correctamente")
 
             # Inicializar analizador de prompts
-            from core.prompt_analyzer import prompt_analyzer
 
             logger.info("Analizador de prompts inicializado correctamente")
 
             # Inicializar sistema de caché por dominio
-            from core.domain_cache import domain_cache
 
             logger.info("Sistema de caché por dominio inicializado correctamente")
 
@@ -179,7 +206,6 @@ async def startup_event():
             logger.info("Procesador asíncrono iniciado correctamente")
 
             # Inicializar procesador por lotes
-            from core.batch_processor import batch_processor
 
             logger.info("Procesador por lotes inicializado correctamente")
 

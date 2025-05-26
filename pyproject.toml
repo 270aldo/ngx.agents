@@ -45,6 +45,16 @@ zstandard = "^0.22.0"  # Algoritmo de compresión alternativo
 matplotlib = "^3.8.3"  # Para visualización en scripts de optimización
 tabulate = "^0.9.0"  # Para formateo tabular en scripts de optimización
 
+# Visualización y reportes
+pandas = "^2.2.0"  # Para manipulación de datos
+seaborn = "^0.13.0"  # Para gráficos estadísticos
+pillow = "^10.2.0"  # Para manipulación de imágenes
+numpy = "^1.26.0"  # Para cálculos numéricos
+
+# Métricas y monitoreo
+prometheus-client = "^0.20.0"  # Cliente de Prometheus para exportar métricas
+prometheus-fastapi-instrumentator = "^7.0.0"  # Instrumentación automática para FastAPI
+
 # Dependencias consolidadas de todos los componentes
 [tool.poetry.group.agents]
 optional = true

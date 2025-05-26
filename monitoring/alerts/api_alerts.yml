@@ -1,0 +1,58 @@
+groups:
+  - name: ngx_agents_api_alerts
+    interval: 30s
+    rules:
+      # Alta latencia en requests HTTP
+      - alert: HighHTTPLatency
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(ngx_agents_http_request_duration_seconds_bucket[5m])) 
+            by (endpoint, le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Alta latencia en endpoint {{ $labels.endpoint }}"
+          description: "El percentil 95 de latencia para {{ $labels.endpoint }} es {{ $value }}s (umbral: 2s)"
+      
+      # Tasa de error alta
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(ngx_agents_http_requests_total{status=~"5.."}[5m])) 
+          by (endpoint) 
+          / 
+          sum(rate(ngx_agents_http_requests_total[5m])) 
+          by (endpoint) 
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Alta tasa de errores en {{ $labels.endpoint }}"
+          description: "Tasa de error del {{ $value | humanizePercentage }} en {{ $labels.endpoint }}"
+      
+      # Muchos requests activos
+      - alert: HighActiveRequests
+        expr: ngx_agents_http_requests_active > 100
+        for: 3m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Muchos requests HTTP activos"
+          description: "Hay {{ $value }} requests activos (umbral: 100)"
+      
+      # API no disponible
+      - alert: APIDown
+        expr: up{job="ngx-agents"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: backend
+          page: true
+        annotations:
+          summary: "API de NGX Agents no disponible"
+          description: "La API principal no responde al health check de Prometheus"

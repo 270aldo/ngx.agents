@@ -3,21 +3,21 @@
 Script para corregir el archivo clients/vertex_ai_client_optimized.py
 """
 
-import os
 import re
+
 
 def fix_vertex_ai_client():
     """Corrige el archivo clients/vertex_ai_client_optimized.py"""
-    
+
     # Ruta del archivo
-    file_path = 'clients/vertex_ai_client_optimized.py'
-    
+    file_path = "clients/vertex_ai_client_optimized.py"
+
     # Leer el contenido del archivo
-    with open(file_path, 'r') as f:
+    with open(file_path, "r") as f:
         content = f.read()
-    
+
     # Corregir el decorador with_retries
-    with_retries_pattern = r'def with_retries.*?return decorator'
+    with_retries_pattern = r"def with_retries.*?return decorator"
     with_retries_fixed = '''def with_retries(max_retries=3, base_delay=0.5, backoff_factor=2):
     """
     Decorador para implementar reintentos automáticos con backoff exponencial.
@@ -46,12 +46,12 @@ def fix_vertex_ai_client():
             raise last_exception
         return wrapper
     return decorator'''
-    
+
     # Reemplazar el decorador
     content = re.sub(with_retries_pattern, with_retries_fixed, content, flags=re.DOTALL)
-    
+
     # Corregir la clase ConnectionPool
-    connection_pool_pattern = r'class ConnectionPool:.*?async def execute\(.*?return await func\(\*args, \*\*kwargs\)'
+    connection_pool_pattern = r"class ConnectionPool:.*?async def execute\(.*?return await func\(\*args, \*\*kwargs\)"
     connection_pool_fixed = '''class ConnectionPool:
     """
     Pool de conexiones para servicios de Google Cloud.
@@ -102,12 +102,14 @@ def fix_vertex_ai_client():
         
         async with semaphore:
             return await func(*args, **kwargs)'''
-    
+
     # Reemplazar la clase ConnectionPool
-    content = re.sub(connection_pool_pattern, connection_pool_fixed, content, flags=re.DOTALL)
-    
+    content = re.sub(
+        connection_pool_pattern, connection_pool_fixed, content, flags=re.DOTALL
+    )
+
     # Corregir el método _update_latency_stats
-    latency_stats_pattern = r'async def _update_latency_stats\(.*?latencies\.pop\(0\)'
+    latency_stats_pattern = r"async def _update_latency_stats\(.*?latencies\.pop\(0\)"
     latency_stats_fixed = '''async def _update_latency_stats(self, operation: str, start_time: float):
         """
         Actualiza estadísticas de latencia.
@@ -123,15 +125,18 @@ def fix_vertex_ai_client():
             latencies.append(latency_ms)
             if len(latencies) > 100:
                 latencies.pop(0)'''
-    
+
     # Reemplazar el método _update_latency_stats
-    content = re.sub(latency_stats_pattern, latency_stats_fixed, content, flags=re.DOTALL)
-    
+    content = re.sub(
+        latency_stats_pattern, latency_stats_fixed, content, flags=re.DOTALL
+    )
+
     # Guardar el archivo corregido
-    with open(file_path, 'w') as f:
+    with open(file_path, "w") as f:
         f.write(content)
-    
+
     print(f"Archivo {file_path} corregido exitosamente.")
+
 
 if __name__ == "__main__":
     fix_vertex_ai_client()

@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NGX Agents - Cliente de Streaming SSE</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .input-group {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        #messageInput {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px 0 0 4px;
+            font-size: 16px;
+        }
+        #sendButton {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 0 4px 4px 0;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #sendButton:hover {
+            background-color: #0056b3;
+        }
+        #sendButton:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .auth-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .auth-section input {
+            width: 100%;
+            padding: 8px;
+            margin-top: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #responseContainer {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            background-color: #fafafa;
+        }
+        .response-chunk {
+            margin-bottom: 5px;
+            padding: 5px;
+            background-color: #e9ecef;
+            border-radius: 3px;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .status.connecting {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .status.complete {
+            background-color: #cce5ff;
+            color: #004085;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>NGX Agents - Cliente de Streaming SSE</h1>
+        
+        <div class="auth-section">
+            <h3>Autenticación</h3>
+            <input type="text" id="tokenInput" placeholder="Ingrese su token JWT aquí">
+            <small style="display: block; margin-top: 5px; color: #666;">
+                Obtenga un token haciendo login en /auth/login
+            </small>
+        </div>
+        
+        <div class="input-group">
+            <input 
+                type="text" 
+                id="messageInput" 
+                placeholder="Escribe tu mensaje aquí..."
+                onkeypress="if(event.key === 'Enter') sendMessage()"
+            >
+            <button id="sendButton" onclick="sendMessage()">Enviar</button>
+        </div>
+        
+        <div id="responseContainer">
+            <div style="color: #666; text-align: center;">
+                Las respuestas aparecerán aquí...
+            </div>
+        </div>
+        
+        <div id="status" class="status" style="display: none;"></div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let isStreaming = false;
+        
+        function getAuthToken() {
+            return document.getElementById('tokenInput').value.trim();
+        }
+        
+        function updateStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+            statusEl.style.display = 'block';
+        }
+        
+        function clearResponse() {
+            document.getElementById('responseContainer').innerHTML = '';
+        }
+        
+        function appendResponse(content, isChunk = true) {
+            const container = document.getElementById('responseContainer');
+            
+            if (isChunk) {
+                // Para chunks de contenido, agregar al último elemento o crear uno nuevo
+                let lastChunk = container.lastElementChild;
+                if (!lastChunk || !lastChunk.classList.contains('active-chunk')) {
+                    lastChunk = document.createElement('div');
+                    lastChunk.className = 'response-chunk active-chunk';
+                    container.appendChild(lastChunk);
+                }
+                lastChunk.textContent += content;
+            } else {
+                // Para mensajes de estado, crear un nuevo elemento
+                const div = document.createElement('div');
+                div.className = 'response-chunk';
+                div.textContent = content;
+                container.appendChild(div);
+            }
+            
+            // Auto-scroll al final
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        async function sendMessage() {
+            const token = getAuthToken();
+            if (!token) {
+                alert('Por favor, ingrese un token JWT válido');
+                return;
+            }
+            
+            const message = document.getElementById('messageInput').value.trim();
+            if (!message || isStreaming) return;
+            
+            const button = document.getElementById('sendButton');
+            const input = document.getElementById('messageInput');
+            
+            // Deshabilitar controles
+            button.disabled = true;
+            input.disabled = true;
+            isStreaming = true;
+            
+            // Limpiar respuesta anterior
+            clearResponse();
+            updateStatus('Conectando...', 'connecting');
+            
+            try {
+                // Cerrar conexión anterior si existe
+                if (eventSource) {
+                    eventSource.close();
+                }
+                
+                // Crear el body de la petición
+                const requestBody = {
+                    message: message,
+                    metadata: {
+                        client: 'sse-example',
+                        timestamp: new Date().toISOString()
+                    }
+                };
+                
+                // Iniciar streaming
+                const response = await fetch('http://localhost:8000/stream/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`,
+                        'Accept': 'text/event-stream'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                updateStatus('Conectado. Recibiendo respuesta...', 'connected');
+                
+                // Procesar el stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\\n');
+                    buffer = lines.pop(); // Guardar la última línea incompleta
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            const event = line.substring(6).trim();
+                            console.log('Evento:', event);
+                        } else if (line.startsWith('data:')) {
+                            const data = line.substring(5).trim();
+                            if (data) {
+                                try {
+                                    const parsed = JSON.parse(data);
+                                    handleStreamData(parsed);
+                                } catch (e) {
+                                    console.error('Error parsing data:', e);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                updateStatus('Respuesta completada', 'complete');
+                
+            } catch (error) {
+                console.error('Error:', error);
+                updateStatus(`Error: ${error.message}`, 'error');
+                appendResponse(`Error: ${error.message}`, false);
+            } finally {
+                // Rehabilitar controles
+                button.disabled = false;
+                input.disabled = false;
+                input.value = '';
+                input.focus();
+                isStreaming = false;
+                
+                // Marcar el último chunk como inactivo
+                const activeChunk = document.querySelector('.active-chunk');
+                if (activeChunk) {
+                    activeChunk.classList.remove('active-chunk');
+                }
+            }
+        }
+        
+        function handleStreamData(data) {
+            if (data.type === 'content') {
+                // Chunk de contenido
+                appendResponse(data.content, true);
+            } else if (data.status === 'processing') {
+                // Estado inicial
+                appendResponse('🔄 Procesando...', false);
+            } else if (data.status === 'completed') {
+                // Finalización
+                appendResponse('\\n✅ Respuesta completada', false);
+            } else if (data.status === 'error') {
+                // Error
+                appendResponse(`\\n❌ Error: ${data.error}`, false);
+            }
+        }
+        
+        // Focus inicial en el input
+        document.getElementById('messageInput').focus();
+    </script>
+</body>
+</html>

@@ -1,0 +1,254 @@
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeBackendService
+metadata:
+  name: ngx-agents-backend
+  namespace: ngx-agents
+spec:
+  projectRef:
+    external: agentes-ngx
+  location: global
+  protocol: HTTPS
+  portName: http
+  timeoutSec: 30
+  connectionDraining:
+    drainingTimeoutSec: 60
+  backends:
+  - group:
+      name: ngx-agents-neg
+    balancingMode: RATE
+    maxRatePerEndpoint: 100
+  healthChecks:
+  - name: ngx-agents-health-check
+  cdnPolicy:
+    cacheMode: CACHE_ALL_STATIC
+    defaultTtl: 3600
+    maxTtl: 86400
+    clientTtl: 3600
+    negativeCaching: true
+    negativeCachingPolicy:
+    - code: 404
+      ttl: 300
+    - code: 503
+      ttl: 60
+    serveWhileStale: 86400
+    cacheKeyPolicy:
+      includeHost: true
+      includeProtocol: true
+      includeQueryString: true
+      queryStringWhitelist:
+      - v
+      - w
+      - h
+      - q
+      - f
+    signedUrlCacheMaxAgeSec: 7200
+  customRequestHeaders:
+  - "X-CDN-Enabled:true"
+  customResponseHeaders:
+  - "X-CDN-Cache-Status:{cdn_cache_status}"
+  enableCDN: true
+  logConfig:
+    enable: true
+    sampleRate: 1.0
+  securitySettings:
+    name: ngx-agents-security-policy
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeHealthCheck
+metadata:
+  name: ngx-agents-health-check
+  namespace: ngx-agents
+spec:
+  projectRef:
+    external: agentes-ngx
+  location: global
+  httpHealthCheck:
+    port: 80
+    requestPath: /health
+  checkIntervalSec: 10
+  timeoutSec: 5
+  healthyThreshold: 2
+  unhealthyThreshold: 3
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeURLMap
+metadata:
+  name: ngx-agents-url-map
+  namespace: ngx-agents
+spec:
+  projectRef:
+    external: agentes-ngx
+  location: global
+  defaultService:
+    name: ngx-agents-backend
+  hostRules:
+  - hosts:
+    - "api.ngx-agents.com"
+    pathMatcher: api-paths
+  - hosts:
+    - "cdn.ngx-agents.com"
+    pathMatcher: cdn-paths
+  pathMatchers:
+  - name: api-paths
+    defaultService:
+      name: ngx-agents-backend
+    pathRules:
+    # Static assets with long cache
+    - paths:
+      - "/static/*"
+      - "/assets/*"
+      service:
+        name: ngx-agents-backend
+      routeAction:
+        cdnPolicy:
+          cacheMode: FORCE_CACHE_ALL
+          defaultTtl: 31536000
+    # API endpoints with short cache
+    - paths:
+      - "/api/public/*"
+      service:
+        name: ngx-agents-backend
+      routeAction:
+        cdnPolicy:
+          cacheMode: CACHE_ALL_STATIC
+          defaultTtl: 300
+          signedUrlCacheMaxAgeSec: 0
+    # Real-time endpoints - no cache
+    - paths:
+      - "/api/stream/*"
+      - "/ws/*"
+      service:
+        name: ngx-agents-backend
+      routeAction:
+        cdnPolicy:
+          cacheMode: BYPASS_CACHE
+  - name: cdn-paths
+    defaultService:
+      name: ngx-agents-backend
+    pathRules:
+    # Image optimization endpoint
+    - paths:
+      - "/images/*"
+      service:
+        name: ngx-agents-backend
+      routeAction:
+        cdnPolicy:
+          cacheMode: CACHE_ALL_STATIC
+          defaultTtl: 2592000  # 30 days
+        urlRewrite:
+          pathPrefixRewrite: "/optimize/images"
+    # Reports with authentication
+    - paths:
+      - "/reports/*"
+      service:
+        name: ngx-agents-backend
+      routeAction:
+        cdnPolicy:
+          cacheMode: USE_ORIGIN_HEADERS
+          signedUrlCacheMaxAgeSec: 3600
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeTargetHTTPSProxy
+metadata:
+  name: ngx-agents-https-proxy
+  namespace: ngx-agents
+spec:
+  projectRef:
+    external: agentes-ngx
+  location: global
+  urlMapRef:
+    name: ngx-agents-url-map
+  sslCertificates:
+  - name: ngx-agents-ssl-cert
+  quicOverride: ENABLE
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeGlobalForwardingRule
+metadata:
+  name: ngx-agents-forwarding-rule
+  namespace: ngx-agents
+spec:
+  projectRef:
+    external: agentes-ngx
+  location: global
+  target:
+    targetHTTPSProxyRef:
+      name: ngx-agents-https-proxy
+  portRange: "443"
+  IPProtocol: TCP
+  loadBalancingScheme: EXTERNAL_MANAGED
+  ipVersion: IPV4
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeSecurityPolicy
+metadata:
+  name: ngx-agents-security-policy
+  namespace: ngx-agents
+spec:
+  projectRef:
+    external: agentes-ngx
+  rules:
+  # Rate limiting rule
+  - action: throttle
+    priority: 1000
+    match:
+      versionedExpr: SRC_IPS_V1
+      config:
+        srcIpRanges:
+        - "*"
+    rateLimitOptions:
+      conformAction: allow
+      exceedAction: deny(429)
+      enforceOnKey: IP
+      rateLimitThreshold:
+        count: 100
+        intervalSec: 60
+  # DDoS protection
+  - action: deny(403)
+    priority: 2000
+    match:
+      expr:
+        expression: |
+          origin.region_code == "CN" ||
+          origin.region_code == "RU"
+  # Allow all other traffic
+  - action: allow
+    priority: 10000
+    match:
+      versionedExpr: SRC_IPS_V1
+      config:
+        srcIpRanges:
+        - "*"
+  adaptiveProtectionConfig:
+    layer7DdosDefenseConfig:
+      enable: true
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeManagedSSLCertificate
+metadata:
+  name: ngx-agents-ssl-cert
+  namespace: ngx-agents
+spec:
+  projectRef:
+    external: agentes-ngx
+  managed:
+    domains:
+    - api.ngx-agents.com
+    - cdn.ngx-agents.com
+---
+# Network Endpoint Group for GKE integration
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeNetworkEndpointGroup
+metadata:
+  name: ngx-agents-neg
+  namespace: ngx-agents
+spec:
+  projectRef:
+    external: agentes-ngx
+  location: us-central1-a
+  networkRef:
+    external: default
+  subnetworkRef:
+    external: default
+  defaultPort: 80
+  networkEndpointType: GCE_VM_IP_PORT

@@ -8,6 +8,6 @@ y otras funcionalidades transversales de la API.
 from .auth import get_api_key, APIKeyMiddleware
 
 __all__ = [
-    'get_api_key',
-    'APIKeyMiddleware',
+    "get_api_key",
+    "APIKeyMiddleware",
 ]

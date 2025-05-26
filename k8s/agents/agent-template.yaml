@@ -1,0 +1,141 @@
+# Template for deploying NGX Agents
+# Use this template to create new agent deployments
+#
+# Replace the following placeholders:
+# - AGENT_NAME: Name of the agent (e.g., elite-training-strategist)
+# - AGENT_DISPLAY_NAME: Display name (e.g., Elite Training Strategist)
+# - AGENT_PORT: Port number for the agent (e.g., 9002)
+# - AGENT_TYPE: Type of agent (specialist, coordinator, infrastructure)
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: AGENT_NAME
+  namespace: ngx-agents
+  labels:
+    app: AGENT_NAME
+    component: agent
+    agent-type: AGENT_TYPE
+spec:
+  type: ClusterIP
+  ports:
+    - port: AGENT_PORT
+      targetPort: AGENT_PORT
+      protocol: TCP
+      name: agent
+  selector:
+    app: AGENT_NAME
+    component: agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: AGENT_NAME
+  namespace: ngx-agents
+  labels:
+    app: AGENT_NAME
+    component: agent
+    agent-type: AGENT_TYPE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: AGENT_NAME
+      component: agent
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: AGENT_NAME
+        component: agent
+        agent-type: AGENT_TYPE
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ngx-agents-sa
+      containers:
+      - name: AGENT_NAME
+        image: gcr.io/PROJECT_ID/ngx-agent-AGENT_NAME:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: AGENT_PORT
+          name: agent
+          protocol: TCP
+        - containerPort: 8001
+          name: metrics
+          protocol: TCP
+        env:
+        - name: AGENT_NAME
+          value: "AGENT_NAME"
+        - name: AGENT_PORT
+          value: "AGENT_PORT"
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: "/var/secrets/gcp/gcp-key.json"
+        envFrom:
+        - configMapRef:
+            name: ngx-agents-config
+        - configMapRef:
+            name: ngx-agents-env
+        - secretRef:
+            name: ngx-agents-secrets
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        volumeMounts:
+        - name: gcp-credentials
+          mountPath: /var/secrets/gcp
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: agent
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: agent
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      - name: gcp-credentials
+        secret:
+          secretName: gcp-credentials
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: AGENT_NAME-hpa
+  namespace: ngx-agents
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: AGENT_NAME
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

@@ -12,9 +12,9 @@ from core.agent_card import AgentCard
 from core.skill import Skill
 
 __all__ = [
-    'settings',
-    'setup_logging',
-    'get_logger',
-    'AgentCard',
-    'Skill',
+    "settings",
+    "setup_logging",
+    "get_logger",
+    "AgentCard",
+    "Skill",
 ]

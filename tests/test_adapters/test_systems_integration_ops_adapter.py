@@ -4,9 +4,10 @@ Pruebas unitarias para el adaptador SystemsIntegrationOps.
 
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from datetime import datetime
 
-from infrastructure.adapters.systems_integration_ops_adapter import SystemsIntegrationOpsAdapter
+from infrastructure.adapters.systems_integration_ops_adapter import (
+    SystemsIntegrationOpsAdapter,
+)
 
 
 class TestSystemsIntegrationOpsAdapter:
@@ -15,7 +16,10 @@ class TestSystemsIntegrationOpsAdapter:
     @pytest.fixture
     def adapter(self):
         """Fixture que proporciona una instancia del adaptador."""
-        with patch('infrastructure.adapters.systems_integration_ops_adapter.SystemsIntegrationOps.__init__', return_value=None):
+        with patch(
+            "infrastructure.adapters.systems_integration_ops_adapter.SystemsIntegrationOps.__init__",
+            return_value=None,
+        ):
             adapter = SystemsIntegrationOpsAdapter()
             adapter._generate_response = AsyncMock(return_value="Respuesta simulada")
             return adapter
@@ -23,7 +27,7 @@ class TestSystemsIntegrationOpsAdapter:
     def test_create_default_context(self, adapter):
         """Prueba la creación del contexto predeterminado."""
         context = adapter._create_default_context()
-        
+
         assert "conversation_history" in context
         assert "user_profile" in context
         assert "integration_requests" in context
@@ -36,13 +40,13 @@ class TestSystemsIntegrationOpsAdapter:
     def test_get_intent_to_query_type_mapping(self, adapter):
         """Prueba el mapeo de intenciones a tipos de consulta."""
         mapping = adapter._get_intent_to_query_type_mapping()
-        
+
         assert "integración" in mapping
         assert "automatización" in mapping
         assert "api" in mapping
         assert "infraestructura" in mapping
         assert "pipeline" in mapping
-        
+
         assert mapping["integración"] == "integration_request"
         assert mapping["automatización"] == "automation_request"
         assert mapping["api"] == "api_request"
@@ -52,29 +56,41 @@ class TestSystemsIntegrationOpsAdapter:
     def test_determine_query_type(self, adapter):
         """Prueba la determinación del tipo de consulta."""
         # Prueba para integración de sistemas
-        query_type = adapter._determine_query_type("Necesito integrar mi aplicación con Apple Health")
+        query_type = adapter._determine_query_type(
+            "Necesito integrar mi aplicación con Apple Health"
+        )
         assert query_type == "integration_request"
-        
+
         # Prueba para automatización de flujos de trabajo
-        query_type = adapter._determine_query_type("¿Cómo puedo automatizar el envío de notificaciones?")
+        query_type = adapter._determine_query_type(
+            "¿Cómo puedo automatizar el envío de notificaciones?"
+        )
         assert query_type == "automation_request"
-        
+
         # Prueba para gestión de APIs
-        query_type = adapter._determine_query_type("Necesito información sobre la API de Fitbit")
+        query_type = adapter._determine_query_type(
+            "Necesito información sobre la API de Fitbit"
+        )
         assert query_type == "api_request"
-        
+
         # Prueba para optimización de infraestructura
-        query_type = adapter._determine_query_type("¿Qué arquitectura recomendarías para una app de fitness?")
+        query_type = adapter._determine_query_type(
+            "¿Qué arquitectura recomendarías para una app de fitness?"
+        )
         assert query_type == "infrastructure_request"
-        
+
         # Prueba para diseño de pipelines de datos
-        query_type = adapter._determine_query_type("Necesito un pipeline para procesar datos de entrenamiento")
+        query_type = adapter._determine_query_type(
+            "Necesito un pipeline para procesar datos de entrenamiento"
+        )
         assert query_type == "data_pipeline_request"
-        
+
         # Prueba para palabras clave adicionales de integración
-        query_type = adapter._determine_query_type("¿Cómo puedo conectar mi sistema con otros servicios?")
+        query_type = adapter._determine_query_type(
+            "¿Cómo puedo conectar mi sistema con otros servicios?"
+        )
         assert query_type == "integration_request"
-        
+
         # Prueba para consulta sin tipo específico (debería devolver general_request)
         query_type = adapter._determine_query_type("¿Puedes ayudarme con mi proyecto?")
         assert query_type == "general_request"
@@ -88,9 +104,11 @@ class TestSystemsIntegrationOpsAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "integration_request"
@@ -108,9 +126,11 @@ class TestSystemsIntegrationOpsAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "automation_request"
@@ -128,9 +148,11 @@ class TestSystemsIntegrationOpsAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "api_request"
@@ -148,9 +170,11 @@ class TestSystemsIntegrationOpsAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "infrastructure_request"
@@ -168,9 +192,11 @@ class TestSystemsIntegrationOpsAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "data_pipeline_request"
@@ -188,9 +214,11 @@ class TestSystemsIntegrationOpsAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "general_request"
@@ -208,12 +236,16 @@ class TestSystemsIntegrationOpsAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
+
         # Simular un error en _determine_query_type
-        adapter._determine_query_type = MagicMock(side_effect=Exception("Error simulado"))
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+        adapter._determine_query_type = MagicMock(
+            side_effect=Exception("Error simulado")
+        )
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is False
         assert "error" in result
         assert result["error"] == "Error simulado"
@@ -225,9 +257,11 @@ class TestSystemsIntegrationOpsAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_integration_request(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_integration_request(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "systems" in result
@@ -247,9 +281,11 @@ class TestSystemsIntegrationOpsAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_automation_request(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_automation_request(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "automation_plan" in result
@@ -266,9 +302,11 @@ class TestSystemsIntegrationOpsAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_api_request(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_api_request(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "apis" in result
@@ -288,9 +326,11 @@ class TestSystemsIntegrationOpsAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_infrastructure_request(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_infrastructure_request(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "infrastructure_report" in result
@@ -298,7 +338,9 @@ class TestSystemsIntegrationOpsAdapter:
         assert len(result["context"]["infrastructure_requests"]) == 1
         assert result["context"]["infrastructure_requests"][0]["query"] == query
         assert "date" in result["context"]["infrastructure_requests"][0]
-        assert "infrastructure_report" in result["context"]["infrastructure_requests"][0]
+        assert (
+            "infrastructure_report" in result["context"]["infrastructure_requests"][0]
+        )
 
     @pytest.mark.asyncio
     async def test_handle_data_pipeline_request(self, adapter):
@@ -307,9 +349,11 @@ class TestSystemsIntegrationOpsAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_data_pipeline_request(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_data_pipeline_request(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "pipeline_design" in result
@@ -326,9 +370,11 @@ class TestSystemsIntegrationOpsAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_general_request(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_general_request(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "context" in result
@@ -342,18 +388,20 @@ class TestSystemsIntegrationOpsAdapter:
         """Prueba el método _generate_response."""
         prompt = "Este es un prompt de prueba"
         context = adapter._create_default_context()
-        
+
         # Restablecer el mock para esta prueba específica
         adapter._generate_response.reset_mock()
         adapter._generate_response.side_effect = None
-        adapter._generate_response.return_value = "Respuesta generada para el prompt de prueba"
-        
+        adapter._generate_response.return_value = (
+            "Respuesta generada para el prompt de prueba"
+        )
+
         result = await adapter._generate_response(prompt, context)
-        
+
         assert result == "Respuesta generada para el prompt de prueba"
-        
+
         # Probar manejo de errores
         adapter._generate_response.side_effect = Exception("Error en la generación")
         result = await adapter._generate_response(prompt, context)
-        
+
         assert "Error al generar respuesta" in result

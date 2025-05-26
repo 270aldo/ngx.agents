@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 # Modelos para la skill de creación de plan de comidas
 class CreateMealPlanInput(BaseModel):
     """Esquema de entrada para la skill de creación de plan de comidas."""
+
     input_text: str = Field(..., description="Texto de entrada del usuario")
     user_profile: Optional[Dict[str, Any]] = Field(
         None, description="Perfil del usuario con información relevante"
@@ -29,6 +30,7 @@ class CreateMealPlanInput(BaseModel):
 
 class MealItem(BaseModel):
     """Modelo para un elemento de comida en un plan de alimentación."""
+
     name: str = Field(..., description="Nombre del alimento")
     portion: str = Field(..., description="Porción o cantidad")
     calories: Optional[int] = Field(None, description="Calorías aproximadas")
@@ -37,6 +39,7 @@ class MealItem(BaseModel):
 
 class Meal(BaseModel):
     """Modelo para una comida en un plan de alimentación."""
+
     name: str = Field(..., description="Nombre de la comida (desayuno, almuerzo, etc.)")
     time: str = Field(..., description="Hora recomendada")
     items: List[MealItem] = Field(..., description="Elementos de la comida")
@@ -45,10 +48,9 @@ class Meal(BaseModel):
 
 class CreateMealPlanOutput(BaseModel):
     """Esquema de salida para la skill de creación de plan de comidas."""
+
     daily_plan: List[Meal] = Field(..., description="Plan diario de comidas")
-    total_calories: Optional[int] = Field(
-        None, description="Total de calorías diarias"
-    )
+    total_calories: Optional[int] = Field(None, description="Total de calorías diarias")
     macronutrient_distribution: Optional[Dict[str, Any]] = Field(
         None, description="Distribución de macronutrientes"
     )
@@ -61,6 +63,7 @@ class CreateMealPlanOutput(BaseModel):
 # Modelos para la skill de recomendación de suplementos
 class RecommendSupplementsInput(BaseModel):
     """Esquema de entrada para la skill de recomendación de suplementos."""
+
     input_text: str = Field(..., description="Texto de entrada del usuario")
     user_profile: Optional[Dict[str, Any]] = Field(
         None, description="Perfil del usuario con información relevante"
@@ -71,13 +74,12 @@ class RecommendSupplementsInput(BaseModel):
     current_supplements: Optional[List[str]] = Field(
         None, description="Suplementos actuales del usuario"
     )
-    goals: Optional[List[str]] = Field(
-        None, description="Objetivos del usuario"
-    )
+    goals: Optional[List[str]] = Field(None, description="Objetivos del usuario")
 
 
 class Supplement(BaseModel):
     """Modelo para un suplemento recomendado."""
+
     name: str = Field(..., description="Nombre del suplemento")
     dosage: str = Field(..., description="Dosis recomendada")
     timing: str = Field(..., description="Momento óptimo de consumo")
@@ -92,6 +94,7 @@ class Supplement(BaseModel):
 
 class RecommendSupplementsOutput(BaseModel):
     """Esquema de salida para la skill de recomendación de suplementos."""
+
     supplements: List[Supplement] = Field(..., description="Suplementos recomendados")
     general_recommendations: str = Field(
         ..., description="Recomendaciones generales sobre suplementación"
@@ -102,6 +105,7 @@ class RecommendSupplementsOutput(BaseModel):
 # Modelos para la skill de análisis de biomarcadores
 class AnalyzeBiomarkersInput(BaseModel):
     """Esquema de entrada para la skill de análisis de biomarcadores."""
+
     input_text: str = Field(..., description="Texto de entrada del usuario")
     biomarkers: Dict[str, Any] = Field(
         ..., description="Biomarcadores del usuario a analizar"
@@ -116,11 +120,10 @@ class AnalyzeBiomarkersInput(BaseModel):
 
 class BiomarkerAnalysis(BaseModel):
     """Modelo para el análisis de un biomarcador."""
+
     name: str = Field(..., description="Nombre del biomarcador")
     value: Any = Field(..., description="Valor del biomarcador")
-    reference_range: Optional[str] = Field(
-        None, description="Rango de referencia"
-    )
+    reference_range: Optional[str] = Field(None, description="Rango de referencia")
     status: str = Field(..., description="Estado (normal, bajo, alto)")
     interpretation: str = Field(..., description="Interpretación del valor")
     nutritional_implications: List[str] = Field(
@@ -133,6 +136,7 @@ class BiomarkerAnalysis(BaseModel):
 
 class AnalyzeBiomarkersOutput(BaseModel):
     """Esquema de salida para la skill de análisis de biomarcadores."""
+
     analyses: List[BiomarkerAnalysis] = Field(
         ..., description="Análisis de biomarcadores"
     )
@@ -150,6 +154,7 @@ class AnalyzeBiomarkersOutput(BaseModel):
 # Modelos para la skill de planificación de crononutrición
 class PlanChrononutritionInput(BaseModel):
     """Esquema de entrada para la skill de planificación de crononutrición."""
+
     input_text: str = Field(..., description="Texto de entrada del usuario")
     user_profile: Optional[Dict[str, Any]] = Field(
         None, description="Perfil del usuario con información relevante"
@@ -167,7 +172,10 @@ class PlanChrononutritionInput(BaseModel):
 
 class NutritionTimeWindow(BaseModel):
     """Modelo para una ventana de tiempo nutricional."""
-    name: str = Field(..., description="Nombre de la ventana (ej. 'Alimentación', 'Ayuno')")
+
+    name: str = Field(
+        ..., description="Nombre de la ventana (ej. 'Alimentación', 'Ayuno')"
+    )
     start_time: str = Field(..., description="Hora de inicio")
     end_time: str = Field(..., description="Hora de fin")
     description: str = Field(..., description="Descripción de la ventana")
@@ -177,13 +185,12 @@ class NutritionTimeWindow(BaseModel):
     recommended_foods: Optional[List[str]] = Field(
         None, description="Alimentos recomendados"
     )
-    foods_to_avoid: Optional[List[str]] = Field(
-        None, description="Alimentos a evitar"
-    )
+    foods_to_avoid: Optional[List[str]] = Field(None, description="Alimentos a evitar")
 
 
 class PlanChrononutritionOutput(BaseModel):
     """Esquema de salida para la skill de planificación de crononutrición."""
+
     time_windows: List[NutritionTimeWindow] = Field(
         ..., description="Ventanas de tiempo nutricionales"
     )
@@ -207,6 +214,7 @@ class PlanChrononutritionOutput(BaseModel):
 # Artefactos
 class MealPlanArtifact(BaseModel):
     """Artefacto para un plan de comidas."""
+
     plan_id: str = Field(..., description="ID único del plan de comidas")
     created_at: str = Field(..., description="Timestamp de creación")
     total_meals: int = Field(..., description="Número total de comidas")
@@ -216,16 +224,16 @@ class MealPlanArtifact(BaseModel):
 
 class SupplementRecommendationArtifact(BaseModel):
     """Artefacto para recomendaciones de suplementos."""
+
     recommendation_id: str = Field(..., description="ID único de la recomendación")
     created_at: str = Field(..., description="Timestamp de creación")
     supplement_count: int = Field(..., description="Número de suplementos recomendados")
-    based_on_biomarkers: bool = Field(
-        ..., description="Si se basó en biomarcadores"
-    )
+    based_on_biomarkers: bool = Field(..., description="Si se basó en biomarcadores")
 
 
 class BiomarkerAnalysisArtifact(BaseModel):
     """Artefacto para análisis de biomarcadores."""
+
     analysis_id: str = Field(..., description="ID único del análisis")
     created_at: str = Field(..., description="Timestamp de creación")
     biomarker_count: int = Field(..., description="Número de biomarcadores analizados")
@@ -236,17 +244,18 @@ class BiomarkerAnalysisArtifact(BaseModel):
 
 class ChrononutritionPlanArtifact(BaseModel):
     """Artefacto para un plan de crononutrición."""
+
     plan_id: str = Field(..., description="ID único del plan")
     created_at: str = Field(..., description="Timestamp de creación")
     window_count: int = Field(..., description="Número de ventanas nutricionales")
     fasting_hours: Optional[int] = Field(
         None, description="Horas de ayuno recomendadas"
     )
-    
-    
+
     # Modelos para la skill de análisis de imágenes de alimentos
     class AnalyzeFoodImageInput(BaseModel):
         """Esquema de entrada para la skill de análisis de imágenes de alimentos."""
+
         image_data: Union[str, Dict[str, Any]] = Field(
             ..., description="Datos de la imagen (base64, URL o ruta de archivo)"
         )
@@ -259,38 +268,38 @@ class ChrononutritionPlanArtifact(BaseModel):
         dietary_preferences: Optional[List[str]] = Field(
             None, description="Preferencias dietéticas del usuario"
         )
-    
-    
+
     class NutrientInfo(BaseModel):
         """Modelo para información nutricional de un alimento."""
+
         name: str = Field(..., description="Nombre del nutriente")
         amount: str = Field(..., description="Cantidad del nutriente")
         unit: str = Field(..., description="Unidad de medida")
         daily_value_percent: Optional[float] = Field(
             None, description="Porcentaje del valor diario recomendado"
         )
-    
-    
+
     class FoodItem(BaseModel):
         """Modelo para un alimento identificado en la imagen."""
+
         name: str = Field(..., description="Nombre del alimento")
-        confidence_score: float = Field(..., description="Puntuación de confianza (0.0-1.0)")
+        confidence_score: float = Field(
+            ..., description="Puntuación de confianza (0.0-1.0)"
+        )
         estimated_calories: Optional[str] = Field(
             None, description="Calorías estimadas"
         )
-        estimated_portion: Optional[str] = Field(
-            None, description="Porción estimada"
-        )
+        estimated_portion: Optional[str] = Field(None, description="Porción estimada")
         macronutrients: Optional[Dict[str, str]] = Field(
             None, description="Macronutrientes estimados"
         )
         nutrients: Optional[List[NutrientInfo]] = Field(
             None, description="Información nutricional detallada"
         )
-    
-    
+
     class AnalyzeFoodImageOutput(BaseModel):
         """Esquema de salida para la skill de análisis de imágenes de alimentos."""
+
         identified_foods: List[FoodItem] = Field(
             ..., description="Alimentos identificados en la imagen"
         )
@@ -312,10 +321,10 @@ class ChrononutritionPlanArtifact(BaseModel):
         alternatives: Optional[List[Dict[str, str]]] = Field(
             None, description="Alternativas más saludables"
         )
-    
-    
+
     class FoodImageAnalysisArtifact(BaseModel):
         """Artefacto para análisis de imágenes de alimentos."""
+
         analysis_id: str = Field(..., description="ID único del análisis")
         created_at: str = Field(..., description="Timestamp de creación")
         food_count: int = Field(..., description="Número de alimentos identificados")
@@ -325,3 +334,62 @@ class ChrononutritionPlanArtifact(BaseModel):
         processed_image_url: Optional[str] = Field(
             None, description="URL de la imagen procesada con anotaciones"
         )
+
+
+# Modelos para la skill de sincronización con MyFitnessPal
+class SyncNutritionDataInput(BaseModel):
+    """Esquema de entrada para sincronización de datos nutricionales."""
+
+    user_id: str = Field(..., description="ID del usuario NGX")
+    days_back: int = Field(7, description="Número de días hacia atrás para sincronizar")
+    platform: str = Field("myfitnesspal", description="Plataforma de nutrición")
+    force_refresh: bool = Field(False, description="Forzar actualización de datos")
+
+
+class SyncNutritionDataOutput(BaseModel):
+    """Esquema de salida para sincronización de datos nutricionales."""
+
+    success: bool = Field(..., description="Si la sincronización fue exitosa")
+    days_synced: int = Field(..., description="Número de días sincronizados")
+    meals_synced: int = Field(..., description="Número de comidas sincronizadas")
+    foods_synced: int = Field(..., description="Número de alimentos sincronizados")
+    summary: Dict[str, Any] = Field(..., description="Resumen de datos nutricionales")
+    insights: List[str] = Field(..., description="Insights nutricionales generados")
+    error_message: Optional[str] = Field(None, description="Mensaje de error si falló")
+
+
+# Modelos para la skill de análisis de tendencias nutricionales
+class AnalyzeNutritionTrendsInput(BaseModel):
+    """Esquema de entrada para análisis de tendencias nutricionales."""
+
+    user_id: str = Field(..., description="ID del usuario NGX")
+    days: int = Field(30, description="Número de días para analizar")
+    metrics: List[str] = Field(
+        ["calories", "protein", "carbs", "fat"], description="Métricas a analizar"
+    )
+
+
+class NutritionTrend(BaseModel):
+    """Modelo para una tendencia nutricional."""
+
+    metric: str = Field(..., description="Métrica analizada")
+    average: float = Field(..., description="Promedio en el período")
+    trend: str = Field(
+        ..., description="Dirección de la tendencia: increasing, decreasing, stable"
+    )
+    variation: float = Field(..., description="Porcentaje de variación")
+    recommendation: str = Field(..., description="Recomendación basada en la tendencia")
+
+
+class AnalyzeNutritionTrendsOutput(BaseModel):
+    """Esquema de salida para análisis de tendencias nutricionales."""
+
+    trends: List[NutritionTrend] = Field(..., description="Tendencias analizadas")
+    overall_compliance: float = Field(
+        ..., description="Porcentaje de cumplimiento general"
+    )
+    macro_balance: Dict[str, float] = Field(
+        ..., description="Balance de macronutrientes"
+    )
+    recommendations: List[str] = Field(..., description="Recomendaciones generales")
+    needs_adjustment: bool = Field(..., description="Si el plan necesita ajustes")

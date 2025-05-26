@@ -1,3 +1,5 @@
+from core.logging_config import get_logger
+
 """
 Ejemplo de integración con OpenAI Codex para NGX Agents.
 
@@ -6,7 +8,7 @@ en el desarrollo de nuevas funcionalidades para NGX Agents.
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -14,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 # Ejemplo de clase para demostrar el estilo de código
+logger = get_logger(__name__)
+
+
 class CodexAssistant:
     """
     Asistente para desarrollo con Codex.
@@ -106,10 +111,10 @@ if __name__ == "__main__":
     """
 
     generated_code = assistant.generate_code(prompt)
-    print("\nCódigo generado:")
-    print("-" * 50)
-    print(generated_code)
-    print("-" * 50)
+    logger.info("\nCódigo generado:")
+    logger.info("-" * 50)
+    logger.info(generated_code)
+    logger.info("-" * 50)
 
     # Analizar código existente
     sample_code = """
@@ -124,8 +129,8 @@ if __name__ == "__main__":
     """
 
     analysis = assistant.analyze_code(sample_code)
-    print("\nAnálisis de código:")
-    print("-" * 50)
+    logger.info("\nAnálisis de código:")
+    logger.info("-" * 50)
     for key, value in analysis.items():
-        print(f"{key}: {value}")
-    print("-" * 50)
+        logger.info(f"{key}: {value}")
+    logger.info("-" * 50)

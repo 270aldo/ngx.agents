@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 # Modelos para la skill de análisis biométrico
 class BiometricAnalysisInput(BaseModel):
     """Esquema de entrada para la skill de análisis biométrico."""
+
     input_text: str = Field(..., description="Texto de entrada del usuario")
     biometric_data: Dict[str, Any] = Field(
         ..., description="Datos biométricos del usuario a analizar"
@@ -23,16 +24,26 @@ class BiometricAnalysisInput(BaseModel):
 
 class BiometricAnalysisOutput(BaseModel):
     """Esquema de salida para la skill de análisis biométrico."""
-    interpretation: str = Field(..., description="Interpretación general de los datos biométricos")
-    main_insights: List[str] = Field(..., description="Principales insights identificados")
+
+    interpretation: str = Field(
+        ..., description="Interpretación general de los datos biométricos"
+    )
+    main_insights: List[str] = Field(
+        ..., description="Principales insights identificados"
+    )
     patterns: List[str] = Field(..., description="Patrones relevantes identificados")
-    recommendations: List[str] = Field(..., description="Recomendaciones personalizadas")
-    areas_for_improvement: List[str] = Field(..., description="Áreas de mejora identificadas")
+    recommendations: List[str] = Field(
+        ..., description="Recomendaciones personalizadas"
+    )
+    areas_for_improvement: List[str] = Field(
+        ..., description="Áreas de mejora identificadas"
+    )
 
 
 # Modelos para la skill de reconocimiento de patrones
 class PatternRecognitionInput(BaseModel):
     """Esquema de entrada para la skill de reconocimiento de patrones."""
+
     input_text: str = Field(..., description="Texto de entrada del usuario")
     biometric_data: Dict[str, Any] = Field(
         ..., description="Datos biométricos del usuario a analizar"
@@ -44,6 +55,7 @@ class PatternRecognitionInput(BaseModel):
 
 class PatternRecognitionOutput(BaseModel):
     """Esquema de salida para la skill de reconocimiento de patrones."""
+
     identified_patterns: List[Dict[str, Any]] = Field(
         ..., description="Patrones identificados en los datos biométricos"
     )
@@ -61,6 +73,7 @@ class PatternRecognitionOutput(BaseModel):
 # Modelos para la skill de identificación de tendencias
 class TrendIdentificationInput(BaseModel):
     """Esquema de entrada para la skill de identificación de tendencias."""
+
     input_text: str = Field(..., description="Texto de entrada del usuario")
     biometric_data: Dict[str, Any] = Field(
         ..., description="Datos biométricos del usuario a analizar"
@@ -72,6 +85,7 @@ class TrendIdentificationInput(BaseModel):
 
 class TrendIdentificationOutput(BaseModel):
     """Esquema de salida para la skill de identificación de tendencias."""
+
     trends: List[Dict[str, Any]] = Field(
         ..., description="Tendencias identificadas en los datos biométricos"
     )
@@ -92,6 +106,7 @@ class TrendIdentificationOutput(BaseModel):
 # Modelos para la skill de visualización de datos
 class DataVisualizationInput(BaseModel):
     """Esquema de entrada para la skill de visualización de datos."""
+
     input_text: str = Field(..., description="Texto de entrada del usuario")
     biometric_data: Dict[str, Any] = Field(
         ..., description="Datos biométricos del usuario a visualizar"
@@ -109,12 +124,11 @@ class DataVisualizationInput(BaseModel):
 
 class DataVisualizationOutput(BaseModel):
     """Esquema de salida para la skill de visualización de datos."""
+
     visualization_url: str = Field(
         ..., description="URL o ruta a la visualización generada"
     )
-    visualization_type: str = Field(
-        ..., description="Tipo de visualización generada"
-    )
+    visualization_type: str = Field(..., description="Tipo de visualización generada")
     metrics_included: List[str] = Field(
         ..., description="Métricas incluidas en la visualización"
     )
@@ -129,6 +143,7 @@ class DataVisualizationOutput(BaseModel):
 # Artefactos
 class BiometricAnalysisArtifact(BaseModel):
     """Artefacto para el análisis biométrico."""
+
     analysis_id: str = Field(..., description="ID único del análisis")
     analysis_type: str = Field(..., description="Tipo de análisis realizado")
     metrics_analyzed: List[str] = Field(..., description="Métricas analizadas")
@@ -138,6 +153,7 @@ class BiometricAnalysisArtifact(BaseModel):
 
 class BiometricVisualizationArtifact(BaseModel):
     """Artefacto para la visualización de datos biométricos."""
+
     visualization_id: str = Field(..., description="ID único de la visualización")
     visualization_type: str = Field(..., description="Tipo de visualización")
     metrics_included: List[str] = Field(..., description="Métricas incluidas")
@@ -148,11 +164,13 @@ class BiometricVisualizationArtifact(BaseModel):
 # Modelos para la skill de análisis de imágenes biométricas
 class BiometricImageAnalysisInput(BaseModel):
     """Esquema de entrada para la skill de análisis de imágenes biométricas."""
+
     image_data: Union[str, Dict[str, Any]] = Field(
         ..., description="Datos de la imagen (base64, URL o ruta de archivo)"
     )
     analysis_type: Optional[str] = Field(
-        "full", description="Tipo de análisis a realizar (full, body, face, posture, etc.)"
+        "full",
+        description="Tipo de análisis a realizar (full, body, face, posture, etc.)",
     )
     user_profile: Optional[Dict[str, Any]] = Field(
         None, description="Perfil del usuario con información relevante"
@@ -161,19 +179,37 @@ class BiometricImageAnalysisInput(BaseModel):
 
 class BiometricImageAnalysisOutput(BaseModel):
     """Esquema de salida para la skill de análisis de imágenes biométricas."""
-    analysis_summary: str = Field(..., description="Resumen del análisis de la imagen biométrica")
-    detected_metrics: Dict[str, Any] = Field(..., description="Métricas biométricas detectadas en la imagen")
-    visual_indicators: List[Dict[str, Any]] = Field(..., description="Indicadores visuales identificados")
-    health_insights: List[str] = Field(..., description="Insights de salud basados en el análisis visual")
-    recommendations: List[str] = Field(..., description="Recomendaciones basadas en el análisis visual")
-    confidence_score: float = Field(..., description="Puntuación de confianza del análisis (0.0-1.0)")
+
+    analysis_summary: str = Field(
+        ..., description="Resumen del análisis de la imagen biométrica"
+    )
+    detected_metrics: Dict[str, Any] = Field(
+        ..., description="Métricas biométricas detectadas en la imagen"
+    )
+    visual_indicators: List[Dict[str, Any]] = Field(
+        ..., description="Indicadores visuales identificados"
+    )
+    health_insights: List[str] = Field(
+        ..., description="Insights de salud basados en el análisis visual"
+    )
+    recommendations: List[str] = Field(
+        ..., description="Recomendaciones basadas en el análisis visual"
+    )
+    confidence_score: float = Field(
+        ..., description="Puntuación de confianza del análisis (0.0-1.0)"
+    )
 
 
 class BiometricImageArtifact(BaseModel):
     """Artefacto para el análisis de imágenes biométricas."""
+
     analysis_id: str = Field(..., description="ID único del análisis")
     image_type: str = Field(..., description="Tipo de imagen analizada")
     analysis_type: str = Field(..., description="Tipo de análisis realizado")
     timestamp: float = Field(..., description="Timestamp del análisis")
-    annotations: Optional[Dict[str, Any]] = Field(None, description="Anotaciones en la imagen")
-    processed_image_url: Optional[str] = Field(None, description="URL de la imagen procesada con anotaciones")
+    annotations: Optional[Dict[str, Any]] = Field(
+        None, description="Anotaciones en la imagen"
+    )
+    processed_image_url: Optional[str] = Field(
+        None, description="URL de la imagen procesada con anotaciones"
+    )

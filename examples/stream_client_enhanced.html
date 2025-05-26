@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NGX Agents - Cliente de Streaming Mejorado</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        .chat-container {
+            display: flex;
+            gap: 20px;
+            height: 600px;
+        }
+        
+        .main-chat {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .side-panel {
+            flex: 1;
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        #messages {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            background: #fafafa;
+        }
+        
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            animation: fadeIn 0.3s ease-in;
+        }
+        
+        .user-message {
+            background: #007bff;
+            color: white;
+            margin-left: 20%;
+            text-align: right;
+        }
+        
+        .agent-message {
+            background: #e9ecef;
+            color: #333;
+            margin-right: 20%;
+        }
+        
+        .status-message {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+            text-align: center;
+            font-style: italic;
+            margin: 10px 20%;
+        }
+        
+        .intent-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        
+        .agent-info {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+        
+        #messageInput {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        #sendButton {
+            background: #007bff;
+            color: white;
+        }
+        
+        #sendButton:hover:not(:disabled) {
+            background: #0056b3;
+        }
+        
+        #sendButton:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .metrics {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .metric-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .typing-indicator {
+            display: none;
+            padding: 10px;
+            text-align: center;
+            color: #666;
+        }
+        
+        .typing-indicator.active {
+            display: block;
+        }
+        
+        .dots {
+            display: inline-block;
+        }
+        
+        .dots span {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #666;
+            margin: 0 2px;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        
+        .dots span:nth-child(1) { animation-delay: -0.32s; }
+        .dots span:nth-child(2) { animation-delay: -0.16s; }
+        
+        @keyframes bounce {
+            0%, 80%, 100% {
+                transform: scale(0);
+            }
+            40% {
+                transform: scale(1);
+            }
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .agent-card {
+            background: white;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        
+        .agent-card h4 {
+            margin: 0 0 5px 0;
+            color: #333;
+        }
+        
+        .agent-card p {
+            margin: 0;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .artifacts-container {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 5px;
+        }
+        
+        .artifact-item {
+            margin: 5px 0;
+            padding: 5px;
+            background: white;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 NGX Agents - Cliente de Streaming Mejorado</h1>
+        
+        <div class="chat-container">
+            <div class="main-chat">
+                <div id="messages"></div>
+                
+                <div class="typing-indicator" id="typingIndicator">
+                    <div class="dots">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                    <span id="typingText">Procesando...</span>
+                </div>
+                
+                <div class="input-container">
+                    <input 
+                        type="text" 
+                        id="messageInput" 
+                        placeholder="Escribe tu mensaje aquí..."
+                        onkeypress="handleKeyPress(event)"
+                    />
+                    <button id="sendButton" onclick="sendMessage()">Enviar</button>
+                </div>
+            </div>
+            
+            <div class="side-panel">
+                <h3>📊 Información de Procesamiento</h3>
+                
+                <div id="intentInfo" style="display:none;">
+                    <h4>🎯 Análisis de Intención</h4>
+                    <div id="intentDetails"></div>
+                </div>
+                
+                <div id="agentsInfo" style="display:none;">
+                    <h4>👥 Agentes Consultados</h4>
+                    <div id="agentsList"></div>
+                </div>
+                
+                <div class="metrics">
+                    <h4>📈 Métricas</h4>
+                    <div class="metric-item">
+                        <span>Estado:</span>
+                        <span id="connectionStatus">Desconectado</span>
+                    </div>
+                    <div class="metric-item">
+                        <span>Chunks recibidos:</span>
+                        <span id="chunkCount">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span>Tiempo de respuesta:</span>
+                        <span id="responseTime">-</span>
+                    </div>
+                    <div class="metric-item">
+                        <span>Agentes activos:</span>
+                        <span id="activeAgents">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let startTime = null;
+        let currentAgentResponses = {};
+        let currentMessageDiv = null;
+        
+        // Configuración - Ajusta estos valores según tu entorno
+        const API_BASE_URL = 'http://localhost:8000';
+        const AUTH_TOKEN = 'tu-token-jwt-aqui'; // Reemplaza con un token válido
+        
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                sendMessage();
+            }
+        }
+        
+        function updateConnectionStatus(status) {
+            const statusElement = document.getElementById('connectionStatus');
+            statusElement.textContent = status;
+            statusElement.style.color = status === 'Conectado' ? '#28a745' : 
+                                       status === 'Conectando...' ? '#ffc107' : '#dc3545';
+        }
+        
+        function showTypingIndicator(text = 'Procesando...') {
+            const indicator = document.getElementById('typingIndicator');
+            const typingText = document.getElementById('typingText');
+            indicator.classList.add('active');
+            typingText.textContent = text;
+        }
+        
+        function hideTypingIndicator() {
+            const indicator = document.getElementById('typingIndicator');
+            indicator.classList.remove('active');
+        }
+        
+        function addMessage(content, className) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${className}`;
+            messageDiv.innerHTML = content;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            return messageDiv;
+        }
+        
+        function addStatusMessage(content) {
+            const messagesDiv = document.getElementById('messages');
+            const statusDiv = document.createElement('div');
+            statusDiv.className = 'status-message';
+            statusDiv.textContent = content;
+            messagesDiv.appendChild(statusDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function updateIntentInfo(data) {
+            const intentInfo = document.getElementById('intentInfo');
+            const intentDetails = document.getElementById('intentDetails');
+            
+            intentInfo.style.display = 'block';
+            intentDetails.innerHTML = `
+                <p><strong>Intención:</strong> ${data.intent}</p>
+                <p><strong>Confianza:</strong> ${(data.confidence * 100).toFixed(1)}%</p>
+                <p><em>${data.message}</em></p>
+            `;
+        }
+        
+        function updateAgentsInfo(agents) {
+            const agentsInfo = document.getElementById('agentsInfo');
+            const agentsList = document.getElementById('agentsList');
+            
+            agentsInfo.style.display = 'block';
+            document.getElementById('activeAgents').textContent = agents.length;
+            
+            agentsList.innerHTML = agents.map(agent => `
+                <div class="agent-card">
+                    <h4>${agent}</h4>
+                    <p id="agent-status-${agent}">Esperando...</p>
+                </div>
+            `).join('');
+        }
+        
+        function updateAgentStatus(agentId, status) {
+            const statusElement = document.getElementById(`agent-status-${agentId}`);
+            if (statusElement) {
+                statusElement.textContent = status;
+            }
+        }
+        
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            // Deshabilitar el botón y limpiar el input
+            document.getElementById('sendButton').disabled = true;
+            input.value = '';
+            
+            // Añadir mensaje del usuario
+            addMessage(message, 'user-message');
+            
+            // Resetear métricas
+            document.getElementById('chunkCount').textContent = '0';
+            document.getElementById('responseTime').textContent = '-';
+            document.getElementById('intentInfo').style.display = 'none';
+            document.getElementById('agentsInfo').style.display = 'none';
+            currentAgentResponses = {};
+            
+            // Mostrar indicador de escritura
+            showTypingIndicator();
+            
+            // Crear div para la respuesta del agente
+            currentMessageDiv = addMessage('', 'agent-message');
+            
+            try {
+                updateConnectionStatus('Conectando...');
+                startTime = Date.now();
+                
+                // Cerrar conexión anterior si existe
+                if (eventSource) {
+                    eventSource.close();
+                }
+                
+                // Crear nueva conexión SSE
+                const response = await fetch(`${API_BASE_URL}/stream/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${AUTH_TOKEN}`
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Error HTTP: ${response.status}`);
+                }
+                
+                // Crear EventSource desde la respuesta
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                updateConnectionStatus('Conectado');
+                
+                let buffer = '';
+                let chunkCounter = 0;
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            const event = line.substring(6).trim();
+                            
+                        } else if (line.startsWith('data:')) {
+                            const data = JSON.parse(line.substring(5).trim());
+                            
+                            switch (data.type || event) {
+                                case 'status':
+                                    showTypingIndicator(data.message);
+                                    break;
+                                    
+                                case 'intent_analysis':
+                                    updateIntentInfo(data);
+                                    break;
+                                    
+                                case 'agents_selected':
+                                    updateAgentsInfo(data.agents);
+                                    addStatusMessage(data.message);
+                                    break;
+                                    
+                                case 'agent_start':
+                                    updateAgentStatus(data.agent_id, 'Procesando...');
+                                    break;
+                                    
+                                case 'content':
+                                    chunkCounter++;
+                                    document.getElementById('chunkCount').textContent = chunkCounter;
+                                    
+                                    // Añadir contenido al mensaje actual
+                                    if (!currentAgentResponses[data.agent_id]) {
+                                        currentAgentResponses[data.agent_id] = '';
+                                        // Añadir separador si hay múltiples agentes
+                                        if (Object.keys(currentAgentResponses).length > 1) {
+                                            currentMessageDiv.innerHTML += '<hr style="margin: 10px 0;">';
+                                        }
+                                        currentMessageDiv.innerHTML += `<strong>${data.agent_id}:</strong><br>`;
+                                    }
+                                    currentAgentResponses[data.agent_id] += data.content;
+                                    currentMessageDiv.innerHTML = Object.entries(currentAgentResponses)
+                                        .map(([agent, content]) => `<strong>${agent}:</strong><br>${content}`)
+                                        .join('<hr style="margin: 10px 0;">');
+                                    
+                                    if (data.is_final) {
+                                        updateAgentStatus(data.agent_id, 'Completado ✓');
+                                    }
+                                    break;
+                                    
+                                case 'artifacts':
+                                    if (data.artifacts && data.artifacts.length > 0) {
+                                        const artifactsHtml = `
+                                            <div class="artifacts-container">
+                                                <strong>📎 Artefactos:</strong>
+                                                ${data.artifacts.map(a => `
+                                                    <div class="artifact-item">${a.type}: ${a.name || a.description}</div>
+                                                `).join('')}
+                                            </div>
+                                        `;
+                                        currentMessageDiv.innerHTML += artifactsHtml;
+                                    }
+                                    break;
+                                    
+                                case 'agent_error':
+                                    updateAgentStatus(data.agent_id, 'Error ❌');
+                                    addMessage(`Error en ${data.agent_id}: ${data.error}`, 'error-message');
+                                    break;
+                                    
+                                case 'complete':
+                                    hideTypingIndicator();
+                                    const responseTime = ((Date.now() - startTime) / 1000).toFixed(2);
+                                    document.getElementById('responseTime').textContent = `${responseTime}s`;
+                                    addStatusMessage(`✓ Respuesta completada en ${responseTime}s con ${data.chunk_count || chunkCounter} chunks`);
+                                    break;
+                                    
+                                case 'error':
+                                    hideTypingIndicator();
+                                    addMessage(`Error: ${data.error || data.message}`, 'error-message');
+                                    break;
+                            }
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                hideTypingIndicator();
+                updateConnectionStatus('Error');
+                addMessage(`Error de conexión: ${error.message}`, 'error-message');
+            } finally {
+                document.getElementById('sendButton').disabled = false;
+                updateConnectionStatus('Desconectado');
+            }
+        }
+        
+        // Manejar cierre de la página
+        window.addEventListener('beforeunload', () => {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+        
+        // Focus en el input al cargar
+        window.addEventListener('load', () => {
+            document.getElementById('messageInput').focus();
+        });
+    </script>
+</body>
+</html>

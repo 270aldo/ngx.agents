@@ -4,9 +4,10 @@ Pruebas unitarias para el adaptador GeminiTrainingAssistant.
 
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from datetime import datetime
 
-from infrastructure.adapters.gemini_training_assistant_adapter import GeminiTrainingAssistantAdapter
+from infrastructure.adapters.gemini_training_assistant_adapter import (
+    GeminiTrainingAssistantAdapter,
+)
 
 
 class TestGeminiTrainingAssistantAdapter:
@@ -15,7 +16,10 @@ class TestGeminiTrainingAssistantAdapter:
     @pytest.fixture
     def adapter(self):
         """Fixture que proporciona una instancia del adaptador."""
-        with patch('infrastructure.adapters.gemini_training_assistant_adapter.GeminiTrainingAssistant.__init__', return_value=None):
+        with patch(
+            "infrastructure.adapters.gemini_training_assistant_adapter.GeminiTrainingAssistant.__init__",
+            return_value=None,
+        ):
             adapter = GeminiTrainingAssistantAdapter()
             adapter._generate_response = AsyncMock(return_value="Respuesta simulada")
             return adapter
@@ -23,7 +27,7 @@ class TestGeminiTrainingAssistantAdapter:
     def test_create_default_context(self, adapter):
         """Prueba la creación del contexto predeterminado."""
         context = adapter._create_default_context()
-        
+
         assert "conversation_history" in context
         assert "user_profile" in context
         assert "training_plans" in context
@@ -34,12 +38,12 @@ class TestGeminiTrainingAssistantAdapter:
     def test_get_intent_to_query_type_mapping(self, adapter):
         """Prueba el mapeo de intenciones a tipos de consulta."""
         mapping = adapter._get_intent_to_query_type_mapping()
-        
+
         assert "plan" in mapping
         assert "entrenamiento" in mapping
         assert "nutrición" in mapping
         assert "progreso" in mapping
-        
+
         assert mapping["plan"] == "generate_training_plan"
         assert mapping["entrenamiento"] == "generate_training_plan"
         assert mapping["nutrición"] == "recommend_nutrition"
@@ -50,15 +54,19 @@ class TestGeminiTrainingAssistantAdapter:
         # Prueba para plan de entrenamiento
         query_type = adapter._determine_query_type("Necesito un plan de entrenamiento")
         assert query_type == "generate_training_plan"
-        
+
         # Prueba para recomendación nutricional
-        query_type = adapter._determine_query_type("Dame consejos de nutrición para ganar masa muscular")
+        query_type = adapter._determine_query_type(
+            "Dame consejos de nutrición para ganar masa muscular"
+        )
         assert query_type == "recommend_nutrition"
-        
+
         # Prueba para análisis de progreso
-        query_type = adapter._determine_query_type("¿Cómo va mi progreso en el gimnasio?")
+        query_type = adapter._determine_query_type(
+            "¿Cómo va mi progreso en el gimnasio?"
+        )
         assert query_type == "analyze_progress"
-        
+
         # Prueba para consulta sin tipo específico (debería devolver answer_fitness_question por defecto)
         query_type = adapter._determine_query_type("¿Cuál es el mejor ejercicio?")
         assert query_type == "answer_fitness_question"
@@ -72,9 +80,11 @@ class TestGeminiTrainingAssistantAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "generate_training_plan"
@@ -92,9 +102,11 @@ class TestGeminiTrainingAssistantAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "recommend_nutrition"
@@ -112,9 +124,11 @@ class TestGeminiTrainingAssistantAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "analyze_progress"
@@ -132,9 +146,11 @@ class TestGeminiTrainingAssistantAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is True
         assert "output" in result
         assert result["query_type"] == "answer_fitness_question"
@@ -152,12 +168,16 @@ class TestGeminiTrainingAssistantAdapter:
         program_type = "elite"
         state = {}
         profile = {"name": "Test User", "age": 30}
-        
+
         # Simular un error en _determine_query_type
-        adapter._determine_query_type = MagicMock(side_effect=Exception("Error simulado"))
-        
-        result = await adapter._process_query(query, user_id, session_id, program_type, state, profile)
-        
+        adapter._determine_query_type = MagicMock(
+            side_effect=Exception("Error simulado")
+        )
+
+        result = await adapter._process_query(
+            query, user_id, session_id, program_type, state, profile
+        )
+
         assert result["success"] is False
         assert "error" in result
         assert result["error"] == "Error simulado"
@@ -169,9 +189,11 @@ class TestGeminiTrainingAssistantAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_training_plan(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_training_plan(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "context" in result
@@ -188,9 +210,11 @@ class TestGeminiTrainingAssistantAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_nutrition_recommendation(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_nutrition_recommendation(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "context" in result
@@ -198,7 +222,10 @@ class TestGeminiTrainingAssistantAdapter:
         assert result["context"]["nutrition_recommendations"][0]["query"] == query
         assert "date" in result["context"]["nutrition_recommendations"][0]
         assert "recommendation" in result["context"]["nutrition_recommendations"][0]
-        assert result["context"]["nutrition_recommendations"][0]["program_type"] == program_type
+        assert (
+            result["context"]["nutrition_recommendations"][0]["program_type"]
+            == program_type
+        )
 
     @pytest.mark.asyncio
     async def test_handle_progress_analysis(self, adapter):
@@ -207,9 +234,11 @@ class TestGeminiTrainingAssistantAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_progress_analysis(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_progress_analysis(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "context" in result
@@ -226,9 +255,11 @@ class TestGeminiTrainingAssistantAdapter:
         context = adapter._create_default_context()
         profile = {"name": "Test User", "age": 30}
         program_type = "elite"
-        
-        result = await adapter._handle_fitness_question(query, context, profile, program_type)
-        
+
+        result = await adapter._handle_fitness_question(
+            query, context, profile, program_type
+        )
+
         adapter._generate_response.assert_called_once()
         assert "response" in result
         assert "context" in result

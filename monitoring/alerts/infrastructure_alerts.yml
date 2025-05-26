@@ -1,0 +1,76 @@
+groups:
+  - name: ngx_agents_infrastructure_alerts
+    interval: 30s
+    rules:
+      # Circuit Breaker abierto
+      - alert: CircuitBreakerOpen
+        expr: |
+          increase(ngx_agents_circuit_breaker_state_changes_total{to_state="open"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Circuit breaker abierto para {{ $labels.service }}"
+          description: "El circuit breaker se ha abierto debido a fallos en {{ $labels.service }}"
+      
+      # Alta tasa de cache miss
+      - alert: HighCacheMissRate
+        expr: |
+          sum(rate(ngx_agents_cache_operations_total{result="miss"}[5m]))
+          by (operation)
+          /
+          sum(rate(ngx_agents_cache_operations_total[5m]))
+          by (operation)
+          > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Alta tasa de cache miss para operación {{ $labels.operation }}"
+          description: "Tasa de miss: {{ $value | humanizePercentage }} (umbral: 30%)"
+      
+      # Pool de Redis saturado
+      - alert: RedisPoolSaturated
+        expr: |
+          ngx_agents_redis_pool_connections{state="active"}
+          /
+          (ngx_agents_redis_pool_connections{state="active"} + ngx_agents_redis_pool_connections{state="idle"})
+          > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Pool de conexiones Redis casi saturado"
+          description: "{{ $value | humanizePercentage }} de las conexiones están activas"
+      
+      # Operaciones de DB lentas
+      - alert: SlowDatabaseOperations
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(ngx_agents_db_operation_duration_seconds_bucket[5m]))
+            by (operation, table, le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Operación {{ $labels.operation }} lenta en tabla {{ $labels.table }}"
+          description: "P95 de duración: {{ $value }}s (umbral: 1s)"
+      
+      # Muchos fallos de circuit breaker
+      - alert: FrequentCircuitBreakerFailures
+        expr: |
+          sum(rate(ngx_agents_circuit_breaker_failures_total[5m]))
+          by (service)
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Muchos fallos detectados por circuit breaker para {{ $labels.service }}"
+          description: "Tasa de fallos: {{ $value }} por segundo"

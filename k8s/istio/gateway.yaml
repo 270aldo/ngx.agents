@@ -1,0 +1,127 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: ngx-agents-gateway
+  namespace: ngx-agents
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "ngx-agents.example.com" # TODO: Replace with actual domain
+    - "api.ngx-agents.example.com"
+    tls:
+      httpsRedirect: true
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: ngx-agents-tls # Created by cert-manager
+    hosts:
+    - "ngx-agents.example.com" # TODO: Replace with actual domain
+    - "api.ngx-agents.example.com"
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ngx-agents-vs
+  namespace: ngx-agents
+spec:
+  hosts:
+  - "ngx-agents.example.com"
+  - "api.ngx-agents.example.com"
+  gateways:
+  - ngx-agents-gateway
+  http:
+  # API routes
+  - match:
+    - uri:
+        prefix: "/api/"
+    - uri:
+        prefix: "/docs"
+    - uri:
+        prefix: "/openapi.json"
+    route:
+    - destination:
+        host: ngx-api
+        port:
+          number: 8000
+    timeout: 300s
+    retries:
+      attempts: 3
+      perTryTimeout: 100s
+      retryOn: gateway-error,connect-failure,refused-stream
+  # Health check route
+  - match:
+    - uri:
+        exact: "/health"
+    route:
+    - destination:
+        host: ngx-api
+        port:
+          number: 8000
+  # Metrics route
+  - match:
+    - uri:
+        exact: "/metrics"
+    route:
+    - destination:
+        host: ngx-api
+        port:
+          number: 8001
+  # Default route
+  - route:
+    - destination:
+        host: ngx-api
+        port:
+          number: 8000
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: ngx-api-dr
+  namespace: ngx-agents
+spec:
+  host: ngx-api
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 2
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutiveErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 50
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: a2a-server-dr
+  namespace: ngx-agents
+spec:
+  host: a2a-server
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 200
+      http:
+        http1MaxPendingRequests: 100
+        http2MaxRequests: 200
+    loadBalancer:
+      consistentHash:
+        httpCookie:
+          name: "a2a-session"
+          ttl: 3600s

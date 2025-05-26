@@ -1,0 +1,135 @@
+# Service Level Objectives for auto-scaling
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slo-config
+  namespace: ngx-agents
+data:
+  slos.yaml: |
+    slos:
+      - name: api-latency
+        target: 200ms
+        percentile: 95
+      - name: api-availability
+        target: 99.9
+      - name: agent-response-time
+        target: 500ms
+        percentile: 90
+---
+# Vertical Pod Autoscaler for right-sizing
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: ngx-api-vpa
+  namespace: ngx-agents
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ngx-api
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: api
+      minAllowed:
+        cpu: 200m
+        memory: 512Mi
+      maxAllowed:
+        cpu: 4
+        memory: 8Gi
+      controlledResources: ["cpu", "memory"]
+---
+# Custom metrics for scaling based on queue depth
+apiVersion: v1
+kind: ServiceMonitor
+metadata:
+  name: agent-queue-metrics
+  namespace: ngx-agents
+spec:
+  selector:
+    matchLabels:
+      component: agent
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+# HPA based on custom metrics
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-custom-hpa
+  namespace: ngx-agents
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: orchestrator
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  # CPU-based scaling
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  # Memory-based scaling
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  # Custom metric: queue depth
+  - type: Pods
+    pods:
+      metric:
+        name: agent_queue_depth
+      target:
+        type: AverageValue
+        averageValue: "30"
+  # Custom metric: response time
+  - type: Pods
+    pods:
+      metric:
+        name: agent_response_time_seconds
+      target:
+        type: AverageValue
+        averageValue: "0.5"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+      - type: Pods
+        value: 1
+        periodSeconds: 120
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max
+---
+# Cluster Autoscaler configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-autoscaler-status
+  namespace: kube-system
+data:
+  nodes.max: "50"
+  nodes.min: "3"
+  scale-down-delay-after-add: "10m"
+  scale-down-unneeded-time: "10m"
+  scale-down-utilization-threshold: "0.5"

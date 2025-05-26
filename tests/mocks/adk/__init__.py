@@ -13,8 +13,6 @@ Características principales:
 Clases:
     MockToolkit: Simulación del Toolkit de ADK.
 """
-from unittest.mock import MagicMock
-from typing import Dict, List, Any, Optional
 
 # Importar el módulo toolkit para que los mocks sean compatibles
 from .toolkit import Toolkit

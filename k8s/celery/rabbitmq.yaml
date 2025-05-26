@@ -1,0 +1,290 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: ngx-agents
+  labels:
+    app: rabbitmq
+    component: message-broker
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5672
+      targetPort: 5672
+      protocol: TCP
+      name: amqp
+    - port: 15672
+      targetPort: 15672
+      protocol: TCP
+      name: management
+  selector:
+    app: rabbitmq
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: ngx-agents
+  labels:
+    app: rabbitmq
+    component: message-broker
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+        component: message-broker
+    spec:
+      containers:
+      - name: rabbitmq
+        image: rabbitmq:3.12-management-alpine
+        ports:
+        - containerPort: 5672
+          name: amqp
+        - containerPort: 15672
+          name: management
+        env:
+        - name: RABBITMQ_DEFAULT_USER
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-secret
+              key: user
+        - name: RABBITMQ_DEFAULT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-secret
+              key: password
+        - name: RABBITMQ_DEFAULT_VHOST
+          value: "/"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          exec:
+            command:
+            - rabbitmq-diagnostics
+            - "-q"
+            - ping
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - rabbitmq-diagnostics
+            - "-q"
+            - check_running
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 10
+        volumeMounts:
+        - name: rabbitmq-data
+          mountPath: /var/lib/rabbitmq
+        - name: rabbitmq-config
+          mountPath: /etc/rabbitmq
+      volumes:
+      - name: rabbitmq-config
+        configMap:
+          name: rabbitmq-config
+  volumeClaimTemplates:
+  - metadata:
+      name: rabbitmq-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: standard-rwo
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  namespace: ngx-agents
+data:
+  rabbitmq.conf: |
+    # RabbitMQ Configuration
+    default_vhost = /
+    default_permissions.configure = .*
+    default_permissions.read = .*
+    default_permissions.write = .*
+    
+    # Performance tuning
+    vm_memory_high_watermark.relative = 0.6
+    disk_free_limit.absolute = 5GB
+    
+    # Management plugin
+    management.tcp.port = 15672
+    management.load_definitions = /etc/rabbitmq/definitions.json
+    
+    # Message TTL and queue limits
+    message_ttl = 3600000
+    max_length = 10000
+    
+    # Cluster configuration (for future scaling)
+    cluster_formation.peer_discovery_backend = kubernetes
+    cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+    cluster_formation.k8s.address_type = hostname
+    cluster_formation.k8s.service_name = rabbitmq
+    cluster_formation.k8s.hostname_suffix = .rabbitmq.ngx-agents.svc.cluster.local
+    
+  definitions.json: |
+    {
+      "queues": [
+        {
+          "name": "high_priority",
+          "vhost": "/",
+          "durable": true,
+          "arguments": {
+            "x-max-priority": 10,
+            "x-message-ttl": 3600000
+          }
+        },
+        {
+          "name": "default",
+          "vhost": "/",
+          "durable": true,
+          "arguments": {
+            "x-max-priority": 5,
+            "x-message-ttl": 3600000
+          }
+        },
+        {
+          "name": "reports",
+          "vhost": "/",
+          "durable": true,
+          "arguments": {
+            "x-max-priority": 3,
+            "x-message-ttl": 7200000
+          }
+        },
+        {
+          "name": "images",
+          "vhost": "/",
+          "durable": true,
+          "arguments": {
+            "x-max-priority": 3,
+            "x-message-ttl": 3600000
+          }
+        },
+        {
+          "name": "analytics",
+          "vhost": "/",
+          "durable": true,
+          "arguments": {
+            "x-max-priority": 2,
+            "x-message-ttl": 10800000
+          }
+        },
+        {
+          "name": "low_priority",
+          "vhost": "/",
+          "durable": true,
+          "arguments": {
+            "x-max-priority": 1,
+            "x-message-ttl": 86400000
+          }
+        }
+      ],
+      "exchanges": [
+        {
+          "name": "high_priority",
+          "vhost": "/",
+          "type": "direct",
+          "durable": true
+        },
+        {
+          "name": "default",
+          "vhost": "/",
+          "type": "direct",
+          "durable": true
+        },
+        {
+          "name": "reports",
+          "vhost": "/",
+          "type": "direct",
+          "durable": true
+        },
+        {
+          "name": "images",
+          "vhost": "/",
+          "type": "direct",
+          "durable": true
+        },
+        {
+          "name": "analytics",
+          "vhost": "/",
+          "type": "direct",
+          "durable": true
+        },
+        {
+          "name": "low_priority",
+          "vhost": "/",
+          "type": "direct",
+          "durable": true
+        }
+      ],
+      "bindings": [
+        {
+          "source": "high_priority",
+          "vhost": "/",
+          "destination": "high_priority",
+          "destination_type": "queue",
+          "routing_key": "high_priority"
+        },
+        {
+          "source": "default",
+          "vhost": "/",
+          "destination": "default",
+          "destination_type": "queue",
+          "routing_key": "default"
+        },
+        {
+          "source": "reports",
+          "vhost": "/",
+          "destination": "reports",
+          "destination_type": "queue",
+          "routing_key": "reports"
+        },
+        {
+          "source": "images",
+          "vhost": "/",
+          "destination": "images",
+          "destination_type": "queue",
+          "routing_key": "images"
+        },
+        {
+          "source": "analytics",
+          "vhost": "/",
+          "destination": "analytics",
+          "destination_type": "queue",
+          "routing_key": "analytics"
+        },
+        {
+          "source": "low_priority",
+          "vhost": "/",
+          "destination": "low_priority",
+          "destination_type": "queue",
+          "routing_key": "low_priority"
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rabbitmq-secret
+  namespace: ngx-agents
+type: Opaque
+stringData:
+  user: admin
+  password: ngx-rabbitmq-secure-password-2025

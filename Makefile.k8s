@@ -1,0 +1,243 @@
+# Makefile for Kubernetes operations
+# NGX Agents Kubernetes Deployment
+
+# Variables
+PROJECT_ID ?= your-gcp-project
+CLUSTER_NAME ?= ngx-agents-cluster
+CLUSTER_ZONE ?= us-central1-a
+NAMESPACE ?= ngx-agents
+REGISTRY = gcr.io/$(PROJECT_ID)
+VERSION ?= $(shell git rev-parse --short HEAD)
+
+# Colors
+BLUE := \033[0;34m
+GREEN := \033[0;32m
+YELLOW := \033[1;33m
+RED := \033[0;31m
+NC := \033[0m
+
+.PHONY: help
+help: ## Show this help message
+	@echo "$(BLUE)NGX Agents Kubernetes Operations$(NC)"
+	@echo "================================="
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "$(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+
+## Docker Operations
+.PHONY: docker-build-base
+docker-build-base: ## Build base Docker image
+	@echo "$(BLUE)Building base image...$(NC)"
+	docker build -f docker/Dockerfile.base -t $(REGISTRY)/ngx-agents-base:$(VERSION) -t $(REGISTRY)/ngx-agents-base:latest .
+
+.PHONY: docker-build-all
+docker-build-all: docker-build-base ## Build all Docker images
+	@echo "$(BLUE)Building all images...$(NC)"
+	# API
+	docker build -f Dockerfile -t $(REGISTRY)/ngx-agents-api:$(VERSION) -t $(REGISTRY)/ngx-agents-api:latest .
+	# A2A Server
+	docker build -f Dockerfile.a2a -t $(REGISTRY)/ngx-agents-a2a:$(VERSION) -t $(REGISTRY)/ngx-agents-a2a:latest .
+	# Agents
+	@for agent in orchestrator elite-training nutrition progress-tracker; do \
+		echo "Building $$agent..."; \
+		docker build -f docker/agents/Dockerfile.$${agent//-/_} \
+			--build-arg BASE_IMAGE=$(REGISTRY)/ngx-agents-base:latest \
+			-t $(REGISTRY)/ngx-agent-$$agent:$(VERSION) \
+			-t $(REGISTRY)/ngx-agent-$$agent:latest .; \
+	done
+
+.PHONY: docker-push
+docker-push: ## Push all Docker images to registry
+	@echo "$(BLUE)Pushing images to $(REGISTRY)...$(NC)"
+	docker push $(REGISTRY)/ngx-agents-base:$(VERSION)
+	docker push $(REGISTRY)/ngx-agents-base:latest
+	docker push $(REGISTRY)/ngx-agents-api:$(VERSION)
+	docker push $(REGISTRY)/ngx-agents-api:latest
+	docker push $(REGISTRY)/ngx-agents-a2a:$(VERSION)
+	docker push $(REGISTRY)/ngx-agents-a2a:latest
+	@for agent in orchestrator elite-training nutrition progress-tracker; do \
+		docker push $(REGISTRY)/ngx-agent-$$agent:$(VERSION); \
+		docker push $(REGISTRY)/ngx-agent-$$agent:latest; \
+	done
+
+## Local Development
+.PHONY: local-up
+local-up: ## Start local development environment with docker-compose
+	@echo "$(BLUE)Starting local environment...$(NC)"
+	docker-compose up -d
+
+.PHONY: local-down
+local-down: ## Stop local development environment
+	@echo "$(BLUE)Stopping local environment...$(NC)"
+	docker-compose down
+
+.PHONY: local-logs
+local-logs: ## Show logs from local environment
+	docker-compose logs -f
+
+## Kubernetes Cluster Operations
+.PHONY: cluster-create
+cluster-create: ## Create GKE cluster
+	@echo "$(BLUE)Creating GKE cluster...$(NC)"
+	gcloud container clusters create $(CLUSTER_NAME) \
+		--zone $(CLUSTER_ZONE) \
+		--num-nodes 3 \
+		--enable-autoscaling \
+		--min-nodes 3 \
+		--max-nodes 10 \
+		--machine-type n2-standard-4 \
+		--disk-size 100 \
+		--enable-stackdriver-kubernetes \
+		--enable-ip-alias \
+		--addons HorizontalPodAutoscaling,HttpLoadBalancing,GcePersistentDiskCsiDriver \
+		--workload-pool=$(PROJECT_ID).svc.id.goog \
+		--enable-shielded-nodes
+
+.PHONY: cluster-connect
+cluster-connect: ## Connect to GKE cluster
+	@echo "$(BLUE)Connecting to cluster...$(NC)"
+	gcloud container clusters get-credentials $(CLUSTER_NAME) --zone $(CLUSTER_ZONE) --project $(PROJECT_ID)
+
+.PHONY: cluster-delete
+cluster-delete: ## Delete GKE cluster (CAUTION!)
+	@echo "$(RED)WARNING: This will delete the entire cluster!$(NC)"
+	@read -p "Are you sure? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		gcloud container clusters delete $(CLUSTER_NAME) --zone $(CLUSTER_ZONE) --quiet; \
+	fi
+
+## Istio Operations
+.PHONY: istio-install
+istio-install: ## Install Istio service mesh
+	@echo "$(BLUE)Installing Istio...$(NC)"
+	istioctl install --set profile=production -y
+	kubectl label namespace $(NAMESPACE) istio-injection=enabled --overwrite
+
+.PHONY: istio-dashboard
+istio-dashboard: ## Open Istio dashboard
+	@echo "$(BLUE)Opening Istio dashboard...$(NC)"
+	istioctl dashboard kiali
+
+## Kubernetes Deployments
+.PHONY: k8s-namespace
+k8s-namespace: ## Create namespace and base resources
+	@echo "$(BLUE)Creating namespace and base resources...$(NC)"
+	kubectl apply -f k8s/base/namespace.yaml
+	kubectl apply -f k8s/base/configmap.yaml
+
+.PHONY: k8s-secrets
+k8s-secrets: ## Create secrets (ensure you've updated the values first!)
+	@echo "$(YELLOW)WARNING: Ensure you've updated the secret values!$(NC)"
+	@read -p "Have you updated k8s/base/secret.yaml? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		kubectl apply -f k8s/base/secret.yaml; \
+	fi
+
+.PHONY: k8s-deploy-infra
+k8s-deploy-infra: ## Deploy infrastructure services (Redis, A2A Server)
+	@echo "$(BLUE)Deploying infrastructure services...$(NC)"
+	kubectl apply -f k8s/services/redis.yaml
+	kubectl apply -f k8s/services/a2a-server.yaml
+	@echo "Waiting for services to be ready..."
+	kubectl wait --for=condition=ready pod -l app=redis -n $(NAMESPACE) --timeout=300s
+	kubectl wait --for=condition=ready pod -l app=a2a-server -n $(NAMESPACE) --timeout=300s
+
+.PHONY: k8s-deploy-api
+k8s-deploy-api: ## Deploy API service
+	@echo "$(BLUE)Deploying API service...$(NC)"
+	kubectl apply -f k8s/services/api.yaml
+	kubectl wait --for=condition=available deployment/ngx-api -n $(NAMESPACE) --timeout=300s
+
+.PHONY: k8s-deploy-agents
+k8s-deploy-agents: ## Deploy all agents
+	@echo "$(BLUE)Deploying agents...$(NC)"
+	kubectl apply -f k8s/agents/orchestrator.yaml
+	@for agent in elite-training nutrition progress-tracker; do \
+		sed -e "s/AGENT_NAME/$$agent/g" \
+			-e "s/AGENT_PORT/90$$(echo $$agent | wc -c)/g" \
+			-e "s/AGENT_TYPE/specialist/g" \
+			-e "s/PROJECT_ID/$(PROJECT_ID)/g" \
+			k8s/agents/agent-template.yaml | kubectl apply -f -; \
+	done
+
+.PHONY: k8s-deploy-all
+k8s-deploy-all: k8s-namespace k8s-deploy-infra k8s-deploy-api k8s-deploy-agents ## Deploy everything to Kubernetes
+	@echo "$(BLUE)Applying Istio configurations...$(NC)"
+	kubectl apply -f k8s/istio/gateway.yaml
+	kubectl apply -f k8s/istio/autoscaling.yaml
+	@echo "$(GREEN)Deployment complete!$(NC)"
+
+## Monitoring and Status
+.PHONY: k8s-status
+k8s-status: ## Show status of all resources
+	@echo "$(BLUE)Deployments:$(NC)"
+	kubectl get deployments -n $(NAMESPACE)
+	@echo "\n$(BLUE)Pods:$(NC)"
+	kubectl get pods -n $(NAMESPACE)
+	@echo "\n$(BLUE)Services:$(NC)"
+	kubectl get services -n $(NAMESPACE)
+	@echo "\n$(BLUE)HPA:$(NC)"
+	kubectl get hpa -n $(NAMESPACE)
+
+.PHONY: k8s-logs
+k8s-logs: ## Show logs from a specific pod (use POD=pod-name)
+	@if [ -z "$(POD)" ]; then \
+		echo "$(RED)Please specify POD=pod-name$(NC)"; \
+		kubectl get pods -n $(NAMESPACE); \
+	else \
+		kubectl logs -f $(POD) -n $(NAMESPACE); \
+	fi
+
+.PHONY: k8s-port-forward-api
+k8s-port-forward-api: ## Port forward API to localhost:8000
+	@echo "$(BLUE)Port forwarding API to http://localhost:8000$(NC)"
+	kubectl port-forward -n $(NAMESPACE) svc/ngx-api 8000:8000
+
+.PHONY: k8s-port-forward-grafana
+k8s-port-forward-grafana: ## Port forward Grafana to localhost:3000
+	@echo "$(BLUE)Port forwarding Grafana to http://localhost:3000$(NC)"
+	kubectl port-forward -n $(NAMESPACE) svc/grafana 3000:3000
+
+## Blue-Green Deployment
+.PHONY: k8s-blue-green-api
+k8s-blue-green-api: ## Perform blue-green deployment for API
+	@echo "$(BLUE)Starting blue-green deployment...$(NC)"
+	./scripts/k8s-deploy.sh blue-green $(VERSION)
+
+## Cleanup
+.PHONY: k8s-clean
+k8s-clean: ## Delete all resources in namespace
+	@echo "$(RED)WARNING: This will delete all resources in namespace $(NAMESPACE)!$(NC)"
+	@read -p "Are you sure? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		kubectl delete all --all -n $(NAMESPACE); \
+	fi
+
+## Troubleshooting
+.PHONY: k8s-describe-pod
+k8s-describe-pod: ## Describe a specific pod (use POD=pod-name)
+	@if [ -z "$(POD)" ]; then \
+		echo "$(RED)Please specify POD=pod-name$(NC)"; \
+		kubectl get pods -n $(NAMESPACE); \
+	else \
+		kubectl describe pod $(POD) -n $(NAMESPACE); \
+	fi
+
+.PHONY: k8s-events
+k8s-events: ## Show recent events in namespace
+	kubectl get events -n $(NAMESPACE) --sort-by='.lastTimestamp'
+
+.PHONY: k8s-top
+k8s-top: ## Show resource usage
+	@echo "$(BLUE)Node resource usage:$(NC)"
+	kubectl top nodes
+	@echo "\n$(BLUE)Pod resource usage:$(NC)"
+	kubectl top pods -n $(NAMESPACE)
+
+## Complete Workflow
+.PHONY: deploy
+deploy: docker-build-all docker-push k8s-deploy-all ## Complete deployment workflow
+	@echo "$(GREEN)Complete deployment finished!$(NC)"
+
+.DEFAULT_GOAL := help

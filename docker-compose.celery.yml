@@ -1,0 +1,218 @@
+version: '3.8'
+
+services:
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: ngx_rabbitmq
+    ports:
+      - "5672:5672"      # AMQP port
+      - "15672:15672"    # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - ngx_network
+
+  # Flower - Celery Monitoring
+  flower:
+    image: mher/flower:2.0
+    container_name: ngx_flower
+    command: celery flower --broker=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/${RABBITMQ_VHOST:-/} --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/${RABBITMQ_VHOST:-/}
+      FLOWER_BASIC_AUTH: ${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ngx_network
+
+  # Celery Worker - Default Queue
+  celery_worker_default:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ngx_celery_default
+    command: celery -A core.celery_app worker --loglevel=info --queues=default --concurrency=4 --hostname=worker_default@%h
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_PASS=${RABBITMQ_PASS:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:${GOOGLE_APPLICATION_CREDENTIALS}:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ngx_network
+
+  # Celery Worker - High Priority Queue
+  celery_worker_high:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ngx_celery_high
+    command: celery -A core.celery_app worker --loglevel=info --queues=high_priority --concurrency=2 --hostname=worker_high@%h
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_PASS=${RABBITMQ_PASS:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:${GOOGLE_APPLICATION_CREDENTIALS}:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ngx_network
+
+  # Celery Worker - Reports Queue
+  celery_worker_reports:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ngx_celery_reports
+    command: celery -A core.celery_app worker --loglevel=info --queues=reports --concurrency=2 --hostname=worker_reports@%h
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_PASS=${RABBITMQ_PASS:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:${GOOGLE_APPLICATION_CREDENTIALS}:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ngx_network
+
+  # Celery Worker - Images Queue
+  celery_worker_images:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ngx_celery_images
+    command: celery -A core.celery_app worker --loglevel=info --queues=images --concurrency=3 --hostname=worker_images@%h
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_PASS=${RABBITMQ_PASS:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:${GOOGLE_APPLICATION_CREDENTIALS}:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ngx_network
+
+  # Celery Worker - Analytics Queue
+  celery_worker_analytics:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ngx_celery_analytics
+    command: celery -A core.celery_app worker --loglevel=info --queues=analytics --concurrency=2 --hostname=worker_analytics@%h
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_PASS=${RABBITMQ_PASS:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:${GOOGLE_APPLICATION_CREDENTIALS}:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ngx_network
+
+  # Celery Beat - Scheduler
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ngx_celery_beat
+    command: celery -A core.celery_app beat --loglevel=info
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_PASS=${RABBITMQ_PASS:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+      - celerybeat_schedule:/app/celerybeat-schedule
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ngx_network
+
+volumes:
+  rabbitmq_data:
+    driver: local
+  celerybeat_schedule:
+    driver: local
+
+networks:
+  ngx_network:
+    external: true

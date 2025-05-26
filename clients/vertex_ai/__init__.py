@@ -10,18 +10,18 @@ from .cache import CacheManager
 from .connection import ConnectionPool, VERTEX_AI_AVAILABLE
 from .decorators import with_retries, measure_execution_time
 from .client import (
-    VertexAIClient, 
+    VertexAIClient,
     vertex_ai_client,  # Instancia global pre-configurada
-    check_vertex_ai_connection
+    check_vertex_ai_connection,
 )
 
 __all__ = [
-    'CacheManager',
-    'ConnectionPool',
-    'VertexAIClient',
-    'vertex_ai_client',
-    'check_vertex_ai_connection',
-    'with_retries',
-    'measure_execution_time',
-    'VERTEX_AI_AVAILABLE'
+    "CacheManager",
+    "ConnectionPool",
+    "VertexAIClient",
+    "vertex_ai_client",
+    "check_vertex_ai_connection",
+    "with_retries",
+    "measure_execution_time",
+    "VERTEX_AI_AVAILABLE",
 ]

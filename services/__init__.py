@@ -7,6 +7,4 @@ y componentes del sistema.
 
 from services.program_classification_service import ProgramClassificationService
 
-__all__ = [
-    'ProgramClassificationService'
-]
+__all__ = ["ProgramClassificationService"]

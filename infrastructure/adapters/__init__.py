@@ -6,6 +6,10 @@ diferentes componentes del sistema, proporcionando capas de abstracción
 y compatibilidad.
 """
 
-from infrastructure.adapters.telemetry_adapter import get_telemetry_adapter, measure_execution_time, TelemetryAdapter
+from infrastructure.adapters.telemetry_adapter import (
+    get_telemetry_adapter,
+    measure_execution_time,
+    TelemetryAdapter,
+)
 
-__all__ = ['get_telemetry_adapter', 'measure_execution_time', 'TelemetryAdapter']
+__all__ = ["get_telemetry_adapter", "measure_execution_time", "TelemetryAdapter"]

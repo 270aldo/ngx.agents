@@ -1,0 +1,48 @@
+groups:
+  - name: ngx_agents_streaming_alerts
+    interval: 30s
+    rules:
+      # Alto TTFB en streaming
+      - alert: HighStreamingTTFB
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(ngx_agents_stream_ttfb_seconds_bucket[5m]))
+            by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Alto Time To First Byte en streaming"
+          description: "TTFB P95: {{ $value }}s (umbral: 1s)"
+      
+      # Baja tasa de éxito en streaming
+      - alert: LowStreamingSuccessRate
+        expr: |
+          sum(rate(ngx_agents_chat_sessions_total{type="streaming",status="completed"}[5m]))
+          /
+          sum(rate(ngx_agents_chat_sessions_total{type="streaming",status="started"}[5m]))
+          < 0.95
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Baja tasa de éxito en sesiones de streaming"
+          description: "Solo {{ $value | humanizePercentage }} de las sesiones se completan exitosamente"
+      
+      # Muchos chunks por sesión
+      - alert: ExcessiveStreamingChunks
+        expr: |
+          rate(ngx_agents_stream_chunks_sent_total[5m])
+          /
+          rate(ngx_agents_chat_sessions_total{type="streaming",status="completed"}[5m])
+          > 100
+        for: 5m
+        labels:
+          severity: info
+          team: backend
+        annotations:
+          summary: "Promedio alto de chunks por sesión de streaming"
+          description: "Promedio: {{ $value }} chunks por sesión (umbral: 100)"

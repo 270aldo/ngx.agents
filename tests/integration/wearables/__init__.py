@@ -1,0 +1,3 @@
+"""
+Wearable integration tests
+"""

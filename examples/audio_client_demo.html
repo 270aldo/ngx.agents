@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NGX Agents - Demo de Audio y Voz</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            padding: 30px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+            border: 1px solid #e5e7eb;
+        }
+
+        .panel h2 {
+            color: #374151;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .icon {
+            width: 24px;
+            height: 24px;
+            display: inline-block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(79, 70, 229, 0.4);
+        }
+
+        .btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #6b7280 0%, #9ca3af 100%);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+
+        .recording {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+            animation: pulse 1.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { opacity: 1; }
+            to { opacity: 0.7; }
+        }
+
+        .output {
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            min-height: 100px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .status {
+            padding: 10px 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            font-weight: 600;
+        }
+
+        .status.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+
+        .status.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }
+
+        .status.info {
+            background: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #93c5fd;
+        }
+
+        .audio-player {
+            margin: 15px 0;
+            width: 100%;
+        }
+
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #e5e7eb;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 12px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            font-weight: 600;
+            color: #6b7280;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            color: #4f46e5;
+            border-bottom-color: #4f46e5;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .emotion-indicators {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .emotion-bar {
+            background: #f3f4f6;
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .emotion-bar .label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 5px;
+        }
+
+        .emotion-bar .value {
+            font-size: 18px;
+            font-weight: 700;
+            color: #4f46e5;
+        }
+
+        .command-list {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .command-item {
+            padding: 8px 0;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .command-item:last-child {
+            border-bottom: none;
+        }
+
+        .command-item .cmd {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .command-item .desc {
+            color: #6b7280;
+            font-size: 13px;
+        }
+
+        @media (max-width: 768px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .workout-simulator {
+            background: #f0f9ff;
+            border: 2px solid #0ea5e9;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .exercise-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+
+        .info-item {
+            text-align: center;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e0f2fe;
+        }
+
+        .info-item .label {
+            font-size: 12px;
+            color: #0369a1;
+            font-weight: 600;
+        }
+
+        .info-item .value {
+            font-size: 18px;
+            color: #1e40af;
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 NGX Agents - Demo de Audio y Voz</h1>
+            <p>Demonstración completa de las capacidades de procesamiento de voz</p>
+        </div>
+
+        <div class="content">
+            <!-- Panel de Transcripción y Comandos de Voz -->
+            <div class="panel">
+                <h2>
+                    <span class="icon">🎙️</span>
+                    Transcripción y Comandos de Voz
+                </h2>
+
+                <div class="tabs">
+                    <div class="tab active" onclick="switchTab('transcribe')">Transcripción</div>
+                    <div class="tab" onclick="switchTab('commands')">Comandos</div>
+                    <div class="tab" onclick="switchTab('emotion')">Análisis Emocional</div>
+                </div>
+
+                <!-- Tab de Transcripción -->
+                <div id="transcribe-tab" class="tab-content active">
+                    <div class="form-group">
+                        <label>Idioma:</label>
+                        <select id="languageSelect">
+                            <option value="es-ES">Español (España)</option>
+                            <option value="en-US">English (US)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <button id="recordBtn" class="btn">
+                            <span id="recordIcon">🎤</span>
+                            <span id="recordText">Iniciar Grabación</span>
+                        </button>
+                        <button id="stopBtn" class="btn btn-danger" disabled>
+                            ⏹️ Detener
+                        </button>
+                        <button id="transcribeBtn" class="btn btn-secondary" disabled>
+                            📝 Transcribir
+                        </button>
+                    </div>
+
+                    <div class="form-group">
+                        <label>O subir archivo de audio:</label>
+                        <input type="file" id="audioFile" accept="audio/*">
+                    </div>
+
+                    <div id="transcriptionOutput" class="output">
+                        Resultados de transcripción aparecerán aquí...
+                    </div>
+                </div>
+
+                <!-- Tab de Comandos de Voz -->
+                <div id="commands-tab" class="tab-content">
+                    <div class="workout-simulator">
+                        <h3>🏋️ Simulador de Entrenamiento</h3>
+                        <div class="exercise-info">
+                            <div class="info-item">
+                                <div class="label">Ejercicio</div>
+                                <div class="value" id="currentExercise">Sentadillas</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="label">Serie</div>
+                                <div class="value" id="currentSet">1/3</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="label">Repetición</div>
+                                <div class="value" id="currentRep">0/10</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="label">Estado</div>
+                                <div class="value" id="workoutStatus">Pausado</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="voiceCommandBtn" class="btn">
+                        🎤 Comando de Voz
+                    </button>
+
+                    <div class="command-list">
+                        <h4>Comandos Disponibles:</h4>
+                        <div class="command-item">
+                            <span class="cmd">"Iniciar entrenamiento"</span>
+                            <span class="desc">Comienza la sesión</span>
+                        </div>
+                        <div class="command-item">
+                            <span class="cmd">"Siguiente ejercicio"</span>
+                            <span class="desc">Avanza al próximo</span>
+                        </div>
+                        <div class="command-item">
+                            <span class="cmd">"Pausar"</span>
+                            <span class="desc">Pausa el entrenamiento</span>
+                        </div>
+                        <div class="command-item">
+                            <span class="cmd">"¿Cómo voy?"</span>
+                            <span class="desc">Estado del progreso</span>
+                        </div>
+                        <div class="command-item">
+                            <span class="cmd">"Muestra la forma"</span>
+                            <span class="desc">Guía de técnica</span>
+                        </div>
+                    </div>
+
+                    <div id="commandOutput" class="output">
+                        Resultados de comandos aparecerán aquí...
+                    </div>
+                </div>
+
+                <!-- Tab de Análisis Emocional -->
+                <div id="emotion-tab" class="tab-content">
+                    <p style="margin-bottom: 15px;">Analiza tu estado emocional a través de tu voz:</p>
+                    
+                    <button id="emotionAnalysisBtn" class="btn">
+                        🧠 Analizar Estado Emocional
+                    </button>
+
+                    <div class="emotion-indicators">
+                        <div class="emotion-bar">
+                            <div class="label">Energía</div>
+                            <div class="value" id="energyLevel">--</div>
+                        </div>
+                        <div class="emotion-bar">
+                            <div class="label">Estrés</div>
+                            <div class="value" id="stressLevel">--</div>
+                        </div>
+                        <div class="emotion-bar">
+                            <div class="label">Motivación</div>
+                            <div class="value" id="motivationLevel">--</div>
+                        </div>
+                        <div class="emotion-bar">
+                            <div class="label">Fatiga</div>
+                            <div class="value" id="fatigueLevel">--</div>
+                        </div>
+                    </div>
+
+                    <div id="emotionOutput" class="output">
+                        Resultados del análisis emocional aparecerán aquí...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Panel de Síntesis de Voz y Feedback -->
+            <div class="panel">
+                <h2>
+                    <span class="icon">🔊</span>
+                    Síntesis de Voz y Feedback
+                </h2>
+
+                <div class="tabs">
+                    <div class="tab active" onclick="switchTab2('synthesize')">Síntesis</div>
+                    <div class="tab" onclick="switchTab2('feedback')">Feedback</div>
+                    <div class="tab" onclick="switchTab2('guide')">Guía de Voz</div>
+                </div>
+
+                <!-- Tab de Síntesis -->
+                <div id="synthesize-tab" class="tab-content active">
+                    <div class="form-group">
+                        <label>Texto a sintetizar:</label>
+                        <textarea id="textToSynthesize" rows="4" placeholder="Escribe el texto que quieres convertir a voz...">¡Excelente trabajo! Mantén esa técnica perfecta. Tu progreso es increíble.</textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Voz:</label>
+                        <select id="voiceSelect">
+                            <option value="es-ES-Standard-A">Español - Mujer A</option>
+                            <option value="es-ES-Standard-B">Español - Hombre B</option>
+                            <option value="es-ES-Standard-C">Español - Hombre C</option>
+                            <option value="es-ES-Standard-D">Español - Mujer D</option>
+                            <option value="es-ES-Wavenet-B">Español - Premium Hombre</option>
+                            <option value="es-ES-Wavenet-C">Español - Premium Mujer</option>
+                        </select>
+                    </div>
+
+                    <button id="synthesizeBtn" class="btn">
+                        🔊 Generar Audio
+                    </button>
+
+                    <div id="audioPlayerContainer"></div>
+                    <div id="synthesizeOutput" class="output">
+                        Audio generado aparecerá aquí...
+                    </div>
+                </div>
+
+                <!-- Tab de Feedback -->
+                <div id="feedback-tab" class="tab-content">
+                    <div class="form-group">
+                        <label>Tipo de Feedback:</label>
+                        <select id="feedbackType">
+                            <option value="encouragement">Motivación</option>
+                            <option value="form_correction">Corrección de Forma</option>
+                            <option value="set_completion">Finalización de Serie</option>
+                            <option value="rest_reminder">Recordatorio de Descanso</option>
+                            <option value="workout_start">Inicio de Entrenamiento</option>
+                            <option value="workout_end">Fin de Entrenamiento</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Ejercicio (opcional):</label>
+                        <input type="text" id="exerciseName" placeholder="ej: Sentadillas, Press banca...">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Tiempo de descanso (segundos):</label>
+                        <input type="number" id="restSeconds" value="60" min="30" max="300">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Nombre del usuario:</label>
+                        <input type="text" id="userName" placeholder="Nombre para personalizar el feedback">
+                    </div>
+
+                    <button id="feedbackBtn" class="btn">
+                        💬 Generar Feedback
+                    </button>
+
+                    <div id="feedbackPlayerContainer"></div>
+                    <div id="feedbackOutput" class="output">
+                        Feedback de audio aparecerá aquí...
+                    </div>
+                </div>
+
+                <!-- Tab de Guía de Voz -->
+                <div id="guide-tab" class="tab-content">
+                    <div class="form-group">
+                        <label>Fase del Ejercicio:</label>
+                        <select id="exercisePhase">
+                            <option value="introduction">Introducción</option>
+                            <option value="setup">Configuración</option>
+                            <option value="execution">Ejecución</option>
+                            <option value="breathing">Respiración</option>
+                            <option value="counting">Conteo</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Ejercicio:</label>
+                        <input type="text" id="guideExercise" value="Sentadillas" placeholder="Nombre del ejercicio">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Repetición actual:</label>
+                        <input type="number" id="repCount" value="1" min="0" max="20">
+                    </div>
+
+                    <button id="guideBtn" class="btn">
+                        🎯 Generar Guía
+                    </button>
+
+                    <div id="guidePlayerContainer"></div>
+                    <div id="guideOutput" class="output">
+                        Guía de voz aparecerá aquí...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Estado global de la aplicación
+        const appState = {
+            isRecording: false,
+            mediaRecorder: null,
+            audioChunks: [],
+            apiBaseUrl: 'http://localhost:8000',
+            currentWorkout: {
+                exercise: 'Sentadillas',
+                set: 1,
+                totalSets: 3,
+                rep: 0,
+                totalReps: 10,
+                status: 'paused'
+            }
+        };
+
+        // Función para cambiar tabs del primer panel
+        function switchTab(tabName) {
+            // Ocultar todos los tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Mostrar el tab seleccionado
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Función para cambiar tabs del segundo panel
+        function switchTab2(tabName) {
+            // Buscar en el segundo panel específicamente
+            const secondPanel = document.querySelectorAll('.panel')[1];
+            
+            secondPanel.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            secondPanel.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Inicialización cuando se carga la página
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeEventListeners();
+            updateWorkoutDisplay();
+        });
+
+        function initializeEventListeners() {
+            // Grabación de audio
+            document.getElementById('recordBtn').addEventListener('click', toggleRecording);
+            document.getElementById('stopBtn').addEventListener('click', stopRecording);
+            document.getElementById('transcribeBtn').addEventListener('click', transcribeAudio);
+
+            // Archivo de audio
+            document.getElementById('audioFile').addEventListener('change', handleFileUpload);
+
+            // Síntesis de voz
+            document.getElementById('synthesizeBtn').addEventListener('click', synthesizeText);
+
+            // Feedback de audio
+            document.getElementById('feedbackBtn').addEventListener('click', generateFeedback);
+
+            // Guía de voz
+            document.getElementById('guideBtn').addEventListener('click', generateGuide);
+
+            // Comandos de voz
+            document.getElementById('voiceCommandBtn').addEventListener('click', processVoiceCommand);
+
+            // Análisis emocional
+            document.getElementById('emotionAnalysisBtn').addEventListener('click', analyzeEmotion);
+        }
+
+        async function toggleRecording() {
+            if (!appState.isRecording) {
+                await startRecording();
+            } else {
+                stopRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                appState.mediaRecorder = new MediaRecorder(stream);
+                appState.audioChunks = [];
+
+                appState.mediaRecorder.ondataavailable = (event) => {
+                    appState.audioChunks.push(event.data);
+                };
+
+                appState.mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(appState.audioChunks, { type: 'audio/wav' });
+                    appState.currentAudioBlob = audioBlob;
+                    document.getElementById('transcribeBtn').disabled = false;
+                };
+
+                appState.mediaRecorder.start();
+                appState.isRecording = true;
+
+                // Actualizar UI
+                const recordBtn = document.getElementById('recordBtn');
+                recordBtn.classList.add('recording');
+                recordBtn.innerHTML = '<span class="loading"></span> Grabando...';
+                document.getElementById('stopBtn').disabled = false;
+
+                showStatus('Grabación iniciada...', 'info');
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                showStatus('Error: No se pudo acceder al micrófono', 'error');
+            }
+        }
+
+        function stopRecording() {
+            if (appState.mediaRecorder && appState.isRecording) {
+                appState.mediaRecorder.stop();
+                appState.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                appState.isRecording = false;
+
+                // Actualizar UI
+                const recordBtn = document.getElementById('recordBtn');
+                recordBtn.classList.remove('recording');
+                recordBtn.innerHTML = '<span>🎤</span> Iniciar Grabación';
+                document.getElementById('stopBtn').disabled = true;
+
+                showStatus('Grabación finalizada. Listo para transcribir.', 'success');
+            }
+        }
+
+        async function transcribeAudio() {
+            if (!appState.currentAudioBlob) {
+                showStatus('No hay audio grabado para transcribir', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', appState.currentAudioBlob, 'recording.wav');
+            formData.append('language_code', document.getElementById('languageSelect').value);
+
+            await makeAudioRequest('/audio/transcribe', formData, 'transcriptionOutput');
+        }
+
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('language_code', document.getElementById('languageSelect').value);
+
+            await makeAudioRequest('/audio/transcribe', formData, 'transcriptionOutput');
+        }
+
+        async function synthesizeText() {
+            const text = document.getElementById('textToSynthesize').value;
+            if (!text.trim()) {
+                showStatus('Por favor ingresa texto para sintetizar', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('text', text);
+            formData.append('voice_name', document.getElementById('voiceSelect').value);
+            formData.append('language_code', 'es-ES');
+            formData.append('output_format', 'base64');
+
+            const result = await makeAudioRequest('/audio/synthesize', formData, 'synthesizeOutput');
+            
+            if (result && result.audio_base64) {
+                createAudioPlayer(result.audio_base64, 'audioPlayerContainer');
+            }
+        }
+
+        async function generateFeedback() {
+            const formData = new FormData();
+            formData.append('feedback_type', document.getElementById('feedbackType').value);
+            formData.append('exercise_name', document.getElementById('exerciseName').value || '');
+            formData.append('rest_seconds', document.getElementById('restSeconds').value);
+            formData.append('user_name', document.getElementById('userName').value || '');
+            formData.append('voice_name', document.getElementById('voiceSelect').value);
+            formData.append('output_format', 'base64');
+
+            const result = await makeAudioRequest('/audio/workout-feedback', formData, 'feedbackOutput');
+            
+            if (result && result.audio_base64) {
+                createAudioPlayer(result.audio_base64, 'feedbackPlayerContainer');
+            }
+        }
+
+        async function generateGuide() {
+            // Para la guía de voz, necesitamos usar el endpoint del agente Elite Training Strategist
+            // Por ahora simularemos la funcionalidad
+            const exerciseData = {
+                name: document.getElementById('guideExercise').value,
+                sets: 3,
+                reps: 10,
+                setup_instructions: "Posición inicial correcta"
+            };
+
+            const guideData = {
+                exercise: exerciseData,
+                phase: document.getElementById('exercisePhase').value,
+                rep_count: parseInt(document.getElementById('repCount').value)
+            };
+
+            document.getElementById('guideOutput').textContent = JSON.stringify({
+                message: "Funcionalidad de guía de voz integrada con Elite Training Strategist",
+                exercise: exerciseData.name,
+                phase: guideData.phase,
+                rep_count: guideData.rep_count,
+                status: "Demo mode - conectar con /agents/elite_training_strategist endpoint"
+            }, null, 2);
+
+            showStatus('Guía de voz generada (modo demo)', 'info');
+        }
+
+        async function processVoiceCommand() {
+            if (!appState.currentAudioBlob) {
+                // Iniciar grabación rápida para comando
+                await startRecording();
+                setTimeout(() => {
+                    stopRecording();
+                    setTimeout(async () => {
+                        await executeVoiceCommand();
+                    }, 500);
+                }, 3000); // Grabar por 3 segundos
+                return;
+            }
+
+            await executeVoiceCommand();
+        }
+
+        async function executeVoiceCommand() {
+            const formData = new FormData();
+            formData.append('file', appState.currentAudioBlob, 'command.wav');
+            formData.append('workout_state', JSON.stringify(appState.currentWorkout));
+
+            const result = await makeAudioRequest('/audio/voice-command', formData, 'commandOutput');
+            
+            if (result && result.action) {
+                processWorkoutAction(result);
+            }
+        }
+
+        function processWorkoutAction(commandResult) {
+            const action = commandResult.action;
+            
+            switch(action) {
+                case 'start_workout':
+                    appState.currentWorkout.status = 'active';
+                    break;
+                case 'pause':
+                    appState.currentWorkout.status = 'paused';
+                    break;
+                case 'resume':
+                    appState.currentWorkout.status = 'active';
+                    break;
+                case 'next_exercise':
+                    appState.currentWorkout.exercise = 'Press Banca';
+                    break;
+                case 'mark_set_complete':
+                    appState.currentWorkout.set = Math.min(appState.currentWorkout.set + 1, appState.currentWorkout.totalSets);
+                    appState.currentWorkout.rep = 0;
+                    break;
+            }
+
+            updateWorkoutDisplay();
+        }
+
+        async function analyzeEmotion() {
+            if (!appState.currentAudioBlob) {
+                showStatus('Primero graba audio para analizar', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', appState.currentAudioBlob, 'emotion.wav');
+            formData.append('analysis_depth', 'detailed');
+            formData.append('include_recommendations', 'true');
+
+            const result = await makeAudioRequest('/audio/analyze-emotion', formData, 'emotionOutput');
+            
+            if (result && result.physical_indicators) {
+                updateEmotionDisplay(result.physical_indicators);
+            }
+        }
+
+        function updateEmotionDisplay(indicators) {
+            document.getElementById('energyLevel').textContent = Math.round(indicators.energy_level * 100) + '%';
+            document.getElementById('stressLevel').textContent = Math.round(indicators.stress_level * 100) + '%';
+            document.getElementById('fatigueLevel').textContent = Math.round(indicators.fatigue_level * 100) + '%';
+            
+            // Calcular motivación como inverso de fatiga + energía
+            const motivation = (indicators.energy_level + (1 - indicators.fatigue_level)) / 2;
+            document.getElementById('motivationLevel').textContent = Math.round(motivation * 100) + '%';
+        }
+
+        function updateWorkoutDisplay() {
+            document.getElementById('currentExercise').textContent = appState.currentWorkout.exercise;
+            document.getElementById('currentSet').textContent = `${appState.currentWorkout.set}/${appState.currentWorkout.totalSets}`;
+            document.getElementById('currentRep').textContent = `${appState.currentWorkout.rep}/${appState.currentWorkout.totalReps}`;
+            document.getElementById('workoutStatus').textContent = appState.currentWorkout.status;
+        }
+
+        async function makeAudioRequest(endpoint, formData, outputElementId) {
+            const outputElement = document.getElementById(outputElementId);
+            
+            try {
+                showStatus('Enviando solicitud...', 'info');
+                
+                const response = await fetch(`${appState.apiBaseUrl}${endpoint}`, {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        // No incluir Content-Type para FormData, el navegador lo maneja automáticamente
+                        'Authorization': 'Bearer demo-token' // Token de demostración
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                
+                outputElement.textContent = JSON.stringify(result, null, 2);
+                showStatus('Solicitud completada exitosamente', 'success');
+                
+                return result;
+            } catch (error) {
+                console.error('Error in API request:', error);
+                outputElement.textContent = `Error: ${error.message}\n\nNota: Asegúrate de que el servidor NGX Agents esté ejecutándose en ${appState.apiBaseUrl}`;
+                showStatus(`Error: ${error.message}`, 'error');
+                return null;
+            }
+        }
+
+        function createAudioPlayer(base64Audio, containerId) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+
+            const audio = document.createElement('audio');
+            audio.controls = true;
+            audio.className = 'audio-player';
+            audio.src = `data:audio/mp3;base64,${base64Audio}`;
+
+            container.appendChild(audio);
+        }
+
+        function showStatus(message, type) {
+            // Crear elemento de estado temporal
+            const status = document.createElement('div');
+            status.className = `status ${type}`;
+            status.textContent = message;
+
+            // Agregar al primer panel
+            const firstPanel = document.querySelector('.panel');
+            firstPanel.appendChild(status);
+
+            // Remover después de 5 segundos
+            setTimeout(() => {
+                status.remove();
+            }, 5000);
+        }
+
+        // Funcionalidad adicional: Actualizar estado del entrenamiento automáticamente
+        setInterval(() => {
+            if (appState.currentWorkout.status === 'active') {
+                // Simular progreso automático para demo
+                if (Math.random() < 0.1) { // 10% de probabilidad cada segundo
+                    appState.currentWorkout.rep = Math.min(
+                        appState.currentWorkout.rep + 1, 
+                        appState.currentWorkout.totalReps
+                    );
+                    updateWorkoutDisplay();
+                }
+            }
+        }, 1000);
+    </script>
+</body>
+</html>

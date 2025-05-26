@@ -9,11 +9,12 @@ crear spans para seguimiento de operaciones.
 import functools
 import logging
 import time
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Dict, Optional, Union
 
 # Importar telemetría
 try:
     from core.telemetry import TelemetryClient
+
     TELEMETRY_AVAILABLE = True
 except ImportError:
     TELEMETRY_AVAILABLE = False
@@ -38,7 +39,9 @@ def get_telemetry_adapter():
     return _telemetry_adapter_instance
 
 
-def measure_execution_time(metric_name: str, attributes: Optional[Dict[str, Any]] = None):
+def measure_execution_time(
+    metric_name: str, attributes: Optional[Dict[str, Any]] = None
+):
     """
     Decorador para medir el tiempo de ejecución de una función.
 
@@ -49,6 +52,7 @@ def measure_execution_time(metric_name: str, attributes: Optional[Dict[str, Any]
     Returns:
         Callable: Decorador
     """
+
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
@@ -59,22 +63,20 @@ def measure_execution_time(metric_name: str, attributes: Optional[Dict[str, Any]
             finally:
                 end_time = time.time()
                 execution_time_ms = (end_time - start_time) * 1000
-                
+
                 # Registrar métrica
                 adapter = get_telemetry_adapter()
-                adapter.record_metric(
-                    metric_name, 
-                    execution_time_ms, 
-                    attributes or {}
-                )
+                adapter.record_metric(metric_name, execution_time_ms, attributes or {})
+
         return wrapper
+
     return decorator
 
 
 class TelemetryAdapter:
     """
     Adaptador para simplificar la integración con telemetría.
-    
+
     Proporciona una interfaz simplificada para registrar métricas, spans y eventos,
     con fallback a logging cuando la telemetría no está disponible.
     """
@@ -82,7 +84,7 @@ class TelemetryAdapter:
     def __init__(self):
         """Inicializa el adaptador de telemetría."""
         self.client = None
-        
+
         if TELEMETRY_AVAILABLE:
             try:
                 self.client = TelemetryClient.get_instance()
@@ -108,7 +110,7 @@ class TelemetryAdapter:
                 return self.client.start_span(name, attributes or {})
             except Exception as e:
                 logger.warning(f"Error al iniciar span '{name}': {e}")
-        
+
         # Modo mock: retornar un diccionario simple
         return {"name": name, "attributes": attributes or {}, "events": []}
 
@@ -143,7 +145,9 @@ class TelemetryAdapter:
             # Modo mock: actualizar diccionario
             span["attributes"][key] = value
 
-    def add_span_event(self, span: Any, name: str, attributes: Optional[Dict[str, Any]] = None) -> None:
+    def add_span_event(
+        self, span: Any, name: str, attributes: Optional[Dict[str, Any]] = None
+    ) -> None:
         """
         Añade un evento a un span.
 
@@ -176,15 +180,22 @@ class TelemetryAdapter:
                 logger.warning(f"Error al registrar excepción en span: {e}")
         elif isinstance(span, dict):
             # Modo mock: añadir como evento
-            span["events"].append({
-                "name": "exception",
-                "attributes": {
-                    "exception.type": type(exception).__name__,
-                    "exception.message": str(exception)
+            span["events"].append(
+                {
+                    "name": "exception",
+                    "attributes": {
+                        "exception.type": type(exception).__name__,
+                        "exception.message": str(exception),
+                    },
                 }
-            })
+            )
 
-    def record_metric(self, name: str, value: Union[int, float], attributes: Optional[Dict[str, Any]] = None) -> None:
+    def record_metric(
+        self,
+        name: str,
+        value: Union[int, float],
+        attributes: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         Registra una métrica.
 
@@ -203,7 +214,9 @@ class TelemetryAdapter:
             attr_str = ", ".join(f"{k}={v}" for k, v in (attributes or {}).items())
             logger.info(f"METRIC: {name} = {value} {{{attr_str}}}")
 
-    def record_counter(self, name: str, increment: int = 1, attributes: Optional[Dict[str, Any]] = None) -> None:
+    def record_counter(
+        self, name: str, increment: int = 1, attributes: Optional[Dict[str, Any]] = None
+    ) -> None:
         """
         Incrementa un contador.
 
@@ -222,7 +235,12 @@ class TelemetryAdapter:
             attr_str = ", ".join(f"{k}={v}" for k, v in (attributes or {}).items())
             logger.info(f"COUNTER: {name} += {increment} {{{attr_str}}}")
 
-    def record_histogram(self, name: str, value: Union[int, float], attributes: Optional[Dict[str, Any]] = None) -> None:
+    def record_histogram(
+        self,
+        name: str,
+        value: Union[int, float],
+        attributes: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         Registra un valor en un histograma.
 
@@ -256,7 +274,7 @@ class TelemetryAdapter:
                 return self.client.get_tracer(name)
             except Exception as e:
                 logger.warning(f"Error al obtener tracer '{name}': {e}")
-        
+
         # Modo mock: retornar None
         return None
 
@@ -275,6 +293,6 @@ class TelemetryAdapter:
                 return self.client.get_meter(name)
             except Exception as e:
                 logger.warning(f"Error al obtener meter '{name}': {e}")
-        
+
         # Modo mock: retornar None
         return None

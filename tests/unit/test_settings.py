@@ -1,7 +1,7 @@
 """
 Pruebas unitarias para la configuración de la aplicación.
 """
-import pytest
+
 from core.test_settings import MockTestSettings
 
 
@@ -12,15 +12,15 @@ def test_test_settings_initialization(monkeypatch):
         supabase_url="http://localhost:54321",
         supabase_anon_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test",
         jwt_secret="test_secret_key",
-        testing=True
+        testing=True,
     )
-    
+
     # Verificar valores por defecto
     assert str(settings.supabase_url).startswith("http://localhost:54321")
     assert settings.supabase_anon_key.startswith("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")
     assert settings.jwt_secret == "test_secret_key"
     assert settings.testing is True
-    
+
     # Verificar valores heredados de Settings
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000

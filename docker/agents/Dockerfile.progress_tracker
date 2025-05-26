@@ -1,0 +1,33 @@
+# Dockerfile for Progress Tracker Agent
+ARG BASE_IMAGE=ngx-agents-base:latest
+FROM ${BASE_IMAGE}
+
+# Agent-specific metadata
+LABEL maintainer="NGX Team" \
+      agent.name="progress-tracker" \
+      agent.version="1.0.0" \
+      agent.description="Progress monitoring and visualization agent"
+
+# Agent-specific environment variables
+ENV AGENT_NAME=progress_tracker \
+    AGENT_PORT=9004 \
+    LOG_LEVEL=INFO
+
+# Additional dependencies for visualization
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Additional fonts for matplotlib
+    fonts-liberation \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+USER agent
+
+# Expose agent port
+EXPOSE ${AGENT_PORT}
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:${AGENT_PORT}/health || exit 1
+
+# Run the agent
+CMD ["python", "-m", "infrastructure.adapters.progress_tracker_adapter"]
